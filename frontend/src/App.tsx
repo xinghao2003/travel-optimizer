@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   ArrowDownUp,
   ArrowRight,
-  ArrowUpRight,
   CalendarDays,
   Check,
   CircleHelp,
@@ -11,329 +10,305 @@ import {
   LoaderCircle,
   MapPinned,
   Plane,
-  RefreshCw,
-  Settings2,
+  Plus,
   Route,
+  Settings2,
+  Trash2,
 } from "lucide-react";
 import { RouteMap } from "./components/RouteMap";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card";
-import type { ImportedFlight, InputFileStatus, PlannerData, TransportSettings, RouteFilters, RouteResult, RoutesResponse } from "./lib/types";
-import { dateLabel, money, shortMoney } from "./lib/utils";
+import type { AppConfig, Preference, TripCity, TripPlanResponse, TripRoute, TransportSettings } from "./lib/types";
 
-type Preference = "cheapest" | "shortest" | "balanced";
+const fallbackSettings: TransportSettings = {
+  average_speed_kmh: 80,
+  fare_myr_per_km: 0.27,
+  ground_overhead_minutes: 30,
+  flight_airport_buffer_minutes: 90,
+};
 
-const preferenceOptions: { id: Preference; label: string; icon: typeof ArrowDownUp }[] = [
-  { id: "cheapest", label: "Lowest cost", icon: ArrowDownUp },
-  { id: "shortest", label: "Shortest transport", icon: Route },
-  { id: "balanced", label: "Balanced", icon: Compass },
-];
-
-function Field({ label, suffix, value, onChange, min, max, step = 1 }: {
-  label: string;
-  suffix?: string;
-  value: number;
-  onChange: (value: number) => void;
-  min: number;
-  max: number;
-  step?: number;
-}) {
-  const [draft, setDraft] = useState(String(value));
-  useEffect(() => setDraft(String(value)), [value]);
-  const commit = () => {
-    if (draft.trim() === "") {
-      setDraft(String(value));
-      return;
-    }
-    const parsed = Number(draft);
-    if (!Number.isFinite(parsed)) {
-      setDraft(String(value));
-      return;
-    }
-    const normalized = Math.max(min, Math.min(max, parsed));
-    setDraft(String(normalized));
-    onChange(normalized);
-  };
-  return (
-    <label className="field-wrap">
-      <span className="field-label">{label}</span>
-      <span className="number-field">
-        <input
-          type="number"
-          min={min}
-          max={max}
-          step={step}
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onBlur={commit}
-        />
-        {suffix && <span>{suffix}</span>}
-      </span>
-    </label>
-  );
+function localDateString(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
-function FilterField({ label, suffix, value, onChange, min, max, step = 1 }: {
-  label: string;
-  suffix: string;
-  value: number | null;
-  onChange: (value: number | null) => void;
-  min: number;
-  max: number;
-  step?: number;
-}) {
-  const [draft, setDraft] = useState(value == null ? "" : String(value));
-  useEffect(() => setDraft(value == null ? "" : String(value)), [value]);
-  const commit = () => {
-    if (draft.trim() === "") {
-      onChange(null);
-      return;
-    }
-    const parsed = Number(draft);
-    if (!Number.isFinite(parsed)) {
-      setDraft(value == null ? "" : String(value));
-      return;
-    }
-    const normalized = Math.max(min, Math.min(max, parsed));
-    setDraft(String(normalized));
-    onChange(normalized);
-  };
-  return (
-    <label className="field-wrap">
-      <span className="field-label">{label}</span>
-      <span className="number-field">
-        <input
-          type="number"
-          min={min}
-          max={max}
-          step={step}
-          placeholder="Any"
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onBlur={commit}
-        />
-        <span>{suffix}</span>
-      </span>
-    </label>
-  );
+function addDays(value: string, count: number) {
+  const date = new Date(`${value}T12:00:00`);
+  date.setDate(date.getDate() + count);
+  return localDateString(date);
 }
 
-function RouteDetail({ route, preference, originName }: { route: RouteResult; preference: Preference; originName: string }) {
-  const saving = route.savings_myr;
+function formatDate(value: string) {
+  return new Date(`${value}T12:00:00`).toLocaleDateString("en-MY", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function money(value: number) {
+  return new Intl.NumberFormat("en-MY", { style: "currency", currency: "MYR", maximumFractionDigits: 0 }).format(value);
+}
+
+function estimateSearchCount(destinationCount: number, returnToOrigin: boolean) {
+  if (destinationCount < 1) return 0;
+  if (destinationCount === 1) return destinationCount + Number(returnToOrigin);
+  const boundarySearches = destinationCount * (returnToOrigin ? 2 : 1);
+  return boundarySearches + (destinationCount - 1) * destinationCount * (destinationCount - 1);
+}
+
+function CityPicker({
+  label,
+  placeholder,
+  disabledCodes,
+  onSelect,
+  disabled,
+}: {
+  label: string;
+  placeholder: string;
+  disabledCodes: string[];
+  onSelect: (city: TripCity) => void;
+  disabled?: boolean;
+}) {
+  const [query, setQuery] = useState("");
+  const [suggestions, setSuggestions] = useState<TripCity[]>([]);
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const disabledKey = disabledCodes.join("|");
+
+  useEffect(() => {
+    const search = query.trim();
+    if (search.length < 2) {
+      setSuggestions([]);
+      setLoading(false);
+      setError(null);
+      return;
+    }
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const response = await fetch(`/api/cities?search=${encodeURIComponent(search)}`, { signal: controller.signal });
+        const payload = await response.json() as { cities?: TripCity[]; detail?: string };
+        if (!response.ok) throw new Error(payload.detail ?? `City search failed (${response.status}).`);
+        setSuggestions((payload.cities ?? []).filter((city) => !disabledKey.split("|").includes(city.code)));
+        setOpen(true);
+      } catch (searchError) {
+        if (searchError instanceof DOMException && searchError.name === "AbortError") return;
+        setError(searchError instanceof Error ? searchError.message : "City search failed.");
+        setSuggestions([]);
+      } finally {
+        if (!controller.signal.aborted) setLoading(false);
+      }
+    }, 180);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [disabledKey, query]);
+
   return (
-    <div className="route-detail">
-      <div className="detail-heading">
-        <div>
-          <div className="eyebrow">Selected itinerary</div>
-          <h3>{route.arrival_city.name}<ArrowRight size={17} />{route.departure_city.name}</h3>
-        </div>
-        <div className="detail-total">
-          <span>Total estimated cost</span>
-          <strong>{money(route.total_cost_myr)}</strong>
-        </div>
+    <div className="city-picker">
+      <label className="field-label" htmlFor={`city-${label.replaceAll(" ", "-").toLowerCase()}`}>{label}</label>
+      <div className="city-picker-input-wrap">
+        <input
+          id={`city-${label.replaceAll(" ", "-").toLowerCase()}`}
+          value={query}
+          disabled={disabled}
+          placeholder={placeholder}
+          autoComplete="off"
+          aria-autocomplete="list"
+          aria-expanded={open && suggestions.length > 0}
+          onChange={(event) => { setQuery(event.target.value); setOpen(true); }}
+          onFocus={() => setOpen(true)}
+          onBlur={() => window.setTimeout(() => setOpen(false), 140)}
+        />
+        {loading && <LoaderCircle className="picker-spinner spin" size={15} />}
+        {open && suggestions.length > 0 && (
+          <div className="city-suggestions" role="listbox">
+            {suggestions.map((city) => (
+              <button
+                type="button"
+                role="option"
+                key={city.code}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => { onSelect(city); setQuery(""); setSuggestions([]); setOpen(false); }}
+              >
+                <span><strong>{city.name}</strong><small>{city.country_code} · {city.flight_code}</small></span>
+                <span className="airport-count">{city.airport_codes?.length ?? 1} airport{(city.airport_codes?.length ?? 1) === 1 ? "" : "s"}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
-      <div className="breakdown-grid">
-        <div className="breakdown-item"><Plane size={16} /><span>Flights</span><strong>{money(route.flight_cost_myr)}</strong></div>
-        <div className="breakdown-item"><Route size={16} /><span>Estimated transport</span><strong>{money(route.estimated_transport_cost_myr)}</strong></div>
-        <div className="breakdown-item"><MapPinned size={16} /><span>Transport distance</span><strong>{route.estimated_transport_distance_km.toLocaleString("en-MY", { maximumFractionDigits: 0 })} km</strong></div>
-        <div className="breakdown-item"><CircleHelp size={16} /><span>Transport time</span><strong>{route.estimated_transport_time_hours.toFixed(1)} h</strong></div>
-      </div>
-      <div className="detail-footer">
-        <span className={saving != null && saving >= 0 ? "saving positive" : "saving negative"}>
-          {saving == null ? "Same-city comparison unavailable" : saving >= 0 ? `${money(saving)} below same-city flights` : `${money(Math.abs(saving))} above same-city flights`}
-        </span>
-        <span className="baseline-note">Compared with {originName} ↔ {route.arrival_city.name}{route.same_city_baseline_myr == null ? "" : ` (${money(route.same_city_baseline_myr)})`}</span>
-        <div className="booking-links">
-          <a href={route.outbound_booking_url} target="_blank" rel="noopener noreferrer">Outbound search <ExternalLink size={13} /></a>
-          <a href={route.return_booking_url} target="_blank" rel="noopener noreferrer">Return search <ExternalLink size={13} /></a>
-        </div>
-      </div>
-      <p className="detail-disclaimer">
-        {route.distance_source === "osrm_road"
-          ? "Distance basis: OSRM road route."
-          : route.distance_source === "assumed_connection"
-            ? "Distance basis: direct-distance proxy because OSRM had no road route; a connection is assumed."
-            : "Same-city route; no ground-transport leg."} Ground-transport time and cost use your speed and fare assumptions and do not confirm a real service.
-      </p>
-      {preference === "balanced" && route.balanced_score != null && (
-        <div className="balance-note">Balanced score {Math.round(route.balanced_score * 100)} / 100 · cost and transport time weighted equally</div>
-      )}
+      {error && <span className="picker-error">{error}</span>}
+      {!error && query.trim().length === 1 && <span className="picker-hint">Type at least 2 characters.</span>}
     </div>
   );
 }
 
-function ImportedSnapshots({ flights, files }: { flights: ImportedFlight[]; files: InputFileStatus[] }) {
-  const skippedCount = files.filter((file) => file.status !== "loaded").length;
+function CityChip({ city, remove }: { city: TripCity; remove: () => void }) {
   return (
-    <section className="results-section imported-section">
-      <div className="results-heading">
-        <div>
-          <div className="section-kicker">INPUT FILES</div>
-          <h2>Parsed flight snapshots <span>{flights.length} results</span></h2>
-          <p>All supported files are scanned by content. Origins found in their routes can be selected as the trip start; the optimizer combines one-way fares and keeps round-trip snapshots listed here.</p>
-        </div>
-      </div>
-      <Card className="table-card">
-        <div className="table-scroll">
-          <table>
-            <thead>
-              <tr><th>File</th><th>Route</th><th>Travel date</th><th>Trip</th><th>Fare</th><th>Stops</th><th>Search</th></tr>
-            </thead>
-            <tbody>
-              {flights.map((flight, index) => (
-                <tr key={[flight.source_file, flight.origin_code, flight.destination_code, flight.departure_date, index].join("-")}>
-                  <td>{flight.source_file}</td>
-                  <td>{flight.origin_name} ({flight.origin_code.toUpperCase()}) <ArrowRight size={13} /> {flight.destination_name} ({flight.destination_code.toUpperCase()})</td>
-                  <td>{dateLabel(flight.departure_date)}{flight.return_date ? " → " + dateLabel(flight.return_date) : ""}</td>
-                  <td>{flight.journey_type === "round_trip" ? "Round trip" : "One way"}</td>
-                  <td className="numeric-cell">{money(flight.price_myr)}</td>
-                  <td>{flight.direct == null ? "Not shown" : flight.direct ? "Direct" : "Non-direct" + (flight.stops_label ? " · " + flight.stops_label : "")}</td>
-                  <td><a href={flight.booking_url} target="_blank" rel="noopener noreferrer">Open <ExternalLink size={12} /></a></td>
-                </tr>
-              ))}
-              {flights.length === 0 && <tr><td colSpan={7} className="empty-table">No supported Skyscanner result links were parsed.</td></tr>}
-            </tbody>
-          </table>
-        </div>
-        <div className="table-footer">
-          <span><i className="footer-dot" />Scanned {files.length} input file(s)</span>
-          <span>{skippedCount} skipped or failed · prices and stop details remain blank when absent</span>
-        </div>
-      </Card>
-      <div className="input-file-statuses">
-        {files.map((file) => (
-          <span key={file.source_file} className={file.status === "loaded" ? "input-status loaded" : "input-status skipped"}>
-            <strong>{file.source_file}</strong> · {file.status} · {file.parsed_count} result(s){file.reason ? " · " + file.reason : ""}
-          </span>
-        ))}
-      </div>
-    </section>
+    <span className="city-chip">
+      <span className="chip-dot" />
+      <strong>{city.name}</strong><small>{city.country_code} · {city.flight_code}</small>
+      <button type="button" onClick={remove} aria-label={`Remove ${city.name}`}><Trash2 size={13} /></button>
+    </span>
+  );
+}
+
+function SettingField({ label, suffix, value, min, max, step, onChange }: {
+  label: string;
+  suffix: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <label className="setting-field">
+      <span>{label}</span>
+      <span className="setting-number">
+        <input type="number" min={min} max={max} step={step} value={value} onChange={(event) => {
+          const parsed = Number(event.target.value);
+          if (Number.isFinite(parsed)) onChange(Math.max(min, Math.min(max, parsed)));
+        }} />
+        <small>{suffix}</small>
+      </span>
+    </label>
+  );
+}
+
+function RouteSummary({ route, selected, onClick }: { route: TripRoute; selected: boolean; onClick: () => void }) {
+  const routeLabel = route.stops.map((city) => city.name).join(" → ");
+  return (
+    <button type="button" className={`route-option ${selected ? "active" : ""}`} onClick={onClick}>
+      <span className="route-rank">{String(route.rank).padStart(2, "0")}</span>
+      <span className="route-option-main">
+        <strong>{routeLabel}</strong>
+        <small>{route.legs.map((leg) => leg.mode === "flight" ? "Flight" : "Ground").join(" · ")}</small>
+      </span>
+      <span className="route-option-cost">
+        <strong>{money(route.total_cost_myr)}</strong>
+        <small>{route.total_time_hours.toFixed(1)} h</small>
+      </span>
+    </button>
   );
 }
 
 function App() {
-  const [data, setData] = useState<PlannerData | null>(null);
-  const [dataError, setDataError] = useState<string | null>(null);
-  const [settings, setSettings] = useState<TransportSettings>({
-    average_speed_kmh: 200,
-    distance_factor: 1,
-    fare_myr_per_km: 0.27,
-    connection_overhead_minutes: 30,
-  });
-  const [filters, setFilters] = useState<RouteFilters>({
-    max_transport_hours: null,
-    max_budget_myr: null,
-    arrival_cities: [],
-    departure_cities: [],
-  });
+  const [config, setConfig] = useState<AppConfig | null>(null);
+  const [origin, setOrigin] = useState<TripCity | null>(null);
+  const [destinations, setDestinations] = useState<TripCity[]>([]);
+  const [today] = useState(() => localDateString(new Date()));
+  const [startDate, setStartDate] = useState(() => addDays(localDateString(new Date()), 30));
+  const [endDate, setEndDate] = useState(() => addDays(localDateString(new Date()), 38));
+  const [returnToOrigin, setReturnToOrigin] = useState(true);
+  const [settings, setSettings] = useState<TransportSettings>(fallbackSettings);
   const [preference, setPreference] = useState<Preference>("cheapest");
-  const [routeData, setRouteData] = useState<RoutesResponse | null>(null);
-  const [routesLoading, setRoutesLoading] = useState(false);
-  const [routesError, setRoutesError] = useState<string | null>(null);
+  const [result, setResult] = useState<TripPlanResponse | null>(null);
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [configError, setConfigError] = useState<string | null>(null);
+  const [searchError, setSearchError] = useState<string | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
     fetch("/api/data", { signal: controller.signal })
       .then(async (response) => {
-        if (!response.ok) throw new Error(`Flight data could not be loaded (${response.status}).`);
-        return (await response.json()) as PlannerData;
-      })
-      .then((payload) => {
-        setData(payload);
+        const payload = await response.json() as AppConfig & { detail?: string };
+        if (!response.ok) throw new Error(payload.detail ?? "Planner configuration could not be loaded.");
+        setConfig(payload);
         setSettings(payload.defaults);
-        setDataError(null);
       })
       .catch((error: unknown) => {
         if (error instanceof DOMException && error.name === "AbortError") return;
-        setDataError(error instanceof Error ? error.message : "The local API could not be reached.");
+        setConfigError(error instanceof Error ? error.message : "The local API could not be reached.");
       });
     return () => controller.abort();
   }, []);
 
-  const selectOrigin = async (originCode: string) => {
-    setData(null);
-    setDataError(null);
-    setRouteData(null);
-    setSelectedRouteId(null);
-    setFilters((current) => ({ ...current, arrival_cities: [], departure_cities: [] }));
-    try {
-      const response = await fetch(`/api/data?origin_code=${encodeURIComponent(originCode)}`);
-      if (!response.ok) throw new Error(`Flight data could not be loaded (${response.status}).`);
-      setData((await response.json()) as PlannerData);
-    } catch (error) {
-      setDataError(error instanceof Error ? error.message : "The local API could not be reached.");
-    }
-  };
-
-  useEffect(() => {
-    if (!data) return;
-    const controller = new AbortController();
-    const timer = window.setTimeout(async () => {
-      setRoutesLoading(true);
-      setRoutesError(null);
-      try {
-        const response = await fetch("/api/routes", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ origin_code: data.origin?.code, settings, filters, preference }),
-          signal: controller.signal,
-        });
-        if (!response.ok) {
-          const message = await response.text();
-          throw new Error(message || `Route calculation failed (${response.status}).`);
-        }
-        const payload = (await response.json()) as RoutesResponse;
-        setRouteData(payload);
-        setSelectedRouteId((current) => payload.routes.some((route) => route.id === current) ? current : payload.routes[0]?.id ?? null);
-      } catch (error) {
-        if (error instanceof DOMException && error.name === "AbortError") return;
-        setRoutesError(error instanceof Error ? error.message : "Route calculation failed.");
-        setRouteData(null);
-      } finally {
-        if (!controller.signal.aborted) setRoutesLoading(false);
-      }
-    }, 220);
-    return () => {
-      window.clearTimeout(timer);
-      controller.abort();
-    };
-  }, [data, filters, preference, settings]);
-
   const selectedRoute = useMemo(
-    () => routeData?.routes.find((route) => route.id === selectedRouteId) ?? null,
-    [routeData, selectedRouteId],
+    () => result?.routes.find((route) => route.id === selectedRouteId) ?? result?.routes[0] ?? null,
+    [result, selectedRouteId],
   );
+
+  const minDays = Math.max(0, destinations.length + Number(returnToOrigin) - 1);
+  const dateSpan = Math.floor((new Date(`${endDate}T12:00:00`).getTime() - new Date(`${startDate}T12:00:00`).getTime()) / 86_400_000);
+  const tooShort = dateSpan < minDays;
+  const estimatedSearches = estimateSearchCount(destinations.length, returnToOrigin);
+  const preferenceOptions: { id: Preference; label: string; icon: typeof ArrowDownUp }[] = [
+    { id: "cheapest", label: "Lowest total", icon: ArrowDownUp },
+    { id: "shortest", label: "Shortest", icon: Route },
+    { id: "balanced", label: "Balanced", icon: Compass },
+  ];
 
   const updateSetting = <K extends keyof TransportSettings>(key: K, value: TransportSettings[K]) => {
     setSettings((current) => ({ ...current, [key]: value }));
+    setResult(null);
   };
 
-  const updateFilter = <K extends keyof RouteFilters>(key: K, value: RouteFilters[K]) => {
-    setFilters((current) => ({ ...current, [key]: value }));
+  const runSearch = async () => {
+    if (!origin) {
+      setSearchError("Choose a start city first.");
+      return;
+    }
+    if (!destinations.length) {
+      setSearchError("Add at least one destination city.");
+      return;
+    }
+    if (tooShort) {
+      setSearchError("Extend the date range to allow at least one day between travel legs.");
+      return;
+    }
+    setLoading(true);
+    setSearchError(null);
+    setResult(null);
+    try {
+      const response = await fetch("/api/routes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          origin_code: origin.code,
+          destination_codes: destinations.map((city) => city.code),
+          start_date: startDate,
+          end_date: endDate,
+          return_to_origin: returnToOrigin,
+          settings,
+          preference,
+        }),
+      });
+      const payload = await response.json() as TripPlanResponse & { detail?: string | { msg?: string }[] };
+      if (!response.ok) {
+        const detail = Array.isArray(payload.detail) ? payload.detail.map((item) => item.msg).filter(Boolean).join(" ") : payload.detail;
+        throw new Error(typeof detail === "string" ? detail : `Route search failed (${response.status}).`);
+      }
+      setResult(payload);
+      setSelectedRouteId(payload.routes[0]?.id ?? null);
+    } catch (error) {
+      setSearchError(error instanceof Error ? error.message : "Route search failed.");
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const chooseCity = (code: string, kind: "arrival" | "departure") => {
-    if (kind === "arrival") updateFilter("arrival_cities", [code]);
-    else updateFilter("departure_cities", [code]);
+  const submitTrip = async (event: FormEvent) => {
+    event.preventDefault();
+    await runSearch();
   };
 
-  if (!data) {
-    return (
-      <main className="loading-shell">
-        <div className="loading-card">
-          {dataError ? <div className="error-icon">!</div> : <LoaderCircle className="spin" size={26} />}
-          <h1>{dataError ? "Local planner API not connected" : "Loading your flight snapshots"}</h1>
-          <p>{dataError ?? "Reading the saved Skyscanner results and city coordinates."}</p>
-          {dataError && <code>uvicorn app.main:app --reload --app-dir backend</code>}
-        </div>
-      </main>
-    );
-  }
-
-  const routeCount = routeData?.routes.length ?? 0;
-  const cityLabel = (code: string) => data.cities.find((city) => city.code === code)?.name ?? "All cities";
+  const chooseDestination = (city: TripCity) => {
+    setDestinations((current) => current.length >= (config?.max_destinations ?? 4) || current.some((item) => item.code === city.code)
+      ? current
+      : [...current, city]);
+    setResult(null);
+  };
 
   return (
     <main className="app-shell">
@@ -342,209 +317,207 @@ function App() {
           <div className="brand-icon"><Compass size={21} strokeWidth={2.1} /></div>
           <div>
             <div className="brand-title">Wayfinder <span>Routes</span></div>
-            <div className="brand-caption">Flight + ground transport planner</div>
+            <div className="brand-caption">Live flights · ground route estimates</div>
           </div>
         </div>
-        <div className="trip-snapshot">
-          <label className="origin-picker">
-            <span>Start city</span>
-            <select
-              aria-label="Trip origin"
-              value={data.origin?.code ?? ""}
-              disabled={data.origins.length === 0}
-              onChange={(event) => void selectOrigin(event.target.value)}
-            >
-              {data.origins.length === 0 && <option value="">No loaded origins</option>}
-              {data.origins.map((origin) => <option key={origin.code} value={origin.code}>{origin.name} ({origin.code.toUpperCase()})</option>)}
-            </select>
-          </label>
-          <span><CalendarDays size={15} /> {dateLabel(data.snapshot_dates.outbound)}</span>
-          <ArrowRight size={14} className="snapshot-arrow" />
-          <span>{dateLabel(data.snapshot_dates.return)}</span>
-          <Badge className="snapshot-badge">Saved prices</Badge>
-        </div>
+        <Badge className="live-badge"><span className="live-dot" /> Google Flights search</Badge>
       </header>
 
       <section className="intro-row">
         <div>
-          <div className="eyebrow">{data.origin?.name.toUpperCase() ?? "LOADED ORIGIN"} <ArrowRight size={12} /> DESTINATIONS <ArrowRight size={12} /> {data.origin?.name.toUpperCase() ?? "LOADED ORIGIN"}</div>
-          <h1>Find a better way across your trip.</h1>
-          <p>Pair saved flight fares with a configurable ground-transport estimate.</p>
+          <div className="eyebrow">PLAN A MULTI-CITY TRIP</div>
+          <h1>Choose the places. We’ll compare the route.</h1>
+          <p>Search live flight fares, reorder your destinations, and compare flights with estimated ground legs.</p>
         </div>
-        <div className="intro-stats">
-          <div><strong>{data.summary.city_count}</strong><span>cities found</span></div>
-          <div><strong>{data.summary.priced_outbound_listings + data.summary.priced_return_listings}</strong><span>priced flights</span></div>
-          <div><strong>{routeCount || "—"}</strong><span>routes in view</span></div>
-        </div>
+        <div className="intro-note"><CalendarDays size={16} /> Choose a date window; travel legs are spaced across it.</div>
       </section>
 
-      <div className="snapshot-note">
-        <span className="note-dot" />
-        Fares are saved Skyscanner snapshots, not live quotes. Ground-transport costs and times are estimates only.
-        {routesLoading && <span className="calculating"><LoaderCircle size={13} className="spin" /> Recalculating</span>}
-      </div>
-      {data.coordinate_resolution.unresolved_cities.length > 0 && (
-        <div className="inline-alert warning-alert import-scope-alert">
-          Coordinates were not found for {data.coordinate_resolution.unresolved_cities.map((city) => city.name).join(", ")}. {data.coordinate_resolution.dataset_available ? "Add these places to the local coordinate cache to include them." : "Install GeoNames city data with `python backend/app/geonames.py --download`, then restart the API."}
-        </div>
-      )}
+      {configError && <div className="inline-alert error-alert">{configError}</div>}
 
-      <section className="workspace-grid">
-        <Card className="map-card">
-          <div className="map-card-head">
-            <div>
-              <div className="section-kicker">ROUTE OVERVIEW</div>
-              <h2>Destinations at a glance</h2>
-            </div>
-            <div className="map-legends">
-              <span><i className="legend-line flight-line" /> Flight</span>
-              <span><i className="legend-line transport-line" /> Estimated transport</span>
-            </div>
-          </div>
-          <div className="map-frame">
-            <RouteMap data={data} route={selectedRoute} onChooseCity={chooseCity} />
-            <div className="map-price-legend">
-              <span>Lowest flight fare</span>
-              <i style={{ background: "#167e78" }} />
-              <i style={{ background: "#47977c" }} />
-              <i style={{ background: "#d08b43" }} />
-              <i style={{ background: "#b65d50" }} />
-              <span>Higher</span>
-            </div>
-          </div>
-          <div className="map-footnote">
-            <span><MapPinned size={14} /> City-center markers</span>
-            <span>Click a city to set arrival or departure</span>
-          </div>
-        </Card>
-
-        <Card className="settings-card">
-          <CardHeader className="settings-header">
-            <div className="settings-title-row">
-              <div className="settings-icon"><Settings2 size={17} /></div>
-              <div><CardTitle>Trip settings</CardTitle><p>Adjust the estimates and narrow your options.</p></div>
-            </div>
+      <form className="planner-form" onSubmit={(event) => void submitTrip(event)}>
+        <Card className="trip-card">
+          <CardHeader className="trip-card-header">
+            <div className="form-heading-icon"><Route size={17} /></div>
+            <div><CardTitle>Your trip</CardTitle><p>Every selected destination is visited once. The planner chooses the order.</p></div>
           </CardHeader>
-          <CardContent className="settings-content">
-            <div className="settings-section">
-              <div className="settings-section-title">Ground-transport estimate <span>Editable assumptions</span></div>
-              <div className="field-grid">
-                <Field label="Average speed" suffix="km/h" value={settings.average_speed_kmh} min={1} max={500} step={10} onChange={(value) => updateSetting("average_speed_kmh", value)} />
-                <Field label="Distance factor" suffix="×" value={settings.distance_factor} min={0.1} max={5} step={0.05} onChange={(value) => updateSetting("distance_factor", value)} />
-                <Field label="Estimated fare per km" suffix="MYR" value={settings.fare_myr_per_km} min={0} max={100} step={0.01} onChange={(value) => updateSetting("fare_myr_per_km", value)} />
-                <Field label="Connection overhead" suffix="min" value={settings.connection_overhead_minutes} min={0} max={360} step={5} onChange={(value) => updateSetting("connection_overhead_minutes", value)} />
+          <CardContent className="trip-card-content">
+            <section className="place-section">
+              <div className="place-grid">
+                <div className="place-entry">
+                  <CityPicker
+                    label="Start city"
+                    placeholder="Search by city or airport code"
+                    disabledCodes={destinations.map((city) => city.code)}
+                    onSelect={(city) => { setOrigin(city); setResult(null); setSearchError(null); }}
+                  />
+                  {origin && <CityChip city={origin} remove={() => { setOrigin(null); setResult(null); }} />}
+                </div>
+                <div className="place-entry">
+                  <CityPicker
+                    label={`Destinations (${destinations.length}/${config?.max_destinations ?? 4})`}
+                    placeholder={destinations.length >= (config?.max_destinations ?? 4) ? "Destination limit reached" : "Add a city to visit"}
+                    disabledCodes={[origin?.code ?? "", ...destinations.map((city) => city.code)]}
+                    disabled={destinations.length >= (config?.max_destinations ?? 4)}
+                    onSelect={chooseDestination}
+                  />
+                  {destinations.length > 0 && (
+                    <div className="destination-chips">
+                      {destinations.map((city) => (
+                        <CityChip key={city.code} city={city} remove={() => {
+                          setDestinations((current) => current.filter((item) => item.code !== city.code));
+                          setResult(null);
+                        }} />
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
+              {destinations.length >= (config?.max_destinations ?? 4) && (
+                <p className="field-hint limit-hint">Up to 4 destinations per search so the app can compare every order without sending an unbounded number of flight searches.</p>
+              )}
+            </section>
 
-            <div className="settings-divider" />
-            <div className="settings-section">
-              <div className="settings-section-title">Your limits <span>Optional</span></div>
-              <div className="field-grid">
-                <FilterField label="Max transport time" suffix="hours" value={filters.max_transport_hours} min={0.1} max={100} step={0.5} onChange={(value) => updateFilter("max_transport_hours", value)} />
-                <FilterField label="Max total budget" suffix="MYR" value={filters.max_budget_myr} min={1} max={100000} step={50} onChange={(value) => updateFilter("max_budget_myr", value)} />
-              </div>
-              <div className="field-grid city-filter-grid">
+            <div className="form-divider" />
+            <section className="trip-options-row">
+              <div className="date-fields">
                 <label className="field-wrap">
-                  <span className="field-label">Arrive in</span>
-                  <select value={filters.arrival_cities[0] ?? ""} onChange={(event) => updateFilter("arrival_cities", event.target.value ? [event.target.value] : [])}>
-                    <option value="">Any city</option>
-                    {data.cities.filter((city) => city.outbound?.price_myr != null).map((city) => <option key={city.code} value={city.code}>{city.name}</option>)}
-                  </select>
+                  <span className="field-label">Start date</span>
+                  <input type="date" min={today} value={startDate} onChange={(event) => { setStartDate(event.target.value); setResult(null); }} />
                 </label>
+                <ArrowRight className="date-arrow" size={17} />
                 <label className="field-wrap">
-                  <span className="field-label">Fly home from</span>
-                  <select value={filters.departure_cities[0] ?? ""} onChange={(event) => updateFilter("departure_cities", event.target.value ? [event.target.value] : [])}>
-                    <option value="">Any city</option>
-                    {data.cities.filter((city) => city.return_flight?.price_myr != null).map((city) => <option key={city.code} value={city.code}>{city.name}</option>)}
-                  </select>
+                  <span className="field-label">End date</span>
+                  <input type="date" min={startDate} value={endDate} onChange={(event) => { setEndDate(event.target.value); setResult(null); }} />
                 </label>
               </div>
-            </div>
+              <label className="return-toggle">
+                <input type="checkbox" checked={returnToOrigin} onChange={(event) => { setReturnToOrigin(event.target.checked); setResult(null); }} />
+                <span className="toggle-check"><Check size={13} /></span>
+                <span><strong>Return to start city</strong><small>Search a final flight home</small></span>
+              </label>
+            </section>
+            {tooShort && <p className="field-hint warning-text">Allow at least {minDays} days for the {destinations.length + Number(returnToOrigin)} travel legs.</p>}
 
-            <div className="settings-divider" />
-            <div className="settings-section">
-              <div className="settings-section-title">Rank routes <span>Sort by</span></div>
-              <div className="preference-group" role="group" aria-label="Optimization preference">
-                {preferenceOptions.map(({ id, label, icon: Icon }) => (
-                  <Button key={id} variant={preference === id ? "default" : "secondary"} size="sm" className="preference-button" onClick={() => setPreference(id)}>
-                    <Icon size={14} />{label}
-                  </Button>
-                ))}
+            <div className="form-divider" />
+            <section className="form-bottom-grid">
+              <div>
+                <div className="settings-title"><Settings2 size={15} /><strong>Compare route costs</strong><span>One adult · economy · MYR</span></div>
+                <div className="settings-grid">
+                  <SettingField label="Ground speed" suffix="km/h" value={settings.average_speed_kmh} min={10} max={500} step={5} onChange={(value) => updateSetting("average_speed_kmh", value)} />
+                  <SettingField label="Ground cost" suffix="MYR/km" value={settings.fare_myr_per_km} min={0} max={100} step={0.01} onChange={(value) => updateSetting("fare_myr_per_km", value)} />
+                  <SettingField label="Ground overhead" suffix="min" value={settings.ground_overhead_minutes} min={0} max={360} step={5} onChange={(value) => updateSetting("ground_overhead_minutes", value)} />
+                  <SettingField label="Airport buffer" suffix="min" value={settings.flight_airport_buffer_minutes} min={0} max={360} step={15} onChange={(value) => updateSetting("flight_airport_buffer_minutes", value)} />
+                </div>
               </div>
-              {preference === "balanced" && <p className="balance-hint"><Check size={13} /> Equal weighting for normalized cost and transport time.</p>}
-            </div>
+              <div className="rank-block">
+                <div className="settings-title"><ArrowDownUp size={15} /><strong>Rank by</strong></div>
+                <div className="preference-group" role="group" aria-label="Route ranking preference">
+                  {preferenceOptions.map(({ id, label, icon: Icon }) => (
+                    <Button key={id} type="button" variant={preference === id ? "default" : "secondary"} size="sm" className="preference-button" onClick={() => { setPreference(id); setResult(null); }}>
+                      <Icon size={14} />{label}
+                    </Button>
+                  ))}
+                </div>
+                <p className="field-hint">All destination orders are checked (up to 24). Up to {estimatedSearches} one-way flight searches for this trip.</p>
+              </div>
+            </section>
 
-            <div className="settings-footnote">
-              <Route size={15} />
-              <span>Transport estimates use OSRM roads or a labeled direct-distance proxy when OSRM has no route. Connections remain hypothetical.</span>
+            {searchError && <div className="inline-alert error-alert"><CircleHelp size={15} />{searchError}</div>}
+            <div className="form-submit-row">
+              <p>Flight prices are live search results and may change before booking.</p>
+              <Button type="submit" className="search-button" disabled={loading || !origin || !destinations.length || tooShort}>
+                {loading ? <LoaderCircle size={17} className="spin" /> : <Plus size={17} />}
+                {loading ? `Searching ${estimatedSearches} city/date pairs…` : "Find the best routes"}
+              </Button>
             </div>
           </CardContent>
         </Card>
-      </section>
+      </form>
 
-      <section className="results-section">
-        <div className="results-heading">
-          <div>
-            <div className="section-kicker">FLIGHT + TRANSPORT COMBINATIONS</div>
-            <h2>Compare your routes <span>{routeCount} options</span></h2>
-          <p>{filters.arrival_cities.length ? `Arriving in ${cityLabel(filters.arrival_cities[0])}` : "Any arrival"} · {filters.departure_cities.length ? `flying home from ${cityLabel(filters.departure_cities[0])}` : "any departure"} · {preference === "balanced" ? "balanced ranking uses 50/50 cost and transport time" : preference === "shortest" ? "ranked by estimated transport time" : "ranked by estimated total cost"}</p>
+      {loading && (
+        <div className="search-progress"><LoaderCircle className="spin" size={16} /> Searching live fares and road distances. Google may take a few seconds to respond.</div>
+      )}
+
+      {result && (
+        <section className="results-section">
+          <div className="results-heading">
+            <div>
+              <div className="section-kicker">{result.candidate_count} ROUTE ORDERS COMPARED · {result.searches_attempted} FLIGHT SEARCHES</div>
+              <h2>Best ways to make this trip <span>{result.routes.length} options</span></h2>
+              <p>Dates searched: {result.date_schedule.map(formatDate).join(" · ")} · Ranked by {preference === "cheapest" ? "estimated total cost" : preference === "shortest" ? "estimated travel time" : "balanced cost and time"}.</p>
+            </div>
+            <Button type="button" variant="secondary" className="refresh-button" disabled={loading} onClick={() => void runSearch()}>
+              {loading ? <LoaderCircle size={15} className="spin" /> : <ArrowDownUp size={15} />} Re-search
+            </Button>
           </div>
-          <Button variant="secondary" className="refresh-button" disabled={routesLoading} onClick={() => {
-            setSettings((current) => ({ ...current }));
-          }}>
-            {routesLoading ? <LoaderCircle size={15} className="spin" /> : <RefreshCw size={15} />} Refresh results
-          </Button>
-        </div>
 
-        {routesError && <div className="inline-alert error-alert">{routesError}</div>}
-        {routeData?.routing_message && (
-          <div className={`inline-alert ${routeData.routing_status === "ready" ? "" : "warning-alert"}`}>
-            <CircleHelp size={15} /> {routeData.routing_message}
+          {result.search_message && <div className="inline-alert warning-alert"><CircleHelp size={15} />{result.search_message}</div>}
+          {result.routing_message && <div className="inline-alert warning-alert"><MapPinned size={15} />{result.routing_message}</div>}
+          <div className="result-stat-row">
+            <span><i className="stat-dot flight-dot" />{result.searches_with_priced_results}/{result.searches_attempted} city/date searches had priced flights</span>
+            {result.unpriced_rows_skipped > 0 && <span><i className="stat-dot warning-dot" />{result.unpriced_rows_skipped} unpriced Google rows skipped</span>}
+            <span><i className="stat-dot ground-dot" />Ground legs are estimates, not confirmed services</span>
           </div>
-        )}
 
-        <Card className="table-card">
-          <div className="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th>#</th><th>Arrive</th><th>Fly home</th><th>Flights</th><th>Est. transport</th><th>Total</th><th>Transport time</th><th aria-label="Select route" />
-                </tr>
-              </thead>
-              <tbody>
-                {routeData?.routes.map((route) => (
-                  <tr key={route.id} className={route.id === selectedRouteId ? "selected-row" : ""} onClick={() => setSelectedRouteId(route.id)} tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setSelectedRouteId(route.id); }}>
-                    <td className="rank-cell">{route.rank.toString().padStart(2, "0")}</td>
-                    <td><span className="city-cell"><span className="city-dot arrival-dot" />{route.arrival_city.name}</span></td>
-                    <td><span className="city-cell"><span className="city-dot departure-dot" />{route.departure_city.name}{route.is_same_city && <Badge className="same-city-badge">Same city</Badge>}</span></td>
-                    <td className="numeric-cell">{shortMoney(route.flight_cost_myr)}</td>
-                    <td className="numeric-cell">{shortMoney(route.estimated_transport_cost_myr)}</td>
-                    <td className="total-cell">{shortMoney(route.total_cost_myr)}</td>
-                    <td className="numeric-cell">{route.estimated_transport_time_hours.toFixed(1)} h</td>
-                    <td><button className="row-arrow" aria-label={`Select route ${route.arrival_city.name} to ${route.departure_city.name}`}><ArrowUpRight size={16} /></button></td>
-                  </tr>
+          <div className="results-grid">
+            <Card className="map-card">
+              <div className="map-card-head">
+                <div><div className="section-kicker">ROUTE MAP</div><h2>Selected combination</h2></div>
+                <div className="map-legends"><span><i className="legend-line flight-line" /> Flight</span><span><i className="legend-line ground-line" /> Ground</span></div>
+              </div>
+              <div className="map-frame"><RouteMap origin={origin} destinations={destinations} route={selectedRoute} /></div>
+              <div className="map-footnote"><span><MapPinned size={14} /> Airport locations</span><span>Ground route may use a direct-distance proxy</span></div>
+            </Card>
+
+            <Card className="route-list-card">
+              <div className="route-list-heading"><div><div className="section-kicker">ROUTE OPTIONS</div><h2>Choose a route</h2></div><Badge>{result.routes.length} ranked</Badge></div>
+              <div className="route-list">
+                {result.routes.map((route) => (
+                  <RouteSummary key={route.id} route={route} selected={route.id === selectedRoute?.id} onClick={() => setSelectedRouteId(route.id)} />
                 ))}
-                {routesLoading && !routeData && <tr><td colSpan={8} className="empty-table"><LoaderCircle size={18} className="spin" /> Checking OSRM distances and ranking options…</td></tr>}
-                {routeData && routeData.routes.length === 0 && <tr><td colSpan={8} className="empty-table">{routeData.candidate_count === 0 ? `No saved one-way fares are available both from and back to ${data.origin?.name ?? "this origin"}. Add matching flight snapshots under data/inputs.` : routeData.unavailable_pair_count ? "No road-distance estimates are available for these city pairs from OSRM." : "No routes match these limits. Clear a filter or increase your budget or maximum transport time."}</td></tr>}
-                {!routeData && !routesLoading && routesError && <tr><td colSpan={8} className="empty-table">Route calculations could not be loaded.</td></tr>}
-              </tbody>
-            </table>
+                {result.routes.length === 0 && <div className="empty-routes">No complete route could be estimated for these cities.</div>}
+              </div>
+            </Card>
           </div>
-          <div className="table-footer">
-            <span><i className="footer-dot" />Showing {routeCount} of up to {routeData?.candidate_count ?? 0} priced flight pairings</span>
-            <span>Snapshot fares · estimates in MYR</span>
-          </div>
-        </Card>
 
-        {selectedRoute && <Card className="detail-card"><RouteDetail route={selectedRoute} preference={preference} originName={data.origin?.name ?? "selected origin"} /></Card>}
-      </section>
+          {selectedRoute && (
+            <Card className="detail-card">
+              <div className="detail-heading">
+                <div><div className="section-kicker">ROUTE {String(selectedRoute.rank).padStart(2, "0")}</div><h2>{selectedRoute.stops.map((city) => city.name).join(" → ")}</h2></div>
+                <div className="detail-total"><span>Estimated trip total</span><strong>{money(selectedRoute.total_cost_myr)}</strong></div>
+              </div>
+              <div className="detail-metrics">
+                <div><Plane size={16} /><span>Flight fares</span><strong>{money(selectedRoute.flight_cost_myr)}</strong></div>
+                <div><Route size={16} /><span>Ground estimate</span><strong>{money(selectedRoute.ground_cost_myr)}</strong></div>
+                <div><CalendarDays size={16} /><span>Travel time</span><strong>{selectedRoute.total_time_hours.toFixed(1)} h</strong></div>
+                <div><MapPinned size={16} /><span>Ground distance</span><strong>{selectedRoute.ground_distance_km.toLocaleString("en-MY", { maximumFractionDigits: 0 })} km</strong></div>
+              </div>
+              <div className="leg-list">
+                {selectedRoute.legs.map((leg, index) => (
+                  <div className="leg-row" key={`${leg.from_city.code}-${leg.to_city.code}-${leg.departure_date}`}>
+                    <span className="leg-number">{String(index + 1).padStart(2, "0")}</span>
+                    <div className="leg-main">
+                      <strong>{leg.from_city.name}<ArrowRight size={14} />{leg.to_city.name}</strong>
+                      <small>{formatDate(leg.departure_date)} · {leg.mode === "flight" ? (leg.airlines.join(", ") || "Flight") : leg.distance_source === "assumed_connection" ? "Assumed ground connection" : "OSRM road estimate"}</small>
+                    </div>
+                    <Badge className={leg.mode === "flight" ? "flight-mode" : "ground-mode"}>{leg.mode === "flight" ? `${leg.segment_count > 1 ? `${leg.segment_count} flight segments` : "Flight"}` : "Ground"}</Badge>
+                    <strong className="leg-cost">{money(leg.cost_myr)}</strong>
+                    <span className="leg-time">{(leg.duration_minutes / 60).toFixed(1)} h</span>
+                    {leg.search_url && <a className="leg-search-link" href={leg.search_url} target="_blank" rel="noopener noreferrer" aria-label={`Open Google Flights search from ${leg.from_city.name} to ${leg.to_city.name}`}><ExternalLink size={14} /></a>}
+                  </div>
+                ))}
+              </div>
+              <p className="detail-disclaimer">Google Flights links reopen each one-way search; prices are not booking guarantees. Ground cost and time use your assumptions. A direct-distance proxy does not confirm a road, ferry, bus, or train service.</p>
+            </Card>
+          )}
 
-      {data.input_files.length > 0 && <ImportedSnapshots flights={data.imported_flights} files={data.input_files} />}
+          <div className="limits-note"><CircleHelp size={15} /><div><strong>Search boundaries</strong><span>Every selected city order is compared, with up to {result.maximum_searches} one-way searches for this input. {result.limitations.join(" ")}</span></div></div>
+        </section>
+      )}
 
       <footer className="page-footer">
-        <span>Wayfinder Routes · Local trip planner</span>
-        <span><span className="footer-separator">·</span> City data © GeoNames · Map tiles © OpenStreetMap contributors</span>
-        <span className="footer-disclaimer">Ground-transport estimates are not confirmed services or connections.</span>
+        <span>Wayfinder Routes · Live flight search by fast-flights</span>
+        <span>Airport data © airportsdata contributors · Map © OpenStreetMap contributors</span>
       </footer>
     </main>
   );

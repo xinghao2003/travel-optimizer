@@ -10,7 +10,9 @@ from typing import Any
 
 import httpx
 
-from .data import CityRecord, PROJECT_ROOT
+from .places import AirportCity
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 CACHE_PATH = PROJECT_ROOT / "backend" / "data" / "road_distance_cache.json"
 OSRM_BASE_URL = os.getenv("OSRM_BASE_URL", "https://router.project-osrm.org").rstrip("/")
@@ -49,7 +51,7 @@ class RoadDistanceCache:
 
     async def ensure(
         self,
-        cities: list[CityRecord],
+        cities: list[AirportCity],
         origin_codes: list[str],
         destination_codes: list[str],
     ) -> tuple[dict[str, float], int, str | None]:
@@ -93,7 +95,7 @@ class RoadDistanceCache:
 
     async def _fetch_matrix(
         self,
-        city_by_code: dict[str, CityRecord],
+        city_by_code: dict[str, AirportCity],
         origin_codes: list[str],
         destination_codes: list[str],
     ) -> None:
@@ -135,7 +137,7 @@ class RoadDistanceCache:
 road_distances = RoadDistanceCache()
 
 
-def great_circle_distance_m(origin: CityRecord, destination: CityRecord) -> float:
+def great_circle_distance_m(origin: AirportCity, destination: AirportCity) -> float:
     """Return the direct distance used as an explicitly hypothetical connection proxy."""
     latitude1 = math.radians(origin.latitude)
     latitude2 = math.radians(destination.latitude)

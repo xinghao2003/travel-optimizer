@@ -1,24 +1,23 @@
 # Wayfinder Routes
 
-A local flight and ground-transport route planner. Import saved Skyscanner HTML snapshots, choose a trip origin found in the imported routes, compare one-way outbound and return fares, and model an estimated road-based connection between any two recognized destinations.
+A live multi-city flight and ground-route planner. Choose an origin, a date window, and one to four destination cities. Every selected city is visited once; the app compares every destination order and can return to the origin at the end.
 
-Place saved Skyscanner pages in `data/inputs/` using `.txt`, `.html`, or `.htm` extensions. The loader scans files recursively, extracts both airport/city endpoints and travel dates from each result URL, and logs loaded/skipped files and parsed routes in the backend console. Every coordinate-resolved origin code found in those links is offered as a start city. Unsupported or failed files do not stop the other snapshots from loading.
+Flight fares are searched from Google Flights through [`fast-flights`](https://github.com/AWeirdDev/flights). City and airport codes come from [`airportsdata`](https://github.com/mborsetti/airportsdata). The app searches one-way city pairs so it can compare flight and estimated ground travel separately for each leg.
 
-For the selected origin, the optimizer uses one-way fares from the most common saved date for flights leaving that origin and flights returning to it. Round-trip results remain visible in the parsed snapshots table but are not split into fictitious one-way fares. Missing fares remain blank and are excluded from priced route combinations.
+## Trip search behavior and limits
 
-## City coordinates
+- The trip uses one adult, economy fares, and MYR. Each selected destination is mandatory. The planner exhaustively compares every order for up to four destinations (24 possible orders).
+- Travel legs are assigned dates evenly between the start and end dates. The end date is the final return-to-origin flight date when “Return to start city” is selected. The planner does not search every possible date or optimize how many nights to spend in each city.
+- Searches use one-way queries for each possible city pair at its assigned leg date. Four destinations can require up to 44 Google Flights requests; searches run with a small concurrency limit. Google may return no results, omit prices, change its page data, or temporarily block requests. Unpriced rows are skipped, and successful ground estimates remain available when a flight search fails.
+- A city resolves to one airport or an IATA multi-airport city code when available. The bundled airport catalog contains IATA airport locations, not train or bus stations.
+- Road distances use OSRM driving routes and are cached in `backend/data/road_distance_cache.json`. Where OSRM cannot find a road, the planner uses a labeled direct-distance proxy. Ground costs and times follow editable assumptions; they do not confirm a bus, train, ferry, road connection, or service schedule.
+- Flight results link back to a Google Flights search. Prices are live search results, not booking guarantees.
 
-The app resolves imported route endpoint names against GeoNames' `cities500` worldwide dataset and stores resolved points in `backend/data/city_coordinate_cache.json`. It falls back to a small built-in coordinate catalog when the dataset is absent. To resolve additional cities, download the free dataset once from the GeoNames download service:
-
-```powershell
-.\.venv\Scripts\python.exe backend\app\geonames.py --download
-```
-
-The downloaded archive is saved to `data/geonames/cities500.zip`. GeoNames data is CC BY 4.0 and is provided as-is; the map footer credits OpenStreetMap, and this README credits GeoNames. See the [GeoNames dataset readme](https://download.geonames.org/export/dump/readme.txt).
+The `fast-flights` query builder can serialize multi-city queries, but its published getting-started docs still describe multi-city as unsupported and its parser can fail when Google returns rows without prices. Wayfinder therefore requests one-way legs and filters rows without a fare before passing the remaining response through the package parser.
 
 ## Run locally on Windows
 
-Install Python 3.10+, uv, and Node.js 20.19+ (or 22.12+), then run these commands from the project root:
+Install Python 3.11+, uv, and Node.js 20.19+ (or 22.12+), then run from the project root:
 
 ```powershell
 uv venv .venv
@@ -32,7 +31,7 @@ Start the API in one PowerShell window:
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --app-dir backend
 ```
 
-Start the Vite frontend in another PowerShell window:
+Start the frontend in another PowerShell window:
 
 ```powershell
 npm --prefix frontend run dev
@@ -49,15 +48,12 @@ npm --prefix frontend run build
 
 Open <http://127.0.0.1:8000>. FastAPI serves the generated frontend from `frontend/dist` when that directory exists.
 
-## Estimate settings and services
+## Configuration
 
-- Defaults are 200 km/h, a 1.0 distance factor, RM0.27/km, and 30 minutes of connection overhead. RM0.27/km carries forward the prior ¥0.45/km × RM0.60/CNY assumption. All values can be changed in the settings panel.
-- OSRM driving distances are cached in `backend/data/road_distance_cache.json`. When OSRM has no road route or is offline, the app uses a labeled great-circle distance proxy so the optimizer can model an assumed connection. These proxy distances are not road routes.
-- The map uses MapLibre with an OpenStreetMap-based OpenFreeMap style. Map tiles and uncached routing distances require an internet connection; no API key is required.
-- Flight fares are saved snapshots, not live quotes. Coordinates are city/place points and transport costs and times are configurable estimates. OSRM road distance and assumed-connection proxies do not confirm that a real transport service or connection exists.
-
-To use another OSRM server, set `OSRM_BASE_URL` before starting FastAPI, for example:
+Ground speed, fare per kilometer, connection overhead, and flight airport buffer are editable in the trip form. To use another OSRM server, set `OSRM_BASE_URL` before starting FastAPI:
 
 ```powershell
 $env:OSRM_BASE_URL = "https://router.project-osrm.org"
 ```
+
+Airport data is provided by airportsdata under the MIT License. The map uses MapLibre and an OpenFreeMap style with OpenStreetMap contributors credited in the map.

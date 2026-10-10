@@ -1,0 +1,15 @@
+.venv/
+.uv-cache/
+frontend/node_modules/
+frontend/dist/
+frontend/node_modules/.tmp/
+frontend/.npm-cache/
+.pip-cache/
+__pycache__/
+*.py[cod]
+backend/data/road_distance_cache.json
+backend/data/road_distance_cache.tmp
+backend/data/city_coordinate_cache.json
+backend/data/city_coordinate_cache.tmp
+data/geonames/cities500.zip
+data/geonames/cities500.download

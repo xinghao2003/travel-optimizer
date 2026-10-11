@@ -17,6 +17,7 @@ class AirportCity:
     longitude: float
     latitude: float
     airport_codes: tuple[str, ...]
+    timezone_name: str | None = None
 
     @property
     def label(self) -> str:
@@ -89,6 +90,7 @@ def load_airport_cities() -> dict[str, AirportCity]:
             longitude=float(primary["lon"]),
             latitude=float(primary["lat"]),
             airport_codes=codes,
+            timezone_name=str(primary.get("tz") or "") or None,
         )
         cities[city.code] = city
 

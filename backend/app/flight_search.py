@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import threading
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, time
 from typing import Any
 
 from .places import AirportCity
@@ -19,6 +19,8 @@ class FlightOption:
     airlines: tuple[str, ...]
     segment_count: int
     search_url: str
+    departure_time: str | None = None
+    arrival_time: str | None = None
 
 
 @dataclass(frozen=True)
@@ -92,6 +94,8 @@ def search_one_way(
     departure_date: date,
     origin: AirportCity,
     destination: AirportCity,
+    earliest_departure_time: time = time(9, 0),
+    latest_departure_time: time = time(17, 0),
 ) -> FlightSearchOutcome:
     """Fetch one IATA city-pair/date quote through fast-flights."""
     try:
@@ -105,6 +109,8 @@ def search_one_way(
                     date=departure_date.isoformat(),
                     from_airport=origin.flight_code,
                     to_airport=destination.flight_code,
+                    earliest_departure_hour=earliest_departure_time.hour,
+                    latest_departure_hour=latest_departure_time.hour,
                 )
             ],
             trip="one-way",
@@ -124,6 +130,25 @@ def search_one_way(
             if result.price is None:
                 unpriced_rows += 1
                 continue
+            if not result.flights:
+                continue
+
+            def format_segment_time(segment, field: str) -> tuple[str | None, int | None]:
+                value = getattr(getattr(segment, field, None), "time", None)
+                if not isinstance(value, (tuple, list)) or len(value) < 2:
+                    return None, None
+                try:
+                    hour, minute = int(value[0]), int(value[1])
+                    return f"{hour:02d}:{minute:02d}", hour * 60 + minute
+                except (TypeError, ValueError):
+                    return None, None
+
+            departure_text, departure_minutes = format_segment_time(result.flights[0], "departure")
+            arrival_text, _ = format_segment_time(result.flights[-1], "arrival")
+            earliest_minutes = earliest_departure_time.hour * 60 + earliest_departure_time.minute
+            latest_minutes = latest_departure_time.hour * 60 + latest_departure_time.minute
+            if departure_minutes is None or not earliest_minutes <= departure_minutes <= latest_minutes:
+                continue
             duration = sum(int(segment.duration or 0) for segment in result.flights)
             options.append(
                 FlightOption(
@@ -133,6 +158,8 @@ def search_one_way(
                     airlines=tuple(str(airline) for airline in result.airlines),
                     segment_count=len(result.flights),
                     search_url=query.url(),
+                    departure_time=departure_text,
+                    arrival_time=arrival_text,
                 )
             )
         options.sort(key=lambda option: (option.price_myr, option.duration_minutes))

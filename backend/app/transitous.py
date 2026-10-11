@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import importlib.util
 import json
+import logging
+import math
 import os
 import sqlite3
 import threading
@@ -11,15 +14,18 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import quote, quote_plus, urlencode
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 
 DEFAULT_API_BASE_URL = "https://api.transitous.org/api"
 DEFAULT_ROUTE_TTL_SECONDS = 6 * 60 * 60
 DEFAULT_EMPTY_ROUTE_TTL_SECONDS = 15 * 60
-DEFAULT_GEOCODE_TTL_SECONDS = 30 * 24 * 60 * 60
-DEFAULT_EMPTY_GEOCODE_TTL_SECONDS = 7 * 24 * 60 * 60
+DEFAULT_STOP_TTL_SECONDS = 30 * 24 * 60 * 60
+DEFAULT_EMPTY_STOP_TTL_SECONDS = 24 * 60 * 60
+
+logger = logging.getLogger("uvicorn.error")
 
 
 @dataclass(frozen=True)
@@ -27,6 +33,14 @@ class TransitPlace:
     latitude: float
     longitude: float
     timezone_name: str | None
+    stop_id: str | None = None
+    stop_name: str | None = None
+
+    @property
+    def identifier(self) -> str:
+        if self.stop_id:
+            return self.stop_id
+        return f"{self.latitude:.6f},{self.longitude:.6f}"
 
 
 @dataclass(frozen=True)
@@ -111,15 +125,25 @@ def _positive_env(name: str, default: int) -> int:
         return default
 
 
-def _match_list(payload: Any) -> list[dict[str, Any]]:
-    if isinstance(payload, list):
-        return [item for item in payload if isinstance(item, dict)]
-    if isinstance(payload, dict):
-        for key in ("matches", "results", "places"):
-            value = payload.get(key)
-            if isinstance(value, list):
-                return [item for item in value if isinstance(item, dict)]
-    return []
+def _safe_error_message(response: httpx.Response, params: dict[str, str]) -> str:
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+    message = payload.get("error") if isinstance(payload, dict) else None
+    if not isinstance(message, str):
+        message = response.text
+
+    for name in ("fromPlace", "toPlace", "fromName", "toName", "time", "text", "place"):
+        value = params.get(name)
+        if value:
+            message = message.replace(value, "[redacted]")
+            for encoded_value in {quote(value, safe=""), quote_plus(value, safe="")}:
+                if encoded_value != value:
+                    message = message.replace(encoded_value, "[redacted]")
+
+    message = " ".join(message.split())
+    return message if len(message) <= 300 else message[:297] + "..."
 
 
 def _number(value: Any) -> float | None:
@@ -158,6 +182,19 @@ def _parse_datetime(value: Any) -> datetime | None:
 
 def _iso(value: datetime) -> str:
     return value.isoformat(timespec="minutes")
+
+
+def _within_local_window(
+    value: str,
+    timezone_info: ZoneInfo,
+    earliest_time: time,
+    latest_time: time,
+) -> bool:
+    parsed = _parse_datetime(value)
+    if parsed is None:
+        return False
+    local_time = parsed.astimezone(timezone_info).time().replace(tzinfo=None)
+    return earliest_time <= local_time <= latest_time
 
 
 def _itinerary_to_option(itinerary: dict[str, Any]) -> RailOption | None:
@@ -252,14 +289,9 @@ class TransitousClient:
         self.empty_route_ttl = _positive_env(
             "TRANSITOUS_EMPTY_ROUTE_TTL_SECONDS", DEFAULT_EMPTY_ROUTE_TTL_SECONDS
         )
-        self.geocode_ttl = _positive_env("TRANSITOUS_GEOCODE_TTL_SECONDS", DEFAULT_GEOCODE_TTL_SECONDS)
-        self.empty_geocode_ttl = _positive_env(
-            "TRANSITOUS_EMPTY_GEOCODE_TTL_SECONDS", DEFAULT_EMPTY_GEOCODE_TTL_SECONDS
-        )
         self._request_locks: dict[str, asyncio.Lock] = {}
         self._lock_guard = asyncio.Lock()
         self._route_semaphore = asyncio.Semaphore(2)
-        self._geocode_semaphore = asyncio.Semaphore(2)
         self.reset_counters()
 
     def reset_counters(self) -> None:
@@ -290,6 +322,7 @@ class TransitousClient:
         cached = self._cache.get(key)
         if cached is not None:
             self.cache_hits += 1
+            logger.debug("Transitous cache hit for %s", path)
             return cached
 
         request_lock = await self._lock_for(key)
@@ -297,60 +330,163 @@ class TransitousClient:
             cached = self._cache.get(key)
             if cached is not None:
                 self.cache_hits += 1
+                logger.debug("Transitous cache hit for %s", path)
                 return cached
             self.api_requests += 1
+            logger.debug("Transitous request to %s (cache miss)", path)
             try:
                 response = await self._http.get(f"{self.base_url}{path}", params=params)
                 response.raise_for_status()
+                logger.debug("Transitous request to %s succeeded: HTTP %s", path, response.status_code)
                 payload = response.json()
             except (httpx.HTTPError, ValueError) as exc:
                 self.api_failures += 1
+                if isinstance(exc, httpx.HTTPStatusError):
+                    response = exc.response
+                    detail = f"HTTP {response.status_code} {response.reason_phrase}".strip()
+                    error_message = _safe_error_message(response, params)
+                    if error_message:
+                        detail += f": {error_message}"
+                else:
+                    detail = f"{type(exc).__name__}: {exc}"
+                    if isinstance(exc, httpx.HTTPError):
+                        request = getattr(exc, "request", None)
+                        if request is not None:
+                            request_url = str(request.url)
+                            safe_url = str(request.url.copy_with(query=None, fragment=None))
+                            detail = detail.replace(request_url, safe_url)
+                logger.debug("Transitous request to %s failed: %s", path, detail)
                 raise RuntimeError(f"Transitous request failed: {type(exc).__name__}.") from exc
             self._cache.set(key, payload, empty_ttl_seconds if is_empty(payload) else ttl_seconds)
             return payload
 
-    async def geocode(self, city) -> TransitPlace | None:
-        query = f"{city.name}, {city.country_code}"
-        params = {
-            "text": query,
-            "type": "PLACE",
-            "place": f"{city.latitude:.6f},{city.longitude:.6f}",
-        }
-        async with self._geocode_semaphore:
+    async def resolve_city_stop(
+        self,
+        city_name: str,
+        latitude: float,
+        longitude: float,
+        timezone_name: str | None,
+    ) -> TransitPlace | None:
+        """Resolve a city to a nearby Transitous stop, when its feeds expose one."""
+        try:
             payload = await self._get_json(
                 "/v1/geocode",
-                params,
-                ttl_seconds=self.geocode_ttl,
-                empty_ttl_seconds=self.empty_geocode_ttl,
-                is_empty=lambda response: not _match_list(response),
+                {"text": city_name, "type": "STOP"},
+                ttl_seconds=DEFAULT_STOP_TTL_SECONDS,
+                empty_ttl_seconds=DEFAULT_EMPTY_STOP_TTL_SECONDS,
+                is_empty=lambda response: not isinstance(response, list) or not response,
             )
-        for match in _match_list(payload):
-            lat = _number(match.get("lat") or match.get("latitude"))
-            lon = _number(match.get("lon") or match.get("lng") or match.get("longitude"))
-            if lat is None or lon is None:
-                continue
-            tz_name = match.get("tz") or match.get("timezone") or match.get("timeZone")
-            return TransitPlace(lat, lon, str(tz_name) if tz_name else None)
-        return None
+        except RuntimeError as exc:
+            logger.debug("Transitous stop lookup failed for city=%r: %s", city_name, exc)
+            return None
+
+        def normalized(value: str) -> str:
+            return " ".join(value.casefold().replace("-", " ").replace("_", " ").split())
+
+        def distance_km(lat: float, lon: float) -> float:
+            lat1, lon1 = math.radians(latitude), math.radians(longitude)
+            lat2, lon2 = math.radians(lat), math.radians(lon)
+            dlat, dlon = lat2 - lat1, lon2 - lon1
+            haversine = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+            return 6371.0 * 2 * math.asin(math.sqrt(min(1.0, max(0.0, haversine))))
+
+        city_key = normalized(city_name)
+        candidates: list[tuple[int, float, dict[str, Any]]] = []
+        if isinstance(payload, list):
+            for row in payload:
+                if not isinstance(row, dict) or row.get("type") != "STOP":
+                    continue
+                stop_id = row.get("id")
+                name = row.get("name")
+                lat = _number(row.get("lat"))
+                lon = _number(row.get("lon"))
+                if (
+                    not isinstance(stop_id, str)
+                    or not stop_id
+                    or not isinstance(name, str)
+                    or lat is None
+                    or lon is None
+                    or not math.isfinite(lat)
+                    or not math.isfinite(lon)
+                ):
+                    continue
+                distance = distance_km(lat, lon)
+                if distance > 150:
+                    continue
+                stop_key = normalized(name)
+                name_rank = 0 if stop_key == city_key else 1 if city_key and city_key in stop_key else 2
+                candidates.append((name_rank, distance, row))
+
+        if not candidates:
+            logger.debug("Transitous found no nearby stop for city=%r", city_name)
+            return None
+
+        _, distance, match = min(candidates, key=lambda candidate: (candidate[0], candidate[1]))
+        stop_timezone = match.get("timezone") or match.get("timezoneName") or timezone_name
+        resolved = TransitPlace(
+            latitude=float(match["lat"]),
+            longitude=float(match["lon"]),
+            timezone_name=str(stop_timezone) if stop_timezone else None,
+            stop_id=str(match["id"]),
+            stop_name=str(match["name"]),
+        )
+        logger.debug(
+            "Transitous resolved city=%s to stop=%s (%.1f km from airport-city reference)",
+            city_name,
+            resolved.stop_name,
+            distance,
+        )
+        return resolved
 
     async def search_rail(
         self,
         day: date,
-        local_time: time,
+        earliest_time: time,
+        latest_time: time,
         from_place: TransitPlace,
         to_place: TransitPlace,
     ) -> RailSearchOutcome:
+        if latest_time <= earliest_time:
+            return RailSearchOutcome(error="The preferred departure window must end after it starts.")
+        if not from_place.timezone_name:
+            logger.debug("Cannot request Transitous route: departure place has no timezone.")
+            return RailSearchOutcome(error="Transitous did not provide a departure timezone.")
+        try:
+            departure_timezone = ZoneInfo(from_place.timezone_name)
+        except ZoneInfoNotFoundError:
+            if importlib.util.find_spec("tzdata") is None:
+                logger.debug(
+                    "Cannot request Transitous route: timezone database is unavailable for key=%r; "
+                    "install backend requirements with uv.",
+                    from_place.timezone_name,
+                )
+                return RailSearchOutcome(error="Backend timezone data is unavailable.")
+            logger.debug(
+                    "Cannot request Transitous route: airport catalog timezone key=%r is absent from installed timezone data.",
+                from_place.timezone_name,
+            )
+            return RailSearchOutcome(error="Transitous returned an unavailable departure timezone.")
+
+        departure_datetime = datetime.combine(day, earliest_time).replace(tzinfo=departure_timezone)
+        search_window_seconds = int(
+            (datetime.combine(day, latest_time) - datetime.combine(day, earliest_time)).total_seconds()
+        )
+        logger.debug(
+            "Transitous /v6/plan request: mode=RAIL time=%s..%s timezone=%s places=resolved",
+            departure_datetime.isoformat(timespec="seconds"),
+            latest_time.isoformat(timespec="minutes"),
+            from_place.timezone_name,
+        )
         params = {
-            "fromPlace": f"{from_place.latitude:.6f},{from_place.longitude:.6f}",
-            "toPlace": f"{to_place.latitude:.6f},{to_place.longitude:.6f}",
-            # MOTIS interprets its routing time in the departure place's local
-            # timezone; the stable Transitous client uses YYYY-MM-DDTHH:mm.
-            "time": f"{day.isoformat()}T{local_time.strftime('%H:%M')}",
+            "fromPlace": from_place.identifier,
+            "toPlace": to_place.identifier,
+            # MOTIS requires seconds and an explicit timezone offset.
+            "time": departure_datetime.isoformat(timespec="seconds"),
             "arriveBy": "false",
             "transitModes": "RAIL",
             "timetableView": "true",
-            "searchWindow": "900",
-            "numItineraries": "3",
+            "searchWindow": str(search_window_seconds),
+            "numItineraries": "10",
             "joinInterlinedLegs": "false",
         }
         try:
@@ -372,7 +508,12 @@ class TransitousClient:
         options = [
             option
             for option in (_itinerary_to_option(item) for item in itineraries if isinstance(item, dict))
-            if option is not None
+            if option is not None and _within_local_window(
+                option.departure_time,
+                departure_timezone,
+                earliest_time,
+                latest_time,
+            )
         ]
         options.sort(key=lambda option: (option.duration_minutes, option.departure_time))
         if not options:

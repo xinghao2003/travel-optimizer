@@ -55,7 +55,7 @@ function money(value: number | null) {
 function railTime(value: string | null | undefined, timezone: string | null | undefined) {
   if (!value) return null;
   if (!/(?:Z|[+-]\d{2}:?\d{2})$/i.test(value)) {
-    return value.match(/T(\d{2}:\d{2})/)?.[1] ?? null;
+    return value.match(/(?:T)?(\d{2}:\d{2})/)?.[1] ?? null;
   }
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return null;
@@ -226,7 +226,9 @@ function App() {
   const [today] = useState(() => localDateString(new Date()));
   const [startDate, setStartDate] = useState(() => addDays(localDateString(new Date()), 30));
   const [endDate, setEndDate] = useState(() => addDays(localDateString(new Date()), 38));
-  const [transitDepartureTime, setTransitDepartureTime] = useState("09:00");
+  const [preferredDepartureStart, setPreferredDepartureStart] = useState("09:00");
+  const [preferredDepartureEnd, setPreferredDepartureEnd] = useState("17:00");
+  const [minCityStayNights, setMinCityStayNights] = useState(0);
   const [returnToOrigin, setReturnToOrigin] = useState(true);
   const [settings, setSettings] = useState<TransportSettings>(fallbackSettings);
   const [preference, setPreference] = useState<Preference>("cheapest");
@@ -257,9 +259,11 @@ function App() {
     [result, selectedRouteId],
   );
 
-  const minDays = Math.max(0, destinations.length + Number(returnToOrigin) - 1);
+  const minSpanDays = returnToOrigin
+    ? destinations.length * (minCityStayNights + 1)
+    : Math.max(0, destinations.length - 1) * (minCityStayNights + 1) + minCityStayNights;
   const dateSpan = Math.floor((new Date(`${endDate}T12:00:00`).getTime() - new Date(`${startDate}T12:00:00`).getTime()) / 86_400_000);
-  const tooShort = dateSpan < minDays;
+  const tooShort = dateSpan < minSpanDays;
   const estimatedSearches = estimateSearchCount(destinations.length, returnToOrigin);
   const preferenceOptions: { id: Preference; label: string; icon: typeof ArrowDownUp }[] = [
     { id: "cheapest", label: "Lowest total", icon: ArrowDownUp },
@@ -282,7 +286,11 @@ function App() {
       return;
     }
     if (tooShort) {
-      setSearchError("Extend the date range to allow at least one day between travel legs.");
+      setSearchError("Extend the date range to fit the travel legs and minimum city stays.");
+      return;
+    }
+    if (preferredDepartureEnd <= preferredDepartureStart) {
+      setSearchError("Choose an end time after the preferred departure start time.");
       return;
     }
     setLoading(true);
@@ -297,7 +305,9 @@ function App() {
           destination_codes: destinations.map((city) => city.code),
           start_date: startDate,
           end_date: endDate,
-          transit_departure_time: transitDepartureTime,
+          preferred_departure_start: preferredDepartureStart,
+          preferred_departure_end: preferredDepartureEnd,
+          min_city_stay_nights: minCityStayNights,
           return_to_origin: returnToOrigin,
           settings,
           preference,
@@ -409,8 +419,22 @@ function App() {
                   <input type="date" min={startDate} value={endDate} onChange={(event) => { setEndDate(event.target.value); setResult(null); }} />
                 </label>
                 <label className="field-wrap">
-                  <span className="field-label">Train search time · local</span>
-                  <input type="time" value={transitDepartureTime} onChange={(event) => { setTransitDepartureTime(event.target.value); setResult(null); }} />
+                  <span className="field-label">Preferred departure · from local time</span>
+                  <input type="time" value={preferredDepartureStart} onChange={(event) => { setPreferredDepartureStart(event.target.value); setResult(null); }} />
+                </label>
+                <label className="field-wrap">
+                  <span className="field-label">Preferred departure · until</span>
+                  <input type="time" value={preferredDepartureEnd} onChange={(event) => { setPreferredDepartureEnd(event.target.value); setResult(null); }} />
+                </label>
+                <label className="field-wrap stay-field">
+                  <span className="field-label">Minimum stay · each city</span>
+                  <span className="stay-input-wrap">
+                    <input type="number" min={0} max={30} value={minCityStayNights} onChange={(event) => {
+                      const value = Number(event.target.value);
+                      if (Number.isInteger(value)) { setMinCityStayNights(Math.max(0, Math.min(30, value))); setResult(null); }
+                    }} />
+                    <small>nights</small>
+                  </span>
                 </label>
               </div>
               <label className="return-toggle">
@@ -419,7 +443,8 @@ function App() {
                 <span><strong>Return to start city</strong><small>Add a final travel leg home</small></span>
               </label>
             </section>
-            {tooShort && <p className="field-hint warning-text">Allow at least {minDays} days for the {destinations.length + Number(returnToOrigin)} travel legs.</p>}
+            {tooShort && <p className="field-hint warning-text">The selected date window is too short for the travel legs and {minCityStayNights} minimum night(s) per city.</p>}
+            <p className="field-hint">Departure time preferences filter scheduled flights and rail; estimated ground legs have no timetable.</p>
 
             <div className="form-divider" />
             <section className="form-bottom-grid">
@@ -466,7 +491,7 @@ function App() {
             <div>
               <div className="section-kicker">{result.candidate_count} ROUTE ORDERS · {result.searches_attempted} FLIGHT + {result.rail_searches_attempted} RAIL SEARCHES</div>
               <h2>Best ways to make this trip <span>{result.routes.length} options</span></h2>
-              <p>Dates searched: {result.date_schedule.map(formatDate).join(" · ")} · Train search time {transitDepartureTime} local · Ranked by {preference === "cheapest" ? "known ticket costs" : preference === "shortest" ? "travel time" : "known costs and travel time"}.</p>
+              <p>Travel dates: {result.date_schedule.map(formatDate).join(" · ")}{!returnToOrigin ? ` · Trip ends ${formatDate(endDate)}` : ""} · Departures {preferredDepartureStart}–{preferredDepartureEnd} local · {minCityStayNights} minimum night(s) per city · Ranked by {preference === "cheapest" ? "known ticket costs" : preference === "shortest" ? "travel time" : "known costs and travel time"}.</p>
             </div>
             <Button type="button" variant="secondary" className="refresh-button" disabled={loading} onClick={() => void runSearch()}>
               {loading ? <LoaderCircle size={15} className="spin" /> : <ArrowDownUp size={15} />} Re-search
@@ -482,6 +507,11 @@ function App() {
             {result.unpriced_rows_skipped > 0 && <span><i className="stat-dot warning-dot" />{result.unpriced_rows_skipped} unpriced Google rows skipped</span>}
             <span>Train fares may be missing; totals with unknown fares are incomplete.</span>
           </div>
+          {result.transit_stop_resolutions.length > 0 && (
+            <p className="field-hint stop-resolution-note">
+              Nearby Transitous stops matched: {result.transit_stop_resolutions.map((stop) => `${stop.city_name}: ${stop.stop_name}`).join(" · ")}
+            </p>
+          )}
 
           <div className="results-grid">
             <Card className="map-card">
@@ -526,7 +556,7 @@ function App() {
                         {formatDate(leg.departure_date)}
                         {leg.mode === "rail"
                           ? ` · ${railTime(leg.departure_time, leg.departure_timezone) ?? "Scheduled"}–${railTime(leg.arrival_time, leg.arrival_timezone) ?? ""} · ${leg.service_names?.join(", ") || "Train"}${leg.operators?.length ? ` · ${leg.operators.join(", ")}` : ""} · ${leg.from_stop ?? "Station"} → ${leg.to_stop ?? "Station"}`
-                          : ` · ${leg.mode === "flight" ? (leg.airlines.join(", ") || "Flight") : "Ground estimate"}`}
+                          : ` · ${leg.mode === "flight" ? `${leg.airlines.join(", ") || "Flight"}${leg.departure_time ? ` · depart ${railTime(leg.departure_time, leg.departure_timezone)}` : ""}` : "Ground estimate"}`}
                       </small>
                     </div>
                     <Badge className={leg.mode === "flight" ? "flight-mode" : leg.mode === "rail" ? "rail-mode" : "ground-mode"}>{leg.mode === "flight" ? `${leg.segment_count > 1 ? `${leg.segment_count} flight segments` : "Flight"}` : leg.mode === "rail" ? "Train" : "Ground"}</Badge>

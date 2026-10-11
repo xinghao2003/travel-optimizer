@@ -60,9 +60,13 @@ button { cursor: pointer; }
 .warning-text { color: #986236; }
 .form-divider { height: 1px; margin: 15px 0; background: #edf0f1; }
 .trip-options-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; }
-.date-fields { display: flex; align-items: flex-end; gap: 10px; }
+.date-fields { display: grid; grid-template-columns: minmax(140px, 1fr) 16px minmax(140px, 1fr) repeat(2, minmax(140px, 1fr)) minmax(120px, .85fr); align-items: flex-end; gap: 8px; }
 .field-wrap { min-width: 160px; }
 .field-wrap input[type="date"], .field-wrap input[type="time"] { font-size: 10px; }
+.stay-field { min-width: 125px; }
+.stay-input-wrap { height: 38px; display: flex; align-items: center; gap: 7px; padding: 0 10px; border: 1px solid #dfe7e9; border-radius: 9px; color: #263b44; background: #fff; }
+.stay-input-wrap input[type="number"] { width: 100%; min-width: 0; height: 32px; padding: 0; border: 0; outline: 0; color: #263b44; background: transparent; font-size: 11px; font-weight: 600; box-shadow: none; }
+.stay-input-wrap small { flex: none; color: #718087; font-size: 9px; }
 .date-arrow { margin-bottom: 10px; color: #a1adb1; }
 .return-toggle { display: flex; align-items: center; gap: 9px; margin-bottom: 3px; cursor: pointer; }
 .return-toggle input { position: absolute; opacity: 0; pointer-events: none; }
@@ -186,6 +190,9 @@ button { cursor: pointer; }
   .results-grid { grid-template-columns: minmax(0, 1.1fr) minmax(300px, .9fr); }
   .form-bottom-grid { gap: 15px; }
   .settings-grid { grid-template-columns: repeat(2, minmax(100px, 1fr)); }
+  .trip-options-row { align-items: flex-start; flex-direction: column; gap: 12px; }
+  .date-fields { width: 100%; }
+  .field-wrap { min-width: 0; }
 }
 @media (max-width: 760px) {
   body { min-width: 340px; }
@@ -199,8 +206,9 @@ button { cursor: pointer; }
   .trip-card-header { padding-left: 14px !important; }
   .trip-card-content { padding: 0 14px 14px !important; }
   .trip-options-row { align-items: flex-start; flex-direction: column; gap: 12px; }
-  .date-fields { width: 100%; }
-  .field-wrap { min-width: 0; flex: 1; }
+  .date-fields { width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .date-arrow { display: none; }
+  .field-wrap { min-width: 0; }
   .form-bottom-grid { grid-template-columns: 1fr; gap: 14px; }
   .rank-block { padding-top: 2px; }
   .form-submit-row { align-items: flex-start; flex-direction: column; }
@@ -232,7 +240,7 @@ button { cursor: pointer; }
   .brand-caption { font-size: 9px; }
   .live-badge { padding: 5px 7px !important; font-size: 8px !important; }
   .intro-row h1 { font-size: 24px; }
-  .date-fields { gap: 6px; }
+  .date-fields { gap: 7px; }
   .date-arrow { width: 13px; }
   .settings-grid { gap: 7px; }
   .preference-button { font-size: 7px !important; }

@@ -75,7 +75,12 @@ export type TripPlanResponse = {
   transit_api_requests: number;
   transit_cache_hits: number;
   transit_api_failures: number;
-  transit_geocoding_failures: number;
+  transit_location_failures: number;
+  transit_stop_resolutions: { city_code: string; city_name: string; stop_name: string }[];
+  transit_unresolved_stops: string[];
+  preferred_departure_start: string;
+  preferred_departure_end: string;
+  min_city_stay_nights: number;
   flight_search: { available: boolean; version: string | null };
 };
 

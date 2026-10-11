@@ -52,18 +52,61 @@ class ModeOption:
     operators: tuple[str, ...] = ()
 
 
-def evenly_spaced_leg_dates(start_date: date, end_date: date, leg_count: int) -> list[date]:
+def evenly_spaced_leg_dates(
+    start_date: date,
+    end_date: date,
+    leg_count: int,
+    min_city_stay_nights: int = 0,
+) -> list[date]:
     if leg_count < 1:
         raise ValueError("A trip must have at least one travel leg.")
     span_days = (end_date - start_date).days
-    if span_days < leg_count - 1:
-        raise ValueError("Add at least one calendar day for each additional travel leg.")
+    if min_city_stay_nights < 0:
+        raise ValueError("Minimum city stay cannot be negative.")
     if leg_count == 1:
         return [start_date]
-    return [
-        start_date + timedelta(days=round(index * span_days / (leg_count - 1)))
-        for index in range(leg_count)
-    ]
+    gap_count = leg_count - 1
+    minimum_gap = min_city_stay_nights + 1
+    minimum_span = gap_count * minimum_gap
+    if span_days < minimum_span:
+        raise ValueError(
+            "Add at least one calendar day between each travel leg and allow "
+            f"{min_city_stay_nights} nights in each city; the selected range needs {minimum_span} days."
+        )
+    base_extra, remainder = divmod(span_days - minimum_span, gap_count)
+    dates = [start_date]
+    for index in range(gap_count):
+        gap = minimum_gap + base_extra + int(index < remainder)
+        dates.append(dates[-1] + timedelta(days=gap))
+    return dates
+
+
+def planned_leg_dates(
+    start_date: date,
+    end_date: date,
+    destination_count: int,
+    return_to_origin: bool,
+    min_city_stay_nights: int = 0,
+) -> list[date]:
+    """Place travel days while reserving a minimum stay at every destination."""
+    if destination_count < 1:
+        raise ValueError("Choose at least one destination.")
+    if min_city_stay_nights < 0:
+        raise ValueError("Minimum city stay cannot be negative.")
+    date_gaps = [min_city_stay_nights + 1] * max(0, destination_count - 1)
+    date_gaps.append(min_city_stay_nights + 1 if return_to_origin else min_city_stay_nights)
+    span_days = (end_date - start_date).days
+    minimum_span = sum(date_gaps)
+    if span_days < minimum_span:
+        raise ValueError(
+            "Add at least one calendar day between each travel leg and allow "
+            f"{min_city_stay_nights} nights in each city; the selected range needs {minimum_span} days."
+        )
+    base_extra, remainder = divmod(span_days - minimum_span, len(date_gaps))
+    timeline = [start_date]
+    for index, gap in enumerate(date_gaps):
+        timeline.append(timeline[-1] + timedelta(days=gap + base_extra + int(index < remainder)))
+    return timeline if return_to_origin else timeline[:-1]
 
 
 def build_search_specs(
@@ -72,6 +115,7 @@ def build_search_specs(
     start_date: date,
     end_date: date,
     return_to_origin: bool,
+    min_city_stay_nights: int = 0,
 ) -> list[FlightSearchSpec]:
     if not 1 <= len(destinations) <= MAX_DESTINATIONS:
         raise ValueError(f"Choose between 1 and {MAX_DESTINATIONS} destinations.")
@@ -81,7 +125,13 @@ def build_search_specs(
         raise ValueError("Choose each destination city only once.")
 
     leg_count = len(destinations) + int(return_to_origin)
-    dates = evenly_spaced_leg_dates(start_date, end_date, leg_count)
+    dates = planned_leg_dates(
+        start_date,
+        end_date,
+        len(destinations),
+        return_to_origin,
+        min_city_stay_nights,
+    )
     specs: list[FlightSearchSpec] = []
     for position, departure_date in enumerate(dates):
         if position == 0:
@@ -142,6 +192,7 @@ async def optimize_trip(
     destinations: list[AirportCity],
     start_date: date,
     end_date: date,
+    min_city_stay_nights: int = 0,
     return_to_origin: bool,
     preference: Preference,
     settings: TransportSettings,
@@ -150,7 +201,14 @@ async def optimize_trip(
     flight_search: Callable[[date, AirportCity, AirportCity], Awaitable[FlightSearchOutcome]],
     rail_search: Callable[[date, AirportCity, AirportCity], Awaitable[RailSearchOutcome]] | None = None,
 ) -> dict:
-    specs = build_search_specs(origin, destinations, start_date, end_date, return_to_origin)
+    specs = build_search_specs(
+        origin,
+        destinations,
+        start_date,
+        end_date,
+        return_to_origin,
+        min_city_stay_nights,
+    )
     semaphore = asyncio.Semaphore(MAX_PARALLEL_FLIGHT_SEARCHES)
 
     async def run_search(spec: FlightSearchSpec) -> tuple[FlightSearchSpec, FlightSearchOutcome]:
@@ -189,7 +247,13 @@ async def optimize_trip(
         path = [origin, *order]
         if return_to_origin:
             path.append(origin)
-        leg_dates = evenly_spaced_leg_dates(start_date, end_date, len(path) - 1)
+        leg_dates = planned_leg_dates(
+            start_date,
+            end_date,
+            len(destinations),
+            return_to_origin,
+            min_city_stay_nights,
+        )
         leg_selections: list[tuple[AirportCity, AirportCity, date, ModeOption, ModeOption]] = []
         complete = True
         for position, (from_city, to_city) in enumerate(zip(path, path[1:])):
@@ -223,6 +287,10 @@ async def optimize_trip(
                         airlines=flight.airlines,
                         segment_count=flight.segment_count,
                         search_url=flight.search_url,
+                        departure_time=flight.departure_time,
+                        arrival_time=flight.arrival_time,
+                        departure_timezone=from_city.timezone_name,
+                        arrival_timezone=to_city.timezone_name,
                     )
                 )
             rail_outcome = rail_results.get(key, RailSearchOutcome())
@@ -387,10 +455,19 @@ async def optimize_trip(
         "searches_failed": failed_searches,
         "unpriced_rows_skipped": unpriced_rows,
         "maximum_searches": maximum_search_count(len(destinations), return_to_origin),
-        "date_schedule": [day.isoformat() for day in evenly_spaced_leg_dates(start_date, end_date, len(destinations) + int(return_to_origin))],
+        "date_schedule": [
+            day.isoformat()
+            for day in planned_leg_dates(
+                start_date,
+                end_date,
+                len(destinations),
+                return_to_origin,
+                min_city_stay_nights,
+            )
+        ],
         "limitations": [
             "One flight search is made per possible city pair and scheduled travel day; no flexible-date fare calendar is available.",
-            "Travel days are spaced evenly through the selected date range, so nights per city are not optimized.",
+            "Travel days are distributed across the date range while honoring the same minimum stay in each destination.",
             "Each listed destination is visited once; all possible destination orders are compared.",
             "Transitous rail fares are not currently used in totals; routes containing a rail leg have an incomplete fare total.",
         ],

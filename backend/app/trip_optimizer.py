@@ -9,6 +9,7 @@ from typing import Awaitable, Callable, Literal
 
 from .flight_search import FlightOption, FlightSearchOutcome
 from .places import AirportCity
+from .transitous import RailSearchOutcome
 
 Preference = Literal["cheapest", "shortest", "balanced"]
 MAX_DESTINATIONS = 4
@@ -33,14 +34,22 @@ class FlightSearchSpec:
 
 @dataclass(frozen=True)
 class ModeOption:
-    mode: Literal["flight", "ground"]
-    cost_myr: float
+    mode: Literal["flight", "rail", "ground"]
+    cost_myr: float | None
     duration_minutes: int
     distance_km: float
-    distance_source: Literal["flight", "osrm_road", "assumed_connection"]
+    distance_source: Literal["flight", "transitous_rail", "osrm_road", "assumed_connection"]
     airlines: tuple[str, ...] = ()
     segment_count: int = 0
     search_url: str | None = None
+    departure_time: str | None = None
+    arrival_time: str | None = None
+    departure_timezone: str | None = None
+    arrival_timezone: str | None = None
+    from_stop: str | None = None
+    to_stop: str | None = None
+    service_names: tuple[str, ...] = ()
+    operators: tuple[str, ...] = ()
 
 
 def evenly_spaced_leg_dates(start_date: date, end_date: date, leg_count: int) -> list[date]:
@@ -103,12 +112,18 @@ def maximum_search_count(destination_count: int, return_to_origin: bool = True) 
 
 
 def _choose_mode(options: list[ModeOption], preference: Preference) -> ModeOption:
+    priced_options = [option for option in options if option.cost_myr is not None]
     if preference == "cheapest":
-        return min(options, key=lambda option: (option.cost_myr, option.duration_minutes))
+        if priced_options:
+            return min(priced_options, key=lambda option: (option.cost_myr, option.duration_minutes))
+        return min(options, key=lambda option: option.duration_minutes)
     if preference == "shortest":
-        return min(options, key=lambda option: (option.duration_minutes, option.cost_myr))
-    min_cost = min(option.cost_myr for option in options)
-    max_cost = max(option.cost_myr for option in options)
+        return min(options, key=lambda option: (option.duration_minutes, option.cost_myr or 0))
+    if not priced_options:
+        return min(options, key=lambda option: option.duration_minutes)
+    options = priced_options
+    min_cost = min(option.cost_myr for option in options if option.cost_myr is not None)
+    max_cost = max(option.cost_myr for option in options if option.cost_myr is not None)
     min_time = min(option.duration_minutes for option in options)
     max_time = max(option.duration_minutes for option in options)
     return min(
@@ -133,6 +148,7 @@ async def optimize_trip(
     distances_m: dict[str, float],
     distance_sources: dict[str, Literal["osrm_road", "assumed_connection"]],
     flight_search: Callable[[date, AirportCity, AirportCity], Awaitable[FlightSearchOutcome]],
+    rail_search: Callable[[date, AirportCity, AirportCity], Awaitable[RailSearchOutcome]] | None = None,
 ) -> dict:
     specs = build_search_specs(origin, destinations, start_date, end_date, return_to_origin)
     semaphore = asyncio.Semaphore(MAX_PARALLEL_FLIGHT_SEARCHES)
@@ -146,6 +162,21 @@ async def optimize_trip(
 
     search_results = await asyncio.gather(*(run_search(spec) for spec in specs))
     quotes = {spec.key: outcome for spec, outcome in search_results}
+    rail_results: dict[tuple[int, str, str, str], RailSearchOutcome] = {}
+    if rail_search is not None:
+        rail_semaphore = asyncio.Semaphore(2)
+
+        async def run_rail_search(spec: FlightSearchSpec) -> tuple[FlightSearchSpec, RailSearchOutcome]:
+            async with rail_semaphore:
+                try:
+                    return spec, await rail_search(spec.departure_date, spec.origin, spec.destination)
+                except Exception as exc:
+                    return spec, RailSearchOutcome(error=f"{type(exc).__name__}: {str(exc)[:160]}")
+
+        rail_results = {
+            spec.key: outcome
+            for spec, outcome in await asyncio.gather(*(run_rail_search(spec) for spec in specs))
+        }
     unpriced_rows = sum(outcome.unpriced_rows for outcome in quotes.values())
     failed_searches = sum(outcome.error is not None for outcome in quotes.values())
     empty_searches = sum(outcome.no_results for outcome in quotes.values())
@@ -153,12 +184,14 @@ async def optimize_trip(
 
     city_by_code = {city.code: city for city in [origin, *destinations]}
     route_candidates: list[dict] = []
+    candidate_order_count = 0
     for order in itertools.permutations(destinations):
         path = [origin, *order]
         if return_to_origin:
             path.append(origin)
         leg_dates = evenly_spaced_leg_dates(start_date, end_date, len(path) - 1)
-        legs: list[dict] = []
+        leg_selections: list[tuple[AirportCity, AirportCity, date, ModeOption, ModeOption]] = []
+        complete = True
         for position, (from_city, to_city) in enumerate(zip(path, path[1:])):
             key = (position, leg_dates[position].isoformat(), from_city.code, to_city.code)
             outcome = quotes.get(key, FlightSearchOutcome())
@@ -192,62 +225,126 @@ async def optimize_trip(
                         search_url=flight.search_url,
                     )
                 )
+            rail_outcome = rail_results.get(key, RailSearchOutcome())
+            for rail in rail_outcome.options:
+                mode_options.append(
+                    ModeOption(
+                        mode="rail",
+                        cost_myr=None,
+                        duration_minutes=rail.duration_minutes,
+                        distance_km=0.0,
+                        distance_source="transitous_rail",
+                        segment_count=1,
+                        departure_time=rail.departure_time,
+                        arrival_time=rail.arrival_time,
+                        departure_timezone=rail.departure_timezone,
+                        arrival_timezone=rail.arrival_timezone,
+                        from_stop=rail.from_stop,
+                        to_stop=rail.to_stop,
+                        service_names=rail.service_names,
+                        operators=rail.operators,
+                    )
+                )
             if not mode_options:
-                continue
+                complete = False
+                break
             selected = _choose_mode(mode_options, preference)
-            legs.append(
+            rail_options = [option for option in mode_options if option.mode == "rail"]
+            rail_selected = min(rail_options, key=lambda option: option.duration_minutes) if rail_options else selected
+            leg_selections.append((from_city, to_city, leg_dates[position], selected, rail_selected))
+        if not complete or len(leg_selections) != len(path) - 1:
+            continue
+        candidate_order_count += 1
+
+        variants = [("preferred", [selection[3] for selection in leg_selections])]
+        rail_selections = [selection[4] for selection in leg_selections]
+        if any(option.mode == "rail" for option in rail_selections) and rail_selections != variants[0][1]:
+            variants.append(("rail", rail_selections))
+
+        path_codes = [city.code for city in path]
+        for variant, selections in variants:
+            legs: list[dict] = []
+            for (from_city, to_city, leg_date, _, _), selected in zip(leg_selections, selections):
+                legs.append(
+                    {
+                        "from_city": city_by_code[from_city.code],
+                        "to_city": city_by_code[to_city.code],
+                        "departure_date": leg_date.isoformat(),
+                        "mode": selected.mode,
+                        "cost_myr": round(selected.cost_myr, 2) if selected.cost_myr is not None else None,
+                        "duration_minutes": selected.duration_minutes,
+                        "distance_km": round(selected.distance_km, 1),
+                        "distance_source": selected.distance_source,
+                        "airlines": list(selected.airlines),
+                        "segment_count": selected.segment_count,
+                        "search_url": selected.search_url,
+                        "departure_time": selected.departure_time,
+                        "arrival_time": selected.arrival_time,
+                        "departure_timezone": selected.departure_timezone,
+                        "arrival_timezone": selected.arrival_timezone,
+                        "from_stop": selected.from_stop,
+                        "to_stop": selected.to_stop,
+                        "service_names": list(selected.service_names),
+                        "operators": list(selected.operators),
+                    }
+                )
+            cost_is_known = all(leg["cost_myr"] is not None for leg in legs)
+            total_cost = sum(leg["cost_myr"] for leg in legs if leg["cost_myr"] is not None) if cost_is_known else None
+            flight_cost = sum(leg["cost_myr"] for leg in legs if leg["mode"] == "flight")
+            ground_cost = sum(leg["cost_myr"] for leg in legs if leg["mode"] == "ground")
+            rail_cost = None if any(leg["mode"] == "rail" for leg in legs) else 0.0
+            ground_distance = sum(leg["distance_km"] for leg in legs if leg["mode"] == "ground")
+            total_minutes = sum(leg["duration_minutes"] for leg in legs)
+            route_id = hashlib.sha1(
+                ("/".join(path_codes) + ":" + preference + ":" + variant).encode()
+            ).hexdigest()[:12]
+            route_candidates.append(
                 {
-                    "from_city": city_by_code[from_city.code],
-                    "to_city": city_by_code[to_city.code],
-                    "departure_date": leg_dates[position].isoformat(),
-                    "mode": selected.mode,
-                    "cost_myr": round(selected.cost_myr, 2),
-                    "duration_minutes": selected.duration_minutes,
-                    "distance_km": round(selected.distance_km, 1),
-                    "distance_source": selected.distance_source,
-                    "airlines": list(selected.airlines),
-                    "segment_count": selected.segment_count,
-                    "search_url": selected.search_url,
+                    "id": route_id,
+                    "variant": variant,
+                    "rank": 0,
+                    "stops": [city for city in path],
+                    "legs": legs,
+                    "flight_cost_myr": round(flight_cost, 2),
+                    "ground_cost_myr": round(ground_cost, 2),
+                    "ground_distance_km": round(ground_distance, 1),
+                    "total_cost_myr": round(total_cost, 2) if total_cost is not None else None,
+                    "total_time_hours": round(total_minutes / 60.0, 1),
+                    "balanced_score": None,
+                    "rail_cost_myr": rail_cost,
                 }
             )
-        if len(legs) != len(path) - 1:
-            continue
-        total_cost = sum(leg["cost_myr"] for leg in legs)
-        flight_cost = sum(leg["cost_myr"] for leg in legs if leg["mode"] == "flight")
-        ground_cost = sum(leg["cost_myr"] for leg in legs if leg["mode"] == "ground")
-        ground_distance = sum(leg["distance_km"] for leg in legs if leg["mode"] == "ground")
-        total_minutes = sum(leg["duration_minutes"] for leg in legs)
-        path_codes = [city.code for city in path]
-        route_id = hashlib.sha1(("/".join(path_codes) + ":" + preference).encode()).hexdigest()[:12]
-        route_candidates.append(
-            {
-                "id": route_id,
-                "rank": 0,
-                "stops": [city for city in path],
-                "legs": legs,
-                "flight_cost_myr": round(flight_cost, 2),
-                "ground_cost_myr": round(ground_cost, 2),
-                "ground_distance_km": round(ground_distance, 1),
-                "total_cost_myr": round(total_cost, 2),
-                "total_time_hours": round(total_minutes / 60.0, 1),
-                "balanced_score": None,
-            }
-        )
 
     if preference == "balanced" and route_candidates:
-        min_cost = min(route["total_cost_myr"] for route in route_candidates)
-        max_cost = max(route["total_cost_myr"] for route in route_candidates)
+        priced_routes = [route for route in route_candidates if route["total_cost_myr"] is not None]
+        min_cost = min((route["total_cost_myr"] for route in priced_routes), default=0)
+        max_cost = max((route["total_cost_myr"] for route in priced_routes), default=0)
         min_time = min(route["total_time_hours"] for route in route_candidates)
         max_time = max(route["total_time_hours"] for route in route_candidates)
         for route in route_candidates:
-            cost_score = (route["total_cost_myr"] - min_cost) / (max_cost - min_cost) if max_cost > min_cost else 0.0
+            cost = route["total_cost_myr"]
+            cost_score = (
+                (cost - min_cost) / (max_cost - min_cost)
+                if cost is not None and max_cost > min_cost
+                else (0.0 if cost is not None else 1.0)
+            )
             time_score = (route["total_time_hours"] - min_time) / (max_time - min_time) if max_time > min_time else 0.0
             route["balanced_score"] = (cost_score + time_score) / 2.0
-        route_candidates.sort(key=lambda route: (route["balanced_score"], route["total_cost_myr"], route["total_time_hours"]))
+        route_candidates.sort(key=lambda route: (
+            route["balanced_score"],
+            route["total_cost_myr"] if route["total_cost_myr"] is not None else float("inf"),
+            route["total_time_hours"],
+        ))
     elif preference == "shortest":
-        route_candidates.sort(key=lambda route: (route["total_time_hours"], route["total_cost_myr"]))
+        route_candidates.sort(key=lambda route: (
+            route["total_time_hours"],
+            route["total_cost_myr"] if route["total_cost_myr"] is not None else float("inf"),
+        ))
     else:
-        route_candidates.sort(key=lambda route: (route["total_cost_myr"], route["total_time_hours"]))
+        route_candidates.sort(key=lambda route: (
+            route["total_cost_myr"] if route["total_cost_myr"] is not None else float("inf"),
+            route["total_time_hours"],
+        ))
 
     for rank, route in enumerate(route_candidates, 1):
         route["rank"] = rank
@@ -279,9 +376,13 @@ async def optimize_trip(
     return {
         "routes": route_candidates,
         "preference": preference,
-        "candidate_count": len(route_candidates),
+        "candidate_count": candidate_order_count,
         "searches_attempted": len(specs),
         "searches_with_priced_results": priced_searches,
+        "rail_searches_attempted": len(specs) if rail_search is not None else 0,
+        "rail_searches_with_results": sum(bool(outcome.options) for outcome in rail_results.values()),
+        "rail_searches_without_results": sum(outcome.no_results for outcome in rail_results.values()),
+        "rail_searches_failed": sum(outcome.error is not None for outcome in rail_results.values()),
         "searches_without_results": empty_searches,
         "searches_failed": failed_searches,
         "unpriced_rows_skipped": unpriced_rows,
@@ -291,5 +392,6 @@ async def optimize_trip(
             "One flight search is made per possible city pair and scheduled travel day; no flexible-date fare calendar is available.",
             "Travel days are spaced evenly through the selected date range, so nights per city are not optimized.",
             "Each listed destination is visited once; all possible destination orders are compared.",
+            "Transitous rail fares are not currently used in totals; routes containing a rail leg have an incomplete fare total.",
         ],
     }

@@ -86,11 +86,18 @@ export function RouteMap({ origin, destinations, route }: Props) {
         paint: { "line-color": "#627b91", "line-width": 2.5, "line-dasharray": [2, 1.5], "line-opacity": 0.9 },
       });
       map.addLayer({
+        id: "rail-legs",
+        type: "line",
+        source: "trip-legs",
+        filter: ["==", ["get", "mode"], "rail"],
+        paint: { "line-color": "#df8741", "line-width": 3.5, "line-dasharray": [1, 1.1], "line-opacity": 0.95 },
+      });
+      map.addLayer({
         id: "ground-legs",
         type: "line",
         source: "trip-legs",
         filter: ["==", ["get", "mode"], "ground"],
-        paint: { "line-color": "#df8741", "line-width": 3.5, "line-dasharray": [1, 1.1], "line-opacity": 0.95 },
+        paint: { "line-color": "#a68b72", "line-width": 2.5, "line-dasharray": [1, 1.1], "line-opacity": 0.7 },
       });
       map.addLayer({
         id: "trip-city-circles",
@@ -136,5 +143,5 @@ export function RouteMap({ origin, destinations, route }: Props) {
     fitRoute(map, origin, route, destinations);
   }, [destinations, lines, origin, points, route]);
 
-  return <div ref={containerRef} className="route-map" aria-label="Map showing the selected flight and ground route" />;
+  return <div ref={containerRef} className="route-map" aria-label="Map showing the selected flight and scheduled rail connections between cities" />;
 }

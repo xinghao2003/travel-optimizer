@@ -11,9 +11,6 @@ export type TripCity = {
 };
 
 export type TransportSettings = {
-  average_speed_kmh: number;
-  fare_myr_per_km: number;
-  ground_overhead_minutes: number;
   flight_airport_buffer_minutes: number;
 };
 
@@ -23,25 +20,34 @@ export type TripLeg = {
   from_city: TripCity;
   to_city: TripCity;
   departure_date: string;
-  mode: "flight" | "ground";
-  cost_myr: number;
+  mode: "flight" | "rail" | "ground";
+  cost_myr: number | null;
   duration_minutes: number;
   distance_km: number;
-  distance_source: "flight" | "osrm_road" | "assumed_connection";
+  distance_source: "flight" | "transitous_rail" | "osrm_road" | "assumed_connection";
   airlines: string[];
   segment_count: number;
   search_url: string | null;
+  departure_time?: string | null;
+  arrival_time?: string | null;
+  departure_timezone?: string | null;
+  arrival_timezone?: string | null;
+  from_stop?: string | null;
+  to_stop?: string | null;
+  service_names?: string[];
+  operators?: string[];
 };
 
 export type TripRoute = {
   id: string;
+  variant: "preferred" | "rail";
   rank: number;
   stops: TripCity[];
   legs: TripLeg[];
   flight_cost_myr: number;
-  ground_cost_myr: number;
+  rail_cost_myr: number | null;
   ground_distance_km: number;
-  total_cost_myr: number;
+  total_cost_myr: number | null;
   total_time_hours: number;
   balanced_score: number | null;
 };
@@ -52,6 +58,10 @@ export type TripPlanResponse = {
   candidate_count: number;
   searches_attempted: number;
   searches_with_priced_results: number;
+  rail_searches_attempted: number;
+  rail_searches_with_results: number;
+  rail_searches_without_results: number;
+  rail_searches_failed: number;
   searches_without_results: number;
   searches_failed: number;
   unpriced_rows_skipped: number;
@@ -62,12 +72,18 @@ export type TripPlanResponse = {
   routing_status: "ready" | "partial" | "assumed";
   routing_message: string | null;
   search_message: string | null;
+  transit_api_requests: number;
+  transit_cache_hits: number;
+  transit_api_failures: number;
+  transit_geocoding_failures: number;
   flight_search: { available: boolean; version: string | null };
 };
 
 export type AppConfig = {
   defaults: TransportSettings;
   flight_source: string;
+  rail_source: string;
+  transit_routing_configured: boolean;
   max_destinations: number;
   currency: string;
   passengers: number;

@@ -13,6 +13,7 @@ import {
   Plus,
   Route,
   Settings2,
+  TrainFront,
   Trash2,
 } from "lucide-react";
 import { RouteMap } from "./components/RouteMap";
@@ -22,9 +23,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card";
 import type { AppConfig, Preference, TripCity, TripPlanResponse, TripRoute, TransportSettings } from "./lib/types";
 
 const fallbackSettings: TransportSettings = {
-  average_speed_kmh: 80,
-  fare_myr_per_km: 0.27,
-  ground_overhead_minutes: 30,
   flight_airport_buffer_minutes: 90,
 };
 
@@ -49,8 +47,27 @@ function formatDate(value: string) {
   });
 }
 
-function money(value: number) {
+function money(value: number | null) {
+  if (value === null) return "Fare unknown";
   return new Intl.NumberFormat("en-MY", { style: "currency", currency: "MYR", maximumFractionDigits: 0 }).format(value);
+}
+
+function railTime(value: string | null | undefined, timezone: string | null | undefined) {
+  if (!value) return null;
+  if (!/(?:Z|[+-]\d{2}:?\d{2})$/i.test(value)) {
+    return value.match(/T(\d{2}:\d{2})/)?.[1] ?? null;
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  try {
+    return new Intl.DateTimeFormat("en", {
+      hour: "2-digit",
+      minute: "2-digit",
+      ...(timezone ? { timeZone: timezone } : {}),
+    }).format(parsed);
+  } catch {
+    return new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" }).format(parsed);
+  }
 }
 
 function estimateSearchCount(destinationCount: number, returnToOrigin: boolean) {
@@ -192,7 +209,7 @@ function RouteSummary({ route, selected, onClick }: { route: TripRoute; selected
       <span className="route-rank">{String(route.rank).padStart(2, "0")}</span>
       <span className="route-option-main">
         <strong>{routeLabel}</strong>
-        <small>{route.legs.map((leg) => leg.mode === "flight" ? "Flight" : "Ground").join(" · ")}</small>
+        <small>{route.variant === "rail" ? "Rail alternative · " : ""}{route.legs.map((leg) => leg.mode === "flight" ? "Flight" : leg.mode === "rail" ? "Train" : "Ground").join(" · ")}</small>
       </span>
       <span className="route-option-cost">
         <strong>{money(route.total_cost_myr)}</strong>
@@ -209,6 +226,7 @@ function App() {
   const [today] = useState(() => localDateString(new Date()));
   const [startDate, setStartDate] = useState(() => addDays(localDateString(new Date()), 30));
   const [endDate, setEndDate] = useState(() => addDays(localDateString(new Date()), 38));
+  const [transitDepartureTime, setTransitDepartureTime] = useState("09:00");
   const [returnToOrigin, setReturnToOrigin] = useState(true);
   const [settings, setSettings] = useState<TransportSettings>(fallbackSettings);
   const [preference, setPreference] = useState<Preference>("cheapest");
@@ -279,6 +297,7 @@ function App() {
           destination_codes: destinations.map((city) => city.code),
           start_date: startDate,
           end_date: endDate,
+          transit_departure_time: transitDepartureTime,
           return_to_origin: returnToOrigin,
           settings,
           preference,
@@ -317,17 +336,17 @@ function App() {
           <div className="brand-icon"><Compass size={21} strokeWidth={2.1} /></div>
           <div>
             <div className="brand-title">Wayfinder <span>Routes</span></div>
-            <div className="brand-caption">Live flights · ground route estimates</div>
+            <div className="brand-caption">Live flights · scheduled trains</div>
           </div>
         </div>
-        <Badge className="live-badge"><span className="live-dot" /> Google Flights search</Badge>
+        <Badge className="live-badge"><span className="live-dot" /> Flights + rail routing</Badge>
       </header>
 
       <section className="intro-row">
         <div>
           <div className="eyebrow">PLAN A MULTI-CITY TRIP</div>
           <h1>Choose the places. We’ll compare the route.</h1>
-          <p>Search live flight fares, reorder your destinations, and compare flights with estimated ground legs.</p>
+          <p>Compare live flight fares with scheduled rail itineraries and plan the order of your stops.</p>
         </div>
         <div className="intro-note"><CalendarDays size={16} /> Choose a date window; travel legs are spaced across it.</div>
       </section>
@@ -389,11 +408,15 @@ function App() {
                   <span className="field-label">End date</span>
                   <input type="date" min={startDate} value={endDate} onChange={(event) => { setEndDate(event.target.value); setResult(null); }} />
                 </label>
+                <label className="field-wrap">
+                  <span className="field-label">Train search time · local</span>
+                  <input type="time" value={transitDepartureTime} onChange={(event) => { setTransitDepartureTime(event.target.value); setResult(null); }} />
+                </label>
               </div>
               <label className="return-toggle">
                 <input type="checkbox" checked={returnToOrigin} onChange={(event) => { setReturnToOrigin(event.target.checked); setResult(null); }} />
                 <span className="toggle-check"><Check size={13} /></span>
-                <span><strong>Return to start city</strong><small>Search a final flight home</small></span>
+                <span><strong>Return to start city</strong><small>Add a final travel leg home</small></span>
               </label>
             </section>
             {tooShort && <p className="field-hint warning-text">Allow at least {minDays} days for the {destinations.length + Number(returnToOrigin)} travel legs.</p>}
@@ -401,11 +424,8 @@ function App() {
             <div className="form-divider" />
             <section className="form-bottom-grid">
               <div>
-                <div className="settings-title"><Settings2 size={15} /><strong>Compare route costs</strong><span>One adult · economy · MYR</span></div>
-                <div className="settings-grid">
-                  <SettingField label="Ground speed" suffix="km/h" value={settings.average_speed_kmh} min={10} max={500} step={5} onChange={(value) => updateSetting("average_speed_kmh", value)} />
-                  <SettingField label="Ground cost" suffix="MYR/km" value={settings.fare_myr_per_km} min={0} max={100} step={0.01} onChange={(value) => updateSetting("fare_myr_per_km", value)} />
-                  <SettingField label="Ground overhead" suffix="min" value={settings.ground_overhead_minutes} min={0} max={360} step={5} onChange={(value) => updateSetting("ground_overhead_minutes", value)} />
+                <div className="settings-title"><Settings2 size={15} /><strong>Flight timing</strong><span>One adult · economy · MYR</span></div>
+                <div className="settings-grid single-setting">
                   <SettingField label="Airport buffer" suffix="min" value={settings.flight_airport_buffer_minutes} min={0} max={360} step={15} onChange={(value) => updateSetting("flight_airport_buffer_minutes", value)} />
                 </div>
               </div>
@@ -418,13 +438,15 @@ function App() {
                     </Button>
                   ))}
                 </div>
-                <p className="field-hint">All destination orders are checked (up to 24). Up to {estimatedSearches} one-way flight searches for this trip.</p>
+                <p className="field-hint">All destination orders are checked (up to 24). Up to {estimatedSearches} one-way searches per provider; repeat rail lookups use the local cache.</p>
               </div>
             </section>
 
             {searchError && <div className="inline-alert error-alert"><CircleHelp size={15} />{searchError}</div>}
             <div className="form-submit-row">
-              <p>Flight prices are live search results and may change before booking.</p>
+              <p>{config?.transit_routing_configured === false
+                ? "Rail lookups are disabled until a contact URL is configured and Transitous routing use is coordinated. Flight searches remain available."
+                : "Flight searches and rail lookups use public services. Rail fares may be unavailable."}</p>
               <Button type="submit" className="search-button" disabled={loading || !origin || !destinations.length || tooShort}>
                 {loading ? <LoaderCircle size={17} className="spin" /> : <Plus size={17} />}
                 {loading ? `Searching ${estimatedSearches} city/date pairs…` : "Find the best routes"}
@@ -435,16 +457,16 @@ function App() {
       </form>
 
       {loading && (
-        <div className="search-progress"><LoaderCircle className="spin" size={16} /> Searching live fares and road distances. Google may take a few seconds to respond.</div>
+        <div className="search-progress"><LoaderCircle className="spin" size={16} /> Searching live flight fares and scheduled rail services.</div>
       )}
 
       {result && (
         <section className="results-section">
           <div className="results-heading">
             <div>
-              <div className="section-kicker">{result.candidate_count} ROUTE ORDERS COMPARED · {result.searches_attempted} FLIGHT SEARCHES</div>
+              <div className="section-kicker">{result.candidate_count} ROUTE ORDERS · {result.searches_attempted} FLIGHT + {result.rail_searches_attempted} RAIL SEARCHES</div>
               <h2>Best ways to make this trip <span>{result.routes.length} options</span></h2>
-              <p>Dates searched: {result.date_schedule.map(formatDate).join(" · ")} · Ranked by {preference === "cheapest" ? "estimated total cost" : preference === "shortest" ? "estimated travel time" : "balanced cost and time"}.</p>
+              <p>Dates searched: {result.date_schedule.map(formatDate).join(" · ")} · Train search time {transitDepartureTime} local · Ranked by {preference === "cheapest" ? "known ticket costs" : preference === "shortest" ? "travel time" : "known costs and travel time"}.</p>
             </div>
             <Button type="button" variant="secondary" className="refresh-button" disabled={loading} onClick={() => void runSearch()}>
               {loading ? <LoaderCircle size={15} className="spin" /> : <ArrowDownUp size={15} />} Re-search
@@ -455,18 +477,20 @@ function App() {
           {result.routing_message && <div className="inline-alert warning-alert"><MapPinned size={15} />{result.routing_message}</div>}
           <div className="result-stat-row">
             <span><i className="stat-dot flight-dot" />{result.searches_with_priced_results}/{result.searches_attempted} city/date searches had priced flights</span>
+            <span><i className="stat-dot rail-dot" />{result.rail_searches_with_results}/{result.rail_searches_attempted} city/date searches returned trains</span>
+            <span><i className="stat-dot cache-dot" />{result.transit_cache_hits} cached · {result.transit_api_requests} Transitous requests</span>
             {result.unpriced_rows_skipped > 0 && <span><i className="stat-dot warning-dot" />{result.unpriced_rows_skipped} unpriced Google rows skipped</span>}
-            <span><i className="stat-dot ground-dot" />Ground legs are estimates, not confirmed services</span>
+            <span>Train fares may be missing; totals with unknown fares are incomplete.</span>
           </div>
 
           <div className="results-grid">
             <Card className="map-card">
               <div className="map-card-head">
                 <div><div className="section-kicker">ROUTE MAP</div><h2>Selected combination</h2></div>
-                <div className="map-legends"><span><i className="legend-line flight-line" /> Flight</span><span><i className="legend-line ground-line" /> Ground</span></div>
+                <div className="map-legends"><span><i className="legend-line flight-line" /> Flight</span><span><i className="legend-line rail-line" /> Rail</span></div>
               </div>
               <div className="map-frame"><RouteMap origin={origin} destinations={destinations} route={selectedRoute} /></div>
-              <div className="map-footnote"><span><MapPinned size={14} /> Airport locations</span><span>Ground route may use a direct-distance proxy</span></div>
+              <div className="map-footnote"><span><MapPinned size={14} /> Airport-based city markers</span><span>Lines connect cities; they do not show rail track geometry</span></div>
             </Card>
 
             <Card className="route-list-card">
@@ -475,7 +499,7 @@ function App() {
                 {result.routes.map((route) => (
                   <RouteSummary key={route.id} route={route} selected={route.id === selectedRoute?.id} onClick={() => setSelectedRouteId(route.id)} />
                 ))}
-                {result.routes.length === 0 && <div className="empty-routes">No complete route could be estimated for these cities.</div>}
+                {result.routes.length === 0 && <div className="empty-routes">No complete flight or scheduled rail route was found for these cities.</div>}
               </div>
             </Card>
           </div>
@@ -484,13 +508,13 @@ function App() {
             <Card className="detail-card">
               <div className="detail-heading">
                 <div><div className="section-kicker">ROUTE {String(selectedRoute.rank).padStart(2, "0")}</div><h2>{selectedRoute.stops.map((city) => city.name).join(" → ")}</h2></div>
-                <div className="detail-total"><span>Estimated trip total</span><strong>{money(selectedRoute.total_cost_myr)}</strong></div>
+                <div className="detail-total"><span>Known ticket costs</span><strong>{money(selectedRoute.total_cost_myr)}</strong></div>
               </div>
               <div className="detail-metrics">
                 <div><Plane size={16} /><span>Flight fares</span><strong>{money(selectedRoute.flight_cost_myr)}</strong></div>
-                <div><Route size={16} /><span>Ground estimate</span><strong>{money(selectedRoute.ground_cost_myr)}</strong></div>
+                <div><TrainFront size={16} /><span>Rail fares</span><strong>{selectedRoute.legs.some((leg) => leg.mode === "rail") ? "Unknown" : "—"}</strong></div>
                 <div><CalendarDays size={16} /><span>Travel time</span><strong>{selectedRoute.total_time_hours.toFixed(1)} h</strong></div>
-                <div><MapPinned size={16} /><span>Ground distance</span><strong>{selectedRoute.ground_distance_km.toLocaleString("en-MY", { maximumFractionDigits: 0 })} km</strong></div>
+                <div><Route size={16} /><span>Scheduled train legs</span><strong>{selectedRoute.legs.filter((leg) => leg.mode === "rail").length}</strong></div>
               </div>
               <div className="leg-list">
                 {selectedRoute.legs.map((leg, index) => (
@@ -498,25 +522,30 @@ function App() {
                     <span className="leg-number">{String(index + 1).padStart(2, "0")}</span>
                     <div className="leg-main">
                       <strong>{leg.from_city.name}<ArrowRight size={14} />{leg.to_city.name}</strong>
-                      <small>{formatDate(leg.departure_date)} · {leg.mode === "flight" ? (leg.airlines.join(", ") || "Flight") : leg.distance_source === "assumed_connection" ? "Assumed ground connection" : "OSRM road estimate"}</small>
+                      <small>
+                        {formatDate(leg.departure_date)}
+                        {leg.mode === "rail"
+                          ? ` · ${railTime(leg.departure_time, leg.departure_timezone) ?? "Scheduled"}–${railTime(leg.arrival_time, leg.arrival_timezone) ?? ""} · ${leg.service_names?.join(", ") || "Train"}${leg.operators?.length ? ` · ${leg.operators.join(", ")}` : ""} · ${leg.from_stop ?? "Station"} → ${leg.to_stop ?? "Station"}`
+                          : ` · ${leg.mode === "flight" ? (leg.airlines.join(", ") || "Flight") : "Ground estimate"}`}
+                      </small>
                     </div>
-                    <Badge className={leg.mode === "flight" ? "flight-mode" : "ground-mode"}>{leg.mode === "flight" ? `${leg.segment_count > 1 ? `${leg.segment_count} flight segments` : "Flight"}` : "Ground"}</Badge>
+                    <Badge className={leg.mode === "flight" ? "flight-mode" : leg.mode === "rail" ? "rail-mode" : "ground-mode"}>{leg.mode === "flight" ? `${leg.segment_count > 1 ? `${leg.segment_count} flight segments` : "Flight"}` : leg.mode === "rail" ? "Train" : "Ground"}</Badge>
                     <strong className="leg-cost">{money(leg.cost_myr)}</strong>
                     <span className="leg-time">{(leg.duration_minutes / 60).toFixed(1)} h</span>
                     {leg.search_url && <a className="leg-search-link" href={leg.search_url} target="_blank" rel="noopener noreferrer" aria-label={`Open Google Flights search from ${leg.from_city.name} to ${leg.to_city.name}`}><ExternalLink size={14} /></a>}
                   </div>
                 ))}
               </div>
-              <p className="detail-disclaimer">Google Flights links reopen each one-way search; prices are not booking guarantees. Ground cost and time use your assumptions. A direct-distance proxy does not confirm a road, ferry, bus, or train service.</p>
+              <p className="detail-disclaimer">Google Flights links reopen each one-way search; prices are not booking guarantees. Train schedules come from Transitous and can change. Rail fares are not supplied in every dataset, so a total marked “Fare unknown” is incomplete.</p>
             </Card>
           )}
 
-          <div className="limits-note"><CircleHelp size={15} /><div><strong>Search boundaries</strong><span>Every selected city order is compared, with up to {result.maximum_searches} one-way searches for this input. {result.limitations.join(" ")}</span></div></div>
+          <div className="limits-note"><CircleHelp size={15} /><div><strong>Search boundaries</strong><span>Every selected city order is compared, with up to {result.maximum_searches} one-way pair/date searches per provider. {result.limitations.join(" ")}</span></div></div>
         </section>
       )}
 
       <footer className="page-footer">
-        <span>Wayfinder Routes · Live flight search by fast-flights</span>
+        <span>Wayfinder Routes · Live flights by fast-flights · Rail schedules via <a href="https://transitous.org/sources/" target="_blank" rel="noreferrer">Transitous</a></span>
         <span>Airport data © airportsdata contributors · Map © OpenStreetMap contributors</span>
       </footer>
     </main>

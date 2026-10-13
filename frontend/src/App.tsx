@@ -20,7 +20,7 @@ import { RouteMap } from "./components/RouteMap";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card";
-import type { AppConfig, Preference, TripCity, TripPlanResponse, TripRoute, TransportSettings } from "./lib/types";
+import type { AppConfig, Preference, TripCity, TripLeg, TripPlanResponse, TripRoute, TransportSettings } from "./lib/types";
 
 const fallbackSettings: TransportSettings = {
   flight_airport_buffer_minutes: 90,
@@ -50,6 +50,81 @@ function formatDate(value: string) {
 function money(value: number | null) {
   if (value === null) return "Fare unknown";
   return new Intl.NumberFormat("en-MY", { style: "currency", currency: "MYR", maximumFractionDigits: 0 }).format(value);
+}
+
+function fareKey(leg: TripLeg) {
+  return `${leg.mode}:${leg.from_city.code}:${leg.to_city.code}:${leg.departure_date}`;
+}
+
+function enteredFare(value: string | undefined) {
+  if (value === undefined || value.trim() === "") return null;
+  const amount = Number(value);
+  return Number.isFinite(amount) && amount >= 0 ? amount : null;
+}
+
+function rankRoutes(routes: TripRoute[], preference: Preference, fareInputs: Record<string, string>) {
+  const priced = routes.map((route) => {
+    const legs = route.legs.map((leg) => {
+      const amount = enteredFare(fareInputs[fareKey(leg)]);
+      return amount === null ? leg : { ...leg, cost_myr: amount, fare_source: "user" as const };
+    });
+    const costIsKnown = legs.every((leg) => leg.cost_myr !== null);
+    const total = costIsKnown ? legs.reduce((sum, leg) => sum + (leg.cost_myr ?? 0), 0) : null;
+    const sumMode = (mode: TripLeg["mode"]) => legs.reduce(
+      (sum, leg) => sum + (leg.mode === mode && leg.cost_myr !== null ? leg.cost_myr : 0),
+      0,
+    );
+    const railLegs = legs.filter((leg) => leg.mode === "rail");
+    const railCost = railLegs.length === 0
+      ? 0
+      : railLegs.every((leg) => leg.cost_myr !== null) ? sumMode("rail") : null;
+    return {
+      ...route,
+      legs,
+      total_cost_myr: total === null ? null : Math.round(total * 100) / 100,
+      flight_cost_myr: Math.round(sumMode("flight") * 100) / 100,
+      ground_cost_myr: Math.round(sumMode("ground") * 100) / 100,
+      rail_cost_myr: railCost === null ? null : Math.round(railCost * 100) / 100,
+    };
+  });
+
+  if (preference === "balanced" && priced.length > 0) {
+    const known = priced.filter((route) => route.total_cost_myr !== null);
+    const costs = known.map((route) => route.total_cost_myr as number);
+    const times = priced.map((route) => route.total_time_hours);
+    const minCost = costs.length ? Math.min(...costs) : 0;
+    const maxCost = costs.length ? Math.max(...costs) : 0;
+    const minTime = Math.min(...times);
+    const maxTime = Math.max(...times);
+    for (const route of priced) {
+      const cost = route.total_cost_myr;
+      const costScore = cost !== null && maxCost > minCost
+        ? (cost - minCost) / (maxCost - minCost)
+        : cost !== null ? 0 : 1;
+      const timeScore = maxTime > minTime ? (route.total_time_hours - minTime) / (maxTime - minTime) : 0;
+      route.balanced_score = (costScore + timeScore) / 2;
+    }
+    priced.sort((left, right) =>
+      (left.balanced_score ?? 0) - (right.balanced_score ?? 0)
+      || (left.total_cost_myr ?? Number.POSITIVE_INFINITY) - (right.total_cost_myr ?? Number.POSITIVE_INFINITY)
+      || left.total_time_hours - right.total_time_hours
+      || left.rank - right.rank,
+    );
+  } else if (preference === "shortest") {
+    priced.sort((left, right) =>
+      left.total_time_hours - right.total_time_hours
+      || (left.total_cost_myr ?? Number.POSITIVE_INFINITY) - (right.total_cost_myr ?? Number.POSITIVE_INFINITY)
+      || left.rank - right.rank,
+    );
+  } else {
+    priced.sort((left, right) =>
+      (left.total_cost_myr ?? Number.POSITIVE_INFINITY) - (right.total_cost_myr ?? Number.POSITIVE_INFINITY)
+      || left.total_time_hours - right.total_time_hours
+      || left.rank - right.rank,
+    );
+  }
+
+  return priced.map((route, index) => ({ ...route, rank: index + 1 }));
 }
 
 function railTime(value: string | null | undefined, timezone: string | null | undefined) {
@@ -233,6 +308,7 @@ function App() {
   const [settings, setSettings] = useState<TransportSettings>(fallbackSettings);
   const [preference, setPreference] = useState<Preference>("cheapest");
   const [result, setResult] = useState<TripPlanResponse | null>(null);
+  const [manualFares, setManualFares] = useState<Record<string, string>>({});
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [configError, setConfigError] = useState<string | null>(null);
@@ -254,9 +330,14 @@ function App() {
     return () => controller.abort();
   }, []);
 
+  const rankedRoutes = useMemo(
+    () => rankRoutes(result?.routes ?? [], preference, manualFares),
+    [result, preference, manualFares],
+  );
+
   const selectedRoute = useMemo(
-    () => result?.routes.find((route) => route.id === selectedRouteId) ?? result?.routes[0] ?? null,
-    [result, selectedRouteId],
+    () => rankedRoutes.find((route) => route.id === selectedRouteId) ?? rankedRoutes[0] ?? null,
+    [rankedRoutes, selectedRouteId],
   );
 
   const minSpanDays = returnToOrigin
@@ -296,6 +377,7 @@ function App() {
     setLoading(true);
     setSearchError(null);
     setResult(null);
+    setManualFares({});
     try {
       const response = await fetch("/api/routes", {
         method: "POST",
@@ -505,7 +587,7 @@ function App() {
             <span><i className="stat-dot rail-dot" />{result.rail_searches_with_results}/{result.rail_searches_attempted} city/date searches returned trains</span>
             <span><i className="stat-dot cache-dot" />{result.transit_cache_hits} cached · {result.transit_api_requests} Transitous requests</span>
             {result.unpriced_rows_skipped > 0 && <span><i className="stat-dot warning-dot" />{result.unpriced_rows_skipped} unpriced Google rows skipped</span>}
-            <span>Train fares may be missing; totals with unknown fares are incomplete.</span>
+            <span>Enter an amount in MYR beside any unknown fare to update route totals and rankings.</span>
           </div>
           {result.transit_stop_resolutions.length > 0 && (
             <p className="field-hint stop-resolution-note">
@@ -524,9 +606,9 @@ function App() {
             </Card>
 
             <Card className="route-list-card">
-              <div className="route-list-heading"><div><div className="section-kicker">ROUTE OPTIONS</div><h2>Choose a route</h2></div><Badge>{result.routes.length} ranked</Badge></div>
+              <div className="route-list-heading"><div><div className="section-kicker">ROUTE OPTIONS</div><h2>Choose a route</h2></div><Badge>{rankedRoutes.length} ranked</Badge></div>
               <div className="route-list">
-                {result.routes.map((route) => (
+                {rankedRoutes.map((route) => (
                   <RouteSummary key={route.id} route={route} selected={route.id === selectedRoute?.id} onClick={() => setSelectedRouteId(route.id)} />
                 ))}
                 {result.routes.length === 0 && <div className="empty-routes">No complete flight or scheduled rail route was found for these cities.</div>}
@@ -538,11 +620,11 @@ function App() {
             <Card className="detail-card">
               <div className="detail-heading">
                 <div><div className="section-kicker">ROUTE {String(selectedRoute.rank).padStart(2, "0")}</div><h2>{selectedRoute.stops.map((city) => city.name).join(" → ")}</h2></div>
-                <div className="detail-total"><span>Known ticket costs</span><strong>{money(selectedRoute.total_cost_myr)}</strong></div>
+                <div className="detail-total"><span>{selectedRoute.legs.some((leg) => leg.fare_source === "user") ? "Total incl. entered fares" : "Known ticket costs"}</span><strong>{money(selectedRoute.total_cost_myr)}</strong></div>
               </div>
               <div className="detail-metrics">
                 <div><Plane size={16} /><span>Flight fares</span><strong>{money(selectedRoute.flight_cost_myr)}</strong></div>
-                <div><TrainFront size={16} /><span>Rail fares</span><strong>{selectedRoute.legs.some((leg) => leg.mode === "rail") ? "Unknown" : "—"}</strong></div>
+                <div><TrainFront size={16} /><span>Rail fares</span><strong>{selectedRoute.legs.some((leg) => leg.mode === "rail") ? money(selectedRoute.rail_cost_myr) : "—"}</strong></div>
                 <div><CalendarDays size={16} /><span>Travel time</span><strong>{selectedRoute.total_time_hours.toFixed(1)} h</strong></div>
                 <div><Route size={16} /><span>Scheduled train legs</span><strong>{selectedRoute.legs.filter((leg) => leg.mode === "rail").length}</strong></div>
               </div>
@@ -560,13 +642,30 @@ function App() {
                       </small>
                     </div>
                     <Badge className={leg.mode === "flight" ? "flight-mode" : leg.mode === "rail" ? "rail-mode" : "ground-mode"}>{leg.mode === "flight" ? `${leg.segment_count > 1 ? `${leg.segment_count} flight segments` : "Flight"}` : leg.mode === "rail" ? "Train" : "Ground"}</Badge>
-                    <strong className="leg-cost">{money(leg.cost_myr)}</strong>
+                    {leg.cost_myr === null || leg.fare_source === "user" ? (
+                      <label className="leg-fare-entry">
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          inputMode="decimal"
+                          aria-label={`Fare in MYR from ${leg.from_city.name} to ${leg.to_city.name} on ${formatDate(leg.departure_date)}`}
+                          title="Enter this fare in Malaysian ringgit"
+                          placeholder="MYR"
+                          value={manualFares[fareKey(leg)] ?? ""}
+                          onChange={(event) => {
+                            const key = fareKey(leg);
+                            setManualFares((current) => ({ ...current, [key]: event.target.value }));
+                          }}
+                        />
+                      </label>
+                    ) : <strong className="leg-cost">{money(leg.cost_myr)}</strong>}
                     <span className="leg-time">{(leg.duration_minutes / 60).toFixed(1)} h</span>
                     {leg.search_url && <a className="leg-search-link" href={leg.search_url} target="_blank" rel="noopener noreferrer" aria-label={`Open Google Flights search from ${leg.from_city.name} to ${leg.to_city.name}`}><ExternalLink size={14} /></a>}
                   </div>
                 ))}
               </div>
-              <p className="detail-disclaimer">Google Flights links reopen each one-way search; prices are not booking guarantees. Train schedules come from Transitous and can change. Rail fares are not supplied in every dataset, so a total marked “Fare unknown” is incomplete.</p>
+              <p className="detail-disclaimer">Google Flights links reopen each one-way search; prices are not booking guarantees. Train schedules come from Transitous and can change. Entered fares are your own estimates for this search and are included in totals and rankings; any remaining unknown fare keeps the total incomplete.</p>
             </Card>
           )}
 

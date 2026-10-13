@@ -22,6 +22,7 @@ export type TripLeg = {
   departure_date: string;
   mode: "flight" | "rail" | "ground";
   cost_myr: number | null;
+  fare_source?: "user";
   duration_minutes: number;
   distance_km: number;
   distance_source: "flight" | "transitous_rail" | "osrm_road" | "assumed_connection";
@@ -45,6 +46,7 @@ export type TripRoute = {
   stops: TripCity[];
   legs: TripLeg[];
   flight_cost_myr: number;
+  ground_cost_myr: number;
   rail_cost_myr: number | null;
   ground_distance_km: number;
   total_cost_myr: number | null;

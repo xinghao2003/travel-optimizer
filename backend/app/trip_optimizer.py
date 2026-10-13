@@ -186,6 +186,24 @@ def _choose_mode(options: list[ModeOption], preference: Preference) -> ModeOptio
     )
 
 
+def _destination_stay_hours(
+    start_date: date,
+    end_date: date,
+    return_to_origin: bool,
+    legs: list[dict],
+) -> float:
+    """Estimate time available at destinations, excluding transfers between them."""
+    window_days = (end_date - start_date).days + int(not return_to_origin)
+    window_hours = max(0, window_days) * 24.0
+    between_legs = legs[1:-1] if return_to_origin else legs[1:]
+    transfer_minutes = sum(
+        max(0, leg["duration_minutes"])
+        for leg in between_legs
+        if isinstance(leg.get("duration_minutes"), (int, float))
+    )
+    return round(max(0.0, window_hours - transfer_minutes / 60.0), 2)
+
+
 async def optimize_trip(
     *,
     origin: AirportCity,
@@ -363,6 +381,8 @@ async def optimize_trip(
             rail_cost = None if any(leg["mode"] == "rail" for leg in legs) else 0.0
             ground_distance = sum(leg["distance_km"] for leg in legs if leg["mode"] == "ground")
             total_minutes = sum(leg["duration_minutes"] for leg in legs)
+            stay_hours = _destination_stay_hours(start_date, end_date, return_to_origin, legs)
+            cost_per_stay_hour = total_cost / stay_hours if total_cost is not None and stay_hours > 0 else None
             route_id = hashlib.sha1(
                 ("/".join(path_codes) + ":" + preference + ":" + variant).encode()
             ).hexdigest()[:12]
@@ -378,6 +398,8 @@ async def optimize_trip(
                     "ground_distance_km": round(ground_distance, 1),
                     "total_cost_myr": round(total_cost, 2) if total_cost is not None else None,
                     "total_time_hours": round(total_minutes / 60.0, 1),
+                    "stay_hours": stay_hours,
+                    "cost_per_stay_hour_myr": round(cost_per_stay_hour, 2) if cost_per_stay_hour is not None else None,
                     "balanced_score": None,
                     "rail_cost_myr": rail_cost,
                 }
@@ -389,6 +411,9 @@ async def optimize_trip(
         max_cost = max((route["total_cost_myr"] for route in priced_routes), default=0)
         min_time = min(route["total_time_hours"] for route in route_candidates)
         max_time = max(route["total_time_hours"] for route in route_candidates)
+        value_routes = [route for route in route_candidates if route["cost_per_stay_hour_myr"] is not None]
+        min_value = min((route["cost_per_stay_hour_myr"] for route in value_routes), default=0)
+        max_value = max((route["cost_per_stay_hour_myr"] for route in value_routes), default=0)
         for route in route_candidates:
             cost = route["total_cost_myr"]
             cost_score = (
@@ -397,11 +422,18 @@ async def optimize_trip(
                 else (0.0 if cost is not None else 1.0)
             )
             time_score = (route["total_time_hours"] - min_time) / (max_time - min_time) if max_time > min_time else 0.0
-            route["balanced_score"] = (cost_score + time_score) / 2.0
+            cost_per_stay_hour = route["cost_per_stay_hour_myr"]
+            value_score = (
+                (cost_per_stay_hour - min_value) / (max_value - min_value)
+                if cost_per_stay_hour is not None and max_value > min_value
+                else (0.0 if cost_per_stay_hour is not None else 1.0)
+            )
+            route["balanced_score"] = (cost_score + time_score + value_score) / 3.0
         route_candidates.sort(key=lambda route: (
             route["balanced_score"],
             route["total_cost_myr"] if route["total_cost_myr"] is not None else float("inf"),
             route["total_time_hours"],
+            route["cost_per_stay_hour_myr"] if route["cost_per_stay_hour_myr"] is not None else float("inf"),
         ))
     elif preference == "shortest":
         route_candidates.sort(key=lambda route: (

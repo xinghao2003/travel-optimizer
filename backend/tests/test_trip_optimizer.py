@@ -131,6 +131,50 @@ class TripOptimizerTests(unittest.TestCase):
         self.assertEqual(result["candidate_count"], 2)
         self.assertEqual(len(calls), 6)
 
+    def test_balanced_ranking_includes_fare_per_destination_stay_hour(self) -> None:
+        prices_and_durations = {
+            ("ORG", "AAA"): (10, 60),
+            ("AAA", "BBB"): (80, 23 * 60),
+            ("BBB", "ORG"): (10, 60),
+            ("ORG", "BBB"): (10, 60),
+            ("BBB", "AAA"): (100, 2 * 60),
+            ("AAA", "ORG"): (10, 60),
+        }
+
+        async def fake_search(_departure_date, from_city, to_city):
+            price, duration = prices_and_durations[(from_city.code, to_city.code)]
+            return FlightSearchOutcome(
+                options=(FlightOption(float(price), duration, ("Test Air",), 1, "https://example.test/flights"),)
+            )
+
+        result = asyncio.run(
+            optimize_trip(
+                origin=self.origin,
+                destinations=[self.a, self.b],
+                start_date=date(2026, 11, 1),
+                end_date=date(2026, 11, 3),
+                return_to_origin=True,
+                preference="balanced",
+                settings=TransportSettings(flight_airport_buffer_minutes=0),
+                distances_m={},
+                distance_sources={},
+                flight_search=fake_search,
+            )
+        )
+
+        long_transfer_route, = [
+            route for route in result["routes"] if [stop["code"] for stop in route["stops"]] == ["ORG", "AAA", "BBB", "ORG"]
+        ]
+        short_transfer_route, = [
+            route for route in result["routes"] if [stop["code"] for stop in route["stops"]] == ["ORG", "BBB", "AAA", "ORG"]
+        ]
+        self.assertAlmostEqual(long_transfer_route["stay_hours"], 25.0)
+        self.assertAlmostEqual(long_transfer_route["cost_per_stay_hour_myr"], 4.0)
+        self.assertAlmostEqual(short_transfer_route["stay_hours"], 46.0)
+        self.assertAlmostEqual(short_transfer_route["cost_per_stay_hour_myr"], round(120 / 46, 2))
+        self.assertEqual(short_transfer_route["rank"], 1)
+        self.assertGreater(short_transfer_route["total_cost_myr"], long_transfer_route["total_cost_myr"])
+
     def test_all_orders_remain_available_when_flights_fail(self) -> None:
         destinations = [city(code) for code in ("A01", "A02", "A03", "A04")]
         all_cities = [self.origin, *destinations]

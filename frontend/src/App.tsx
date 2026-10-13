@@ -52,6 +52,16 @@ function money(value: number | null) {
   return new Intl.NumberFormat("en-MY", { style: "currency", currency: "MYR", maximumFractionDigits: 0 }).format(value);
 }
 
+function moneyRate(value: number | null) {
+  if (value === null) return "Unavailable";
+  return new Intl.NumberFormat("en-MY", {
+    style: "currency",
+    currency: "MYR",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
 function fareKey(leg: TripLeg) {
   return `${leg.mode}:${leg.from_city.code}:${leg.to_city.code}:${leg.departure_date}`;
 }
@@ -82,6 +92,9 @@ function rankRoutes(routes: TripRoute[], preference: Preference, fareInputs: Rec
       ...route,
       legs,
       total_cost_myr: total === null ? null : Math.round(total * 100) / 100,
+      cost_per_stay_hour_myr: total !== null && route.stay_hours > 0
+        ? Math.round((total / route.stay_hours) * 100) / 100
+        : null,
       flight_cost_myr: Math.round(sumMode("flight") * 100) / 100,
       ground_cost_myr: Math.round(sumMode("ground") * 100) / 100,
       rail_cost_myr: railCost === null ? null : Math.round(railCost * 100) / 100,
@@ -92,22 +105,30 @@ function rankRoutes(routes: TripRoute[], preference: Preference, fareInputs: Rec
     const known = priced.filter((route) => route.total_cost_myr !== null);
     const costs = known.map((route) => route.total_cost_myr as number);
     const times = priced.map((route) => route.total_time_hours);
+    const valueRates = priced.flatMap((route) => route.cost_per_stay_hour_myr === null ? [] : [route.cost_per_stay_hour_myr]);
     const minCost = costs.length ? Math.min(...costs) : 0;
     const maxCost = costs.length ? Math.max(...costs) : 0;
     const minTime = Math.min(...times);
     const maxTime = Math.max(...times);
+    const minValueRate = valueRates.length ? Math.min(...valueRates) : 0;
+    const maxValueRate = valueRates.length ? Math.max(...valueRates) : 0;
     for (const route of priced) {
       const cost = route.total_cost_myr;
       const costScore = cost !== null && maxCost > minCost
         ? (cost - minCost) / (maxCost - minCost)
         : cost !== null ? 0 : 1;
       const timeScore = maxTime > minTime ? (route.total_time_hours - minTime) / (maxTime - minTime) : 0;
-      route.balanced_score = (costScore + timeScore) / 2;
+      const valueRate = route.cost_per_stay_hour_myr;
+      const valueScore = valueRate !== null && maxValueRate > minValueRate
+        ? (valueRate - minValueRate) / (maxValueRate - minValueRate)
+        : valueRate !== null ? 0 : 1;
+      route.balanced_score = (costScore + timeScore + valueScore) / 3;
     }
     priced.sort((left, right) =>
       (left.balanced_score ?? 0) - (right.balanced_score ?? 0)
       || (left.total_cost_myr ?? Number.POSITIVE_INFINITY) - (right.total_cost_myr ?? Number.POSITIVE_INFINITY)
       || left.total_time_hours - right.total_time_hours
+      || (left.cost_per_stay_hour_myr ?? Number.POSITIVE_INFINITY) - (right.cost_per_stay_hour_myr ?? Number.POSITIVE_INFINITY)
       || left.rank - right.rank,
     );
   } else if (preference === "shortest") {
@@ -288,7 +309,7 @@ function RouteSummary({ route, selected, onClick }: { route: TripRoute; selected
       </span>
       <span className="route-option-cost">
         <strong>{money(route.total_cost_myr)}</strong>
-        <small>{route.total_time_hours.toFixed(1)} h</small>
+        <small>{route.total_time_hours.toFixed(1)} h travel · {moneyRate(route.cost_per_stay_hour_myr)} / stay h</small>
       </span>
     </button>
   );
@@ -573,7 +594,7 @@ function App() {
             <div>
               <div className="section-kicker">{result.candidate_count} ROUTE ORDERS · {result.searches_attempted} FLIGHT + {result.rail_searches_attempted} RAIL SEARCHES</div>
               <h2>Best ways to make this trip <span>{result.routes.length} options</span></h2>
-              <p>Travel dates: {result.date_schedule.map(formatDate).join(" · ")}{!returnToOrigin ? ` · Trip ends ${formatDate(endDate)}` : ""} · Departures {preferredDepartureStart}–{preferredDepartureEnd} local · {minCityStayNights} minimum night(s) per city · Ranked by {preference === "cheapest" ? "known ticket costs" : preference === "shortest" ? "travel time" : "known costs and travel time"}.</p>
+              <p>Travel dates: {result.date_schedule.map(formatDate).join(" · ")}{!returnToOrigin ? ` · Trip ends ${formatDate(endDate)}` : ""} · Departures {preferredDepartureStart}–{preferredDepartureEnd} local · {minCityStayNights} minimum night(s) per city · Ranked by {preference === "cheapest" ? "known ticket costs" : preference === "shortest" ? "travel time" : "known costs, travel time, and fare per stay hour"}.</p>
             </div>
             <Button type="button" variant="secondary" className="refresh-button" disabled={loading} onClick={() => void runSearch()}>
               {loading ? <LoaderCircle size={15} className="spin" /> : <ArrowDownUp size={15} />} Re-search
@@ -626,6 +647,8 @@ function App() {
                 <div><Plane size={16} /><span>Flight fares</span><strong>{money(selectedRoute.flight_cost_myr)}</strong></div>
                 <div><TrainFront size={16} /><span>Rail fares</span><strong>{selectedRoute.legs.some((leg) => leg.mode === "rail") ? money(selectedRoute.rail_cost_myr) : "—"}</strong></div>
                 <div><CalendarDays size={16} /><span>Travel time</span><strong>{selectedRoute.total_time_hours.toFixed(1)} h</strong></div>
+                <div><CalendarDays size={16} /><span>Available stay time</span><strong>{selectedRoute.stay_hours.toFixed(1)} h</strong></div>
+                <div><Compass size={16} /><span>Fare per stay hour</span><strong>{moneyRate(selectedRoute.cost_per_stay_hour_myr)}</strong></div>
                 <div><Route size={16} /><span>Scheduled train legs</span><strong>{selectedRoute.legs.filter((leg) => leg.mode === "rail").length}</strong></div>
               </div>
               <div className="leg-list">
@@ -665,7 +688,7 @@ function App() {
                   </div>
                 ))}
               </div>
-              <p className="detail-disclaimer">Google Flights links reopen each one-way search; prices are not booking guarantees. Train schedules come from Transitous and can change. Entered fares are your own estimates for this search and are included in totals and rankings; any remaining unknown fare keeps the total incomplete.</p>
+              <p className="detail-disclaimer">Fare per stay hour (CP) is total fare divided by estimated time available at destinations, after subtracting travel time between destinations; lower values indicate better fare value. Balanced ranking weighs fare, transport time, and this value equally. Google Flights links reopen each one-way search; prices are not booking guarantees. Train schedules come from Transitous and can change. Entered fares are your own estimates for this search and are included in totals and rankings; any remaining unknown fare keeps the total incomplete.</p>
             </Card>
           )}
 

@@ -51,6 +51,8 @@ export type TripRoute = {
   ground_distance_km: number;
   total_cost_myr: number | null;
   total_time_hours: number;
+  stay_hours: number;
+  cost_per_stay_hour_myr: number | null;
   balanced_score: number | null;
 };
 

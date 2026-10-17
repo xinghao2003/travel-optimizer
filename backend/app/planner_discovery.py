@@ -36,6 +36,18 @@ def timestamp(value):
     return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(UTC)
 
 
+def refresh_quote_freshness(result, now):
+    """Expiry affects quote warnings, not ticket prices or route eligibility."""
+    for group in ("routes", "dominated_routes", "refinement_routes"):
+        for route in result.get(group, []):
+            for offer in route.get("purchases", []):
+                if offer.get("source") == "provider" and offer.get("expires_at") and timestamp(offer["expires_at"]) < now:
+                    offer["estimated"] = True
+                    if not offer.get("label", "").startswith("Stale quote: "):
+                        offer["label"] = "Stale quote: "+offer.get("label", "")
+                    route["estimated"] = True
+
+
 @lru_cache(maxsize=1)
 def iata_airports():
     import airportsdata
@@ -66,6 +78,14 @@ def seed_dates(spec):
     return [spec.start_date+timedelta(days=round(days*i/max(1, n-1))) for i in range(n)]
 
 
+def visit_return_orders(order):
+    """Visit every destination, then optionally revisit each earlier city once."""
+    yield order
+    for count in range(1, len(order)):
+        for suffix in itertools.permutations(order[:-1], count):
+            yield (*order, *suffix)
+
+
 def rough_date_windows(spec):
     """Optimistic pair windows using only minimum stays, with zero travel time.
 
@@ -78,7 +98,7 @@ def rough_date_windows(spec):
         return {pair: (start, end) for pair in itertools.permutations(spec.places(), 2)}
     stays = {v.place.id: v.min_stay_hours for v in spec.visits}
     windows = {}
-    for order in itertools.permutations(stays):
+    for order in (path for first in itertools.permutations(stays) for path in visit_return_orders(first)):
         for departure in spec.departures:
             for arrival in spec.arrivals:
                 path = [spec.home.id, departure.id, *(id for id in order if id != departure.id), arrival.id, spec.home.id]
@@ -129,7 +149,7 @@ def tasks_for(spec):
     # Prioritize complete seeds, rather than spending the first batch on just
     # the outbound directions. Remaining calendar dates follow deterministically.
     dates = seed_dates(spec)
-    for order in itertools.permutations([v.place.id for v in spec.visits]):
+    for order in (path for first in itertools.permutations([v.place.id for v in spec.visits]) for path in visit_return_orders(first)):
         for departure in spec.departures:
             for arrival in spec.arrivals:
                 path = [spec.home.id, departure.id, *order, arrival.id, spec.home.id]
@@ -144,6 +164,7 @@ def tasks_for(spec):
                         task(a, b, day, "flight")
                     if has_transit:
                         task(a, b, day, "transit")
+    seed_count = len(tasks)
     start, end = bounds(spec)
     for a, b in pairs:
         zone = ZoneInfo(places[a].timezone)
@@ -154,6 +175,50 @@ def tasks_for(spec):
                 task(a, b, day, "flight")
             if has_transit:
                 task(a, b, day, "transit")
+    # A combined ticket can introduce schedules absent from one-way results.
+    # Search gateway return tickets independently of completed DP histories.
+    flight_days = {}
+    for item in tasks:
+        if item["kind"] == "flight":
+            flight_days.setdefault((item["from_id"], item["to_id"]), []).append(date.fromisoformat(item["date"]))
+    minimum = timedelta(hours=sum(v.min_stay_hours for v in spec.visits))
+    bundles = []
+    for gateway in spec.departures:
+        if gateway.id not in {p.id for p in spec.arrivals}:
+            continue
+        earliest = start
+        latest = end
+        if gateway.id != spec.home.id:
+            for direction in ("outbound", "return"):
+                a, b = (spec.home.id, gateway.id) if direction == "outbound" else (gateway.id, spec.home.id)
+                services = [s for s in spec.positioning_services if s.direction == direction and s.gateway_id == gateway.id
+                            and s.mode in spec.modes and s.departure >= start and s.arrival <= end]
+                if not search_modes(spec, a, b) and services:
+                    if direction == "outbound":
+                        earliest = max(earliest, min(s.arrival for s in services))
+                    else:
+                        latest = min(latest, max(s.departure for s in services))
+        for visit in spec.visits:
+            dest = visit.place
+            if gateway.id == dest.id:
+                continue
+            for outbound in sorted(flight_days.get((gateway.id, dest.id), [])):
+                if gateway.id == spec.home.id and spec.date_mode == "fixed" and outbound != spec.start_date:
+                    continue
+                first = max(earliest, datetime.combine(outbound, spec.departure_start, ZoneInfo(gateway.timezone)).astimezone(UTC))
+                if first > datetime.combine(outbound, spec.departure_end, ZoneInfo(gateway.timezone)).astimezone(UTC):
+                    continue
+                for inbound in sorted(flight_days.get((dest.id, gateway.id), [])):
+                    last = min(latest, datetime.combine(inbound, spec.departure_end, ZoneInfo(dest.timezone)).astimezone(UTC))
+                    if last < first+minimum or last < datetime.combine(inbound, spec.departure_start, ZoneInfo(dest.timezone)).astimezone(UTC):
+                        continue
+                    legs = [make_leg(gateway, dest, outbound.isoformat()), make_leg(dest, gateway, inbound.isoformat())]
+                    key = stable_id("round-trip", legs)
+                    if key not in seen:
+                        seen.add(key)
+                        bundles.append({"kind": "bundle", "ticket_kind": "round-trip", "key": key, "legs": legs})
+    # Try complete one-way seeds first, then round trips before bulk calendar discovery.
+    tasks[seed_count:seed_count] = bundles
     return tasks
 
 
@@ -413,6 +478,7 @@ class DiscoveryManager:
         self.query_locks = {}
         self.optimization_locks = {}
         self.published_inputs = {}
+        self.optimization_cadence = {}
         self.http_limit = asyncio.Semaphore(2)
 
     def rules(self):
@@ -422,8 +488,18 @@ class DiscoveryManager:
         started = clock.monotonic()
         logger.debug("planner recalculate.wait trip=%s job=%s", trip_id, job_id)
         lock = self.optimization_locks.setdefault(trip_id, asyncio.Lock())
+        waited_for_solver = lock.locked()
         async with lock:
             trip = self.store.get("trips", trip_id)
+            cached = trip.get("result")
+            if (waited_for_solver and snapshot is None and job_id is None and not expand and cached
+                    and cached.get("optimization_complete")
+                    and cached.get("trip_revision") == trip["revision"]
+                    and cached.get("snapshot_revision") == (trip.get("snapshot") or {}).get("revision")
+                    and (not include_dominated or "dominated_routes" in cached)):
+                refresh_quote_freshness(cached, datetime.now(UTC))
+                logger.debug("planner optimize.coalesced trip=%s reason=matching_completed_snapshot", trip_id)
+                return cached
             spec = TripSpec.model_validate(trip["spec"])
             snapshot = copy.deepcopy(snapshot or trip.get("snapshot") or {"revision": 0, "movements": [], "offers": [], "coverage": {}})
             airport_connections = {
@@ -545,6 +621,8 @@ class DiscoveryManager:
         return self.store.put("jobs", job_id, job)
 
     async def fetch(self, task, spec, snapshot):
+        if task.get("ticket_kind") == "multi-city":
+            return fetch_flights(task["legs"], spec.adults, "multi-city", spec.departure_start, spec.departure_end), False
         places = spec.places()
         if task["kind"] == "road":
             points = {**places, **airport_places(spec)}
@@ -697,17 +775,30 @@ class DiscoveryManager:
         inputs = stable_id(trip["revision"], trip["spec"], trip.get("offers", []),
                            trip.get("airport_connections", []), pricing_rules,
                            snapshot["movements"], snapshot.get("offers", []),
-                           snapshot.get("roads", {}), snapshot.get("label_limit"),
-                           [o.get("expires_at") is not None and timestamp(o["expires_at"]) < now
-                            for o in snapshot.get("offers", [])])
+                           snapshot.get("roads", {}), snapshot.get("label_limit"))
+        cadence = self.optimization_cadence.get(job["id"])
+        controls = (trip["revision"], pricing_rules, snapshot.get("label_limit"))
+        if (job.get("status") == "running" and cadence and cadence["seconds"] >= 5
+                and cadence["controls"] == controls and trip.get("result")
+                and self.published_inputs.get(job["id"]) != inputs
+                and job["cursor"]-cadence["cursor"] < 16):
+            # Keep coverage/current graph available every four queries. Larger
+            # solves wait for a batch; final/paused publishes always solve, and
+            # manual edits or a changed allowance bypass this batching.
+            logger.debug("planner optimize.deferred job=%s cursor=%d next_cursor=%d reason=batch_changed_graph", job["id"], job["cursor"], cadence["cursor"]+16)
+            return
         if self.published_inputs.get(job["id"]) == inputs and trip.get("result"):
             logger.debug("planner optimize.reuse job=%s reason=unchanged_inputs", job["id"])
             result = copy.deepcopy(trip["result"])
+            refresh_quote_freshness(result, now)
             result.update(snapshot_revision=snapshot["revision"], coverage=snapshot.get("coverage", {}))
             trip["result"] = result
             self.store.put("trips", trip["id"], trip)
         else:
+            solve_started = clock.monotonic()
             result = await self.recalculate(trip["id"], snapshot, job_id=job["id"])
+            self.optimization_cadence[job["id"]] = {"cursor": job["cursor"], "seconds": clock.monotonic()-solve_started,
+                                                     "controls": controls}
         known = {t["key"] for t in job["queue"]}
         # Include dominated complete histories too: an undiscovered bundle can
         # make them cheaper than the current one-way frontier.
@@ -792,11 +883,13 @@ class DiscoveryManager:
                     outcome, used_request = await self.fetch(task, spec, job["snapshot"])
                 except Exception as exc:
                     outcome, used_request = {"status": "failed", "message": f"{type(exc).__name__}: {str(exc)[:180]}"}, True
-                logger.debug("planner query.done job=%s kind=%s status=%s elapsed=%.2fs", job["id"], task["kind"], outcome["status"], clock.monotonic()-task_started)
+                logger.debug("planner query.done job=%s kind=%s status=%s elapsed=%.2fs request=%s manual_only=%s", job["id"], task["kind"], outcome["status"], clock.monotonic()-task_started, used_request, outcome.get("automatic_query_skipped", False))
                 job["cursor"] += 1
                 job["batch_requests"] += int(used_request)
                 job["requests"] += int(used_request)
-                job["cache_hits"] += int(not used_request and outcome["status"] != "unsupported")
+                skipped = outcome.get("automatic_query_skipped", False)
+                job["manual_quote_queries"] = job.get("manual_quote_queries", 0)+int(skipped)
+                job["cache_hits"] += int(not used_request and not skipped and outcome["status"] != "unsupported")
                 status = outcome["status"]
                 task["outcome"] = status
                 job["outcomes"][status] = job["outcomes"].get(status, 0)+1
@@ -847,6 +940,7 @@ class DiscoveryManager:
             self.running.pop(job["id"], None)
             self.live_jobs.pop(job["id"], None)
             self.published_inputs.pop(job["id"], None)
+            self.optimization_cadence.pop(job["id"], None)
 
     async def close(self):
         pending = list(self.running.values())

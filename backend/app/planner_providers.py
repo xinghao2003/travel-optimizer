@@ -21,12 +21,18 @@ def fetch_flights(legs: list[dict], adults, kind, departure_start, departure_end
     from fast_flights import get_flights
     import airportsdata
     query = flight_query(legs, adults, kind, departure_start, departure_end)
-    airports = airportsdata.load("IATA")
     result = {"status": "empty", "options": [], "search_url": query.url(), "kind": kind}
+    if kind == "multi-city":
+        result.update(status="requires_manual_quote", automatic_query_skipped=True,
+                      diagnostics={"returned_rows": 0, "requested_journeys": len(legs), "complete_options": 0},
+                      message="Automatic multi-city search skipped: fast-flights does not support reliable multi-city retrieval. This does not establish that no combined ticket exists. Open the search link and enter a whole-ticket quote manually.")
+        return result
+    airports = airportsdata.load("IATA")
     try:
         _install_price_tolerant_parser()
         with FLIGHT_LIMIT:
             rows = get_flights(query)
+        result["diagnostics"] = {"returned_rows": len(rows), "requested_journeys": len(legs), "complete_options": 0}
         for row in rows:
             segments = []
             for segment in row.flights:
@@ -72,7 +78,11 @@ def fetch_flights(legs: list[dict], adults, kind, departure_start, departure_end
         if result["options"]:
             result["status"] = "success"
         elif kind != "one-way":
-            result.update(status="requires_manual_quote", message="Provider did not return every requested journey with a verifiable combined fare.")
+            detail = ("No flight rows were returned." if not rows else
+                      "Returned rows did not contain all requested journeys with matching dates and times.")
+            limitation = " The current fast-flights integration does not support reliable multi-city retrieval." if kind == "multi-city" else ""
+            result.update(status="requires_manual_quote", message=detail+limitation+" This does not establish that no combined ticket exists; verify a whole-ticket quote manually.")
+        result["diagnostics"]["complete_options"] = len(result["options"])
     except Exception as exc:
         result.update(status="empty" if type(exc).__name__ == "FlightsNotFound" else "requires_manual_quote" if kind != "one-way" else "failed", message=f"{type(exc).__name__}: {str(exc)[:180]}")
     return result

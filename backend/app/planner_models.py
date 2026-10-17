@@ -176,7 +176,9 @@ class TripSpec(Contract):
 
     def discovery_key(self) -> str:
         # Constraints/prices can change without throwing away provider data.
-        parts = (self.home, self.departures, self.arrivals,
+        # Destination returns widen schedule dates; old completed jobs must not
+        # claim coverage of the expanded search. Individual provider caches stay reusable.
+        parts = ("independent-round-trips-v2", self.home, self.departures, self.arrivals,
                  [v.place for v in self.visits], self.start_date, self.end_date,
                  self.adults, sorted(self.modes), self.departure_start, self.departure_end)
         if self.home_departure_earliest is None and self.home_arrival_latest is None and not self.positioning_policies:

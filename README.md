@@ -98,6 +98,8 @@ For slow or unresponsive searches, set `PLANNER_DEBUG=1` in `.env` and restart t
 
 ## API and verification
 
+The optimizer can return through previously visited destinations after completing all required visits, for example KUL → Seoul → Busan → Seoul → KUL. Each destination can appear once on the return path; first visits must meet their minimum stays and commitments, while return visits can be short connections. Destination time on return visits counts toward stay hours. Independent one-way fares and validated, non-overlapping round-trip bundles are compared. Gateway-to-destination round-trip queries are seeded independently of completed one-way itineraries, using optimistic date windows and the total minimum stay; exact returned schedules must still pass the optimizer's full constraints. Multi-city retrieval remains limited by fast-flights; diagnostics distinguish no returned rows from incomplete journeys and do not interpret either as proof that no bundle exists. Existing trips need a new discovery to cover the expanded return dates and independent round-trip queries; cached provider responses remain reusable.
+
 The `/api/v2` API provides city lookup; trip CRUD with `expected_revision`; discovery start/status/continue/cancel; optimization; fare editing; assumed connections; and reusable pricing rules. Main actions:
 
 - `POST /trips/{id}/searches` with `{ "budget": 100 }`.
@@ -107,6 +109,12 @@ The `/api/v2` API provides city lookup; trip CRUD with `expected_revision`; disc
 - `GET /pricing-rules`, `PUT/DELETE /pricing-rules/{id}`.
 
 Trip reads omit the large movement graph unless `?include_graph=true` is supplied. Results identify trip/snapshot revisions and discovery/optimization completion. The frontend rejects stale results. `/api/routes` remains a compatibility adapter for single-origin requests with assigned dates, using the new schedule-aware engine.
+
+Pricing indexes valid fares once per solver run, reuses ticket-cover results across phase changes, and indexes missing-fare comparison thresholds. Debug `dp.search.done` logs report price calculations and reuses. Unchanged discovery inputs reuse prior results; quote expiry refreshes stale warnings without rerunning optimization. Fare, schedule, rule, constraint, and solver-allowance changes still require recalculation.
+
+Multi-city ticket opportunities retain manual search links but skip automatic provider requests; these increment a separate manual-quote counter, never provider requests or cache hits. One-way and round-trip retrieval still use fast-flights. Ticket candidates are deduplicated by city pairs and departure dates before constructing provider queries. Coverage is published every four queries; when a solve takes at least five seconds, changed provider data is batched until sixteen queries have been processed since that solve. Pausing/completing discovery and manual trip/rule changes force an up-to-date solve. Overlapping optimization requests can reuse a matching completed snapshot.
+
+Saved itinerary results share repeated movement, purchase, and extra-charge objects in a versioned, lossless representation. Normal API reads retain the expanded format; `GET /trips/{id}?compact=true` and `POST /trips/{id}/optimize` with `{ "compact": true }` opt into the shared representation. The frontend expands references locally. Trip response reads and JSON encoding run in a worker thread, with direct JSON responses avoiding a redundant recursive conversion. Existing saved trips are readable without migration; their next normal save adopts the compact storage format.
 
 ```powershell
 $env:PYTHONPATH = "backend"

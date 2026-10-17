@@ -117,7 +117,7 @@ class PositioningTests(unittest.TestCase):
         changed = spec.model_copy(update={"positioning_policies": []})
         self.assertNotEqual(spec.discovery_key(), changed.discovery_key())
 
-    def test_default_settings_preserve_legacy_discovery_identity(self):
+    def test_destination_returns_version_discovery_identity(self):
         from app.planner_models import stable_id
         spec, _, _, _ = fixture()
         spec.positioning_policies = []
@@ -126,7 +126,8 @@ class PositioningTests(unittest.TestCase):
         expected = stable_id(spec.home, spec.departures, spec.arrivals, [v.place for v in spec.visits],
                              spec.start_date, spec.end_date, spec.adults, sorted(spec.modes),
                              spec.departure_start, spec.departure_end)
-        self.assertEqual(spec.discovery_key(), expected)
+        self.assertNotEqual(spec.discovery_key(), expected)
+        self.assertEqual(spec.discovery_key(), spec.model_copy(deep=True).discovery_key())
 
 
 class PositioningProviderTests(unittest.IsolatedAsyncioTestCase):

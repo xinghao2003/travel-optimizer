@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import itertools
 import tempfile
 import unittest
+import time as wall_clock
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -46,6 +48,29 @@ def fare(id, amount, ids=None, **kwargs):
 
 
 class DiscoveryDateTests(unittest.TestCase):
+    def test_international_round_trips_do_not_require_complete_one_way_routes(self):
+        home = HOME.model_copy(update={"flight_code": "PEN", "airport_codes": ["PEN"]})
+        gateway = place("kul").model_copy(update={"flight_code": "KUL", "airport_codes": ["KUL"]})
+        seoul = A.model_copy(update={"flight_code": "SEL", "airport_codes": ["ICN", "GMP"]})
+        busan = B.model_copy(update={"flight_code": "PUS", "airport_codes": ["PUS"]})
+        spec = TripSpec(home=home, departures=[home, gateway], arrivals=[home, gateway],
+                        visits=[Visit(place=seoul, min_stay_hours=12), Visit(place=busan, min_stay_hours=12)],
+                        start_date=date(2027, 2, 10), end_date=date(2027, 2, 14), modes=["flight"])
+        with patch("app.planner_discovery.iata_metros", return_value={}):
+            queue = tasks_for(spec)
+        bundles = [t for t in queue if t.get("ticket_kind") == "round-trip"]
+        self.assertEqual({(t["legs"][0]["from_code"], t["legs"][0]["to_code"]) for t in bundles},
+                         {("PEN", "SEL"), ("PEN", "PUS"), ("KUL", "SEL"), ("KUL", "PUS")})
+        self.assertEqual(len(queue), len({t["key"] for t in queue}))
+        for t in bundles:
+            out, back = t["legs"]
+            self.assertEqual((out["from_id"], out["to_id"]), (back["to_id"], back["from_id"]))
+            self.assertLess(out["date"], back["date"])
+        spec.home_departure_earliest = time(18)
+        with patch("app.planner_discovery.iata_metros", return_value={}):
+            constrained = tasks_for(spec)
+        self.assertEqual({t["legs"][0]["from_code"] for t in constrained if t.get("ticket_kind") == "round-trip"}, {"KUL"})
+
     def test_minimum_stays_narrow_dates_for_both_visit_orders(self):
         spec = trip(visits=[Visit(place=A, min_stay_hours=72), Visit(place=B, min_stay_hours=72)])
         spec.end_date = date(2027, 2, 20)
@@ -53,7 +78,7 @@ class DiscoveryDateTests(unittest.TestCase):
         for city, other in ((A, B), (B, A)):
             self.assertEqual(windows[HOME.id, city.id][1].date(), date(2027, 2, 14))
             self.assertEqual(windows[city.id, other.id][0].date(), date(2027, 2, 13))
-            self.assertEqual(windows[city.id, other.id][1].date(), date(2027, 2, 17))
+            self.assertEqual(windows[city.id, other.id][1].date(), date(2027, 2, 20))
             self.assertEqual(windows[city.id, HOME.id][0].date(), date(2027, 2, 16))
         with patch("app.planner_discovery.transitous.contact_url", "https://example.test"):
             queue = tasks_for(spec)
@@ -64,6 +89,9 @@ class DiscoveryDateTests(unittest.TestCase):
                 low, high = windows[q["from_id"], q["to_id"]]
                 self.assertLessEqual(low.date().isoformat(), q["date"])
                 self.assertLessEqual(q["date"], high.date().isoformat())
+        late_return = [q for q in queue if q["kind"] == "transit" and q["from_id"] == B.id
+                       and q["to_id"] == A.id and q["date"] == "2027-02-20"]
+        self.assertEqual(len(late_return), 1)
 
     def test_impossible_stay_total_does_not_query_schedules(self):
         spec = trip(visits=[Visit(place=A, min_stay_hours=72), Visit(place=B, min_stay_hours=72)])
@@ -87,6 +115,48 @@ class DiscoveryDateTests(unittest.TestCase):
 
 
 class OptimizerTests(unittest.TestCase):
+    def test_ticket_candidates_deduplicate_schedules_but_preserve_dates(self):
+        spec = trip(date_mode="flexible")
+        moves = [movement("early", HOME, A, dt(10), dt(10, 10)),
+                 movement("late", HOME, A, dt(10, 11), dt(10, 12)),
+                 movement("next-day", HOME, A, dt(11), dt(11, 10)),
+                 movement("back", A, HOME, dt(12, 16), dt(12, 17))]
+        offers = [fare("early", 200), fare("late", 100), fare("next-day", 50), fare("back", 50)]
+        result = optimize(spec, moves, offers, [], include_dominated=True)
+        candidates = result["bundle_candidates"]
+        self.assertEqual(len(candidates), 2)
+        self.assertGreater(result["feasible_count"], len(candidates))
+        self.assertEqual({c[0]["segments"][0]["departure"][:10] for c in candidates}, {"2027-02-10", "2027-02-11"})
+        self.assertTrue(all("charges" not in m for c in candidates for m in c))
+
+    def test_nested_round_trips_with_mixed_internal_transport(self):
+        spec = trip(visits=[Visit(place=A, min_stay_hours=12), Visit(place=B, min_stay_hours=12)])
+        for outbound_mode, inbound_mode in [("flight", "flight"), ("rail", "rail"), ("rail", "flight")]:
+            with self.subTest(modes=(outbound_mode, inbound_mode)):
+                moves = [movement("out", HOME, A, dt(10), dt(10, 10)),
+                         movement("ab", A, B, dt(11), dt(11, 10), mode=outbound_mode),
+                         movement("ba", B, A, dt(12), dt(12, 10), mode=inbound_mode),
+                         movement("home", A, HOME, dt(12, 11), dt(12, 12))]
+                offers = [fare(m.id, 100) for m in moves]
+                offers += [fare("international", 80, ["out", "home"], kind="round-trip"),
+                           fare("internal", 50, ["ab", "ba"], kind="round-trip")]
+                result = optimize(spec, moves, offers, [], include_dominated=True)
+                self.assertTrue(result["optimization_complete"])
+                route = result["routes"][0]
+                self.assertEqual([m["id"] for m in route["movements"]], ["out", "ab", "ba", "home"])
+                self.assertEqual(route["total_cost_myr"], 130)
+                self.assertEqual([s["place_id"] for s in route["stays"]], ["a", "b", "a"])
+                self.assertEqual(route["stays"][-1]["hours"], 1)
+                loop = movement("loop", A, B, dt(12, 11), dt(12, 12), mode=inbound_mode)
+                loop_home = movement("loop-home", B, HOME, dt(12, 13), dt(12, 14))
+                bounded = optimize(spec, [*moves, loop, loop_home],
+                                   [*offers, fare("loop", 0), fare("loop-home", 0)], [], include_dominated=True)
+                for candidate in [*bounded["routes"], *bounded["dominated_routes"]]:
+                    self.assertNotIn("loop", [m["id"] for m in candidate["movements"]])
+                # The revisit may connect immediately, but the first stay must qualify.
+                invalid = [moves[0], moves[1].model_copy(update={"departure": dt(10, 11), "arrival": dt(10, 12)}), *moves[2:]]
+                self.assertEqual(optimize(spec, invalid, offers, [])["routes"], [])
+
     def test_optional_dominated_routes_do_not_change_frontier(self):
         spec = trip()
         ms = [movement("fast", HOME, A, dt(10), dt(10, 10)),
@@ -278,6 +348,16 @@ class ProviderNormalizationTests(unittest.TestCase):
             incomplete = fetch_flights([leg, back], 1, "round-trip", time(9), time(17))
             self.assertEqual(incomplete["status"], "requires_manual_quote")
             self.assertEqual(incomplete["options"], [])
+            self.assertEqual(incomplete["diagnostics"]["returned_rows"], 1)
+            self.assertIn("did not contain all requested journeys", incomplete["message"])
+        with patch("app.planner_providers._install_price_tolerant_parser"), patch("fast_flights.get_flights", return_value=[]) as request:
+            empty = fetch_flights([leg, back], 1, "multi-city", time(9), time(17))
+            self.assertEqual(empty["status"], "requires_manual_quote")
+            self.assertEqual(empty["diagnostics"]["returned_rows"], 0)
+            self.assertIn("does not support reliable multi-city retrieval", empty["message"])
+            self.assertIn("does not establish", empty["message"])
+            self.assertTrue(empty["automatic_query_skipped"])
+            request.assert_not_called()
         row = SimpleNamespace(price=900, flights=[outbound, segment("SIN", "KUL", 12, 16, 17)], airlines=["Example"])
         with patch("app.planner_providers._install_price_tolerant_parser"), patch("fast_flights.get_flights", return_value=[row]):
             parsed = fetch_flights([leg, back], 2, "round-trip", time(9), time(17))
@@ -318,6 +398,64 @@ class PersistenceAndJobsTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.temp.cleanup)
         self.db = PlannerStore(Path(self.temp.name)/"planner.sqlite3")
 
+    async def test_multicity_manual_quote_uses_no_request_or_cache_hit(self):
+        spec = trip()
+        record = self.db.new_trip(spec.model_dump(mode="json"))
+        legs = [{"date": "2027-02-10", "from_code": "KUL", "to_code": "SIN"},
+                {"date": "2027-02-12", "from_code": "SIN", "to_code": "PEN"}]
+        task = {"kind": "bundle", "ticket_kind": "multi-city", "key": "manual", "legs": legs}
+        manager = DiscoveryManager(self.db)
+        with patch("app.planner_discovery.tasks_for", return_value=[task]), patch("fast_flights.get_flights") as request:
+            job = manager.start(record["id"], budget=1)
+            await manager.running[job["id"]]
+        saved = self.db.get("jobs", job["id"])
+        self.assertEqual((saved["requests"], saved["cache_hits"], saved["manual_quote_queries"]), (0, 0, 1))
+        self.assertEqual(saved["status"], "complete")
+        self.assertEqual(saved["bundle_links"][0]["status"], "requires_manual_quote")
+        self.assertTrue(saved["bundle_links"][0]["url"].startswith("https://www.google.com/travel/flights"))
+        request.assert_not_called()
+
+    async def test_overlapping_optimization_reuses_matching_finished_result(self):
+        import app.planner_discovery as discovery
+        spec = trip(modes=["rail"])
+        record = self.db.new_trip(spec.model_dump(mode="json"))
+        record["snapshot"] = {"revision": 1, "movements": [m.model_dump(mode="json") for m in [
+            movement("out", HOME, A, dt(10), dt(10, 10), mode="rail"),
+            movement("back", A, HOME, dt(12, 16), dt(12, 17), mode="rail")]],
+            "offers": [fare("out", 10).model_dump(mode="json"), fare("back", 10).model_dump(mode="json")], "roads": {}, "coverage": {}}
+        self.db.put("trips", record["id"], record)
+        manager = DiscoveryManager(self.db)
+        original = discovery.optimize
+        def slow(*args, **kwargs):
+            wall_clock.sleep(0.05)
+            return original(*args, **kwargs)
+        with patch.object(discovery, "optimize", side_effect=slow) as solver:
+            first, second = await asyncio.gather(manager.recalculate(record["id"]), manager.recalculate(record["id"]))
+            self.assertEqual(solver.call_count, 1)
+            self.assertEqual(first["routes"], second["routes"])
+        with patch.object(discovery, "optimize", wraps=original) as solver:
+            await manager.recalculate(record["id"], include_dominated=True)
+            self.assertEqual(solver.call_count, 1)
+
+    async def test_compact_routes_are_lossless_across_restart(self):
+        from app.planner_results import compact_result, expand_result
+        record = self.db.new_trip(trip().model_dump(mode="json"))
+        route = {"id": "route", "movements": [{"id": "same", "mode": "flight"}],
+                 "purchases": [{"id": "fare", "low": None, "label": "Original"}],
+                 "extra_charges": [{"id": "charge", "low": 5}]}
+        variant = copy.deepcopy(route)
+        variant["purchases"][0]["label"] = "Stale quote: Original"
+        result = {"routes": [route, copy.deepcopy(route)], "dominated_routes": [variant], "refinement_routes": []}
+        packed = compact_result(result)
+        self.assertEqual(len(packed["_shared_route_data"]["movements"]), 1)
+        self.assertEqual(len(packed["_shared_route_data"]["purchases"]), 2)
+        self.assertEqual(expand_result(packed), result)
+        record["result"] = result
+        self.db.put("trips", record["id"], record)
+        restarted = PlannerStore(self.db.path)
+        self.assertIn("_shared_route_data", restarted.get("trips", record["id"], expand=False)["result"])
+        self.assertEqual(restarted.get("trips", record["id"])["result"], result)
+
     async def test_bundle_preparation_reuses_legs_and_deduplicates_queries(self):
         from app.planner_discovery import make_leg
         spec = trip()
@@ -343,7 +481,7 @@ class PersistenceAndJobsTests(unittest.IsolatedAsyncioTestCase):
         movements = [movement("out", HOME, A, dt(10), dt(10, 10), mode="rail"),
                      movement("back", A, HOME, dt(12, 16), dt(12, 17), mode="rail")]
         snapshot = {"revision": 1, "movements": [m.model_dump(mode="json") for m in movements],
-                    "offers": [fare("out", 20).model_dump(mode="json"), fare("back", 20).model_dump(mode="json")],
+                    "offers": [fare("out", 20, expires_at=dt(11)).model_dump(mode="json"), fare("back", 20).model_dump(mode="json")],
                     "roads": {}, "coverage": {}}
         job = {"id": "reuse-test", "trip_id": record["id"], "discovery_key": spec.discovery_key(),
                "snapshot": snapshot, "queue": [], "cursor": 0, "requests": 0, "cache_hits": 0,
@@ -358,12 +496,58 @@ class PersistenceAndJobsTests(unittest.IsolatedAsyncioTestCase):
             saved = self.db.get("trips", record["id"])
             self.assertEqual(saved["result"]["snapshot_revision"], snapshot["revision"])
             self.assertEqual(saved["result"]["routes"][0]["total_cost_myr"], 40)
+            with patch("app.planner_discovery.datetime", wraps=datetime) as clock:
+                clock.now.return_value = dt(12)
+                await manager.publish(job, spec)
+            self.assertEqual(manager.recalculate.await_count, 1)
+            expired = self.db.get("trips", record["id"])["result"]["routes"][0]
+            self.assertEqual(expired["total_cost_myr"], 40)
+            self.assertTrue(expired["estimated"])
+            self.assertTrue(next(o for o in expired["purchases"] if o["movement_ids"] == ["out"])["label"].startswith("Stale quote: "))
             snapshot["offers"][0].update(low=30, high=30)
             await manager.publish(job, spec)
             self.assertEqual(manager.recalculate.await_count, 2)
             saved = self.db.get("trips", record["id"])
             self.assertEqual(saved["result"]["routes"][0]["total_cost_myr"], 50)
             snapshot["label_limit"] = 50000
+            await manager.publish(job, spec)
+            self.assertEqual(manager.recalculate.await_count, 3)
+
+    async def test_costly_solves_batch_graph_changes_but_flush_at_pause(self):
+        import app.planner_discovery as discovery
+        spec = trip(modes=["rail"])
+        record = self.db.new_trip(spec.model_dump(mode="json"))
+        snapshot = {"revision": 1, "movements": [m.model_dump(mode="json") for m in [
+            movement("out", HOME, A, dt(10), dt(10, 10), mode="rail"),
+            movement("back", A, HOME, dt(12, 16), dt(12, 17), mode="rail")]],
+            "offers": [fare("out", 10).model_dump(mode="json"), fare("back", 10).model_dump(mode="json")], "roads": {}, "coverage": {}}
+        job = {"id": "batch-test", "trip_id": record["id"], "discovery_key": spec.discovery_key(), "status": "running",
+               "snapshot": snapshot, "queue": [{"key": str(i)} for i in range(40)], "cursor": 4,
+               "requests": 0, "cache_hits": 0, "outcomes": {}, "messages": [], "bundle_links": []}
+        manager = DiscoveryManager(self.db)
+        elapsed = [0.0]
+        original = manager.recalculate
+        async def costly(*args, **kwargs):
+            result = await original(*args, **kwargs)
+            elapsed[0] += 10
+            return result
+        manager.recalculate = AsyncMock(side_effect=costly)
+        with patch.object(discovery, "clock", SimpleNamespace(monotonic=lambda: elapsed[0])), patch.object(discovery.transitous, "contact_url", "https://example.test"):
+            await manager.publish(job, spec)
+            for cursor, value in [(8, 20), (12, 30), (16, 40)]:
+                job["cursor"] = cursor
+                snapshot["revision"] += 1
+                snapshot["offers"][0].update(low=value, high=value)
+                await manager.publish(job, spec)
+            self.assertEqual(manager.recalculate.await_count, 1)
+            job["status"] = "paused"
+            await manager.publish(job, spec)
+            self.assertEqual(manager.recalculate.await_count, 2)
+            self.assertEqual(self.db.get("trips", record["id"])["result"]["routes"][0]["total_cost_myr"], 50)
+            job["status"] = "running"
+            job["cursor"] = 20
+            # User edits bypass the batching interval even with few new queries.
+            self.db.update("trips", record["id"], lambda t: {**t, "revision": t["revision"]+1})
             await manager.publish(job, spec)
             self.assertEqual(manager.recalculate.await_count, 3)
 
@@ -452,6 +636,12 @@ class PersistenceAndJobsTests(unittest.IsolatedAsyncioTestCase):
                 reopened = (await client.get(f"/api/v2/trips/{id}")).json()
                 self.assertEqual(len(reopened["offers"]), 2)
                 self.assertEqual(reopened["result"]["trip_revision"], reopened["revision"])
+                from app.planner_results import expand_result
+                compact = (await client.get(f"/api/v2/trips/{id}?compact=true")).json()
+                self.assertEqual(expand_result(compact["result"]), reopened["result"])
+                optimized = (await client.post(f"/api/v2/trips/{id}/optimize", json={"compact": True})).json()
+                self.assertIn("_shared_route_data", optimized)
+                self.assertEqual(expand_result(optimized)["routes"], reopened["result"]["routes"])
 
 
 if __name__ == "__main__":

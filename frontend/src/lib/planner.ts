@@ -1,3 +1,5 @@
+import { expandSharedResult } from "./sharedResults";
+
 export type Mode = "flight" | "rail" | "bus" | "coach" | "subway" | "tram" | "car" | "taxi";
 export type AirportTransferMode = Exclude<Mode, "flight">;
 export type AirportConnection = { from_airport: string; to_airport: string; mode: AirportTransferMode; duration_minutes: number; fare_amount: number | null; currency: string };
@@ -30,17 +32,20 @@ export type Route = { id: string; departure_gateway: string; arrival_gateway: st
 export type Coverage = { unresolved_movements?: { id: string; from_id: string; to_id: string; assumptions: string[] }[]; airport_connections_required?: AirportConnectionRequirement[]; source_gaps?: string[]; processed?: number; pending?: number; requests?: number; cache_hits?: number; outcomes?: Record<string, number>; discovery_complete?: boolean; messages?: string[]; bundle_links?: { kind: string; status: string; url: string; legs: { from_id: string; to_id: string; date: string }[] }[] };
 export type Result = { routes: Route[]; dominated_routes?: Route[]; refinement_routes?: Route[]; missing_fares: { component_id: string; movement_id: string; label: string; from_id: string; to_id: string; affected_itineraries: number; break_even_myr: number | null; reason: string; currency: string }[]; expanded_labels: number; pruned_labels: number; feasible_count: number; optimization_complete: boolean; snapshot_revision: number; trip_revision: number; coverage: Coverage; discovery_required: boolean; optimality_scope: string };
 export type SavedTrip = { id: string; revision: number; spec: TripSpec; offers: Offer[]; airport_connections?: AirportConnection[]; airport_connections_required?: AirportConnectionRequirement[]; latest_job_id: string | null; result?: Result; snapshot: { revision: number; movements: Movement[]; offers: Offer[]; coverage: Coverage } | null };
-export type Job = { id: string; trip_id: string; status: "queued" | "running" | "paused" | "cancelled" | "complete" | "interrupted" | "failed" | "superseded"; processed: number; pending: number; requests: number; cache_hits: number; failed_queries: number; messages: string[]; bundle_links: Coverage["bundle_links"] };
+export type Job = { id: string; trip_id: string; status: "queued" | "running" | "paused" | "cancelled" | "complete" | "interrupted" | "failed" | "superseded"; processed: number; pending: number; requests: number; cache_hits: number; manual_quote_queries?: number; failed_queries: number; messages: string[]; bundle_links: Coverage["bundle_links"] };
 export type SavedSummary = { id: string; name: string; revision: number; start_date: string; end_date: string };
 
 export async function api<T>(path: string, method = "GET", body?: unknown): Promise<T> {
+  if (method === "GET" && /^\/trips\/[^/?]+$/.test(path)) path += "?compact=true";
+  if (method === "POST" && /^\/trips\/[^/?]+\/optimize$/.test(path)) body = { ...(body as Record<string, unknown> | undefined), compact: true };
   const response = await fetch(`/api/v2${path}`, { method, headers: body === undefined ? undefined : { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
   const payload = await response.json();
   if (!response.ok) {
     const detail = Array.isArray(payload.detail) ? payload.detail.map((d: { msg: string }) => d.msg).join(" · ") : payload.detail;
     throw new Error(detail || `Request failed (${response.status})`);
   }
-  return payload as T;
+  if (payload.result?._shared_route_data) payload.result = expandSharedResult(payload.result);
+  return (payload._shared_route_data ? expandSharedResult(payload) : payload) as T;
 }
 export function money(value: number | null, currency = "MYR") {
   return value === null ? "Unknown" : new Intl.NumberFormat("en-MY", { style: "currency", currency, maximumFractionDigits: 2 }).format(value);

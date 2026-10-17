@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from .planner_discovery import manager, required_airport_connections
 from .planner_models import AirportConnection, FareOffer, Movement, PricingRule, TripSpec
 from .planner_places import search_places
 from .planner_store import store
+from .planner_results import compact_trip, compact_result
 
 router = APIRouter(prefix="/api/v2")
 
@@ -24,6 +26,7 @@ class SearchRequest(BaseModel):
 class OptimizationRequest(BaseModel):
     expand: bool = False
     include_dominated: bool = False
+    compact: bool = False
 
 
 class UpdateAirportConnections(BaseModel):
@@ -71,12 +74,18 @@ async def create_trip(spec: TripSpec):
 
 
 @router.get("/trips/{id}")
-async def read_trip(id: str, include_graph: bool = False):
-    trip = get_trip(id)
-    trip["airport_connections_required"] = required_airport_connections((trip.get("snapshot") or {}).get("movements", []))
-    if not include_graph and trip.get("snapshot"):
-        trip["snapshot"] = {k: v for k, v in trip["snapshot"].items() if k not in {"movements", "roads"}} | {"movements": []}
-    return trip
+async def read_trip(id: str, include_graph: bool = False, compact: bool = False):
+    def response():
+        trip = store.get("trips", id, expand=not compact)
+        if trip is None:
+            raise HTTPException(404, "Trip not found.")
+        trip["airport_connections_required"] = required_airport_connections((trip.get("snapshot") or {}).get("movements", []))
+        if not include_graph and trip.get("snapshot"):
+            trip["snapshot"] = {k: v for k, v in trip["snapshot"].items() if k not in {"movements", "roads"}} | {"movements": []}
+        # Stored data is already JSON-compatible. Avoid FastAPI's expensive
+        # recursive encoder and keep SQLite/serialization off the event loop.
+        return JSONResponse(compact_trip(trip) if compact else trip)
+    return await asyncio.to_thread(response)
 
 
 @router.put("/trips/{id}")
@@ -151,7 +160,7 @@ async def recalculate(id: str, request: OptimizationRequest = OptimizationReques
     get_trip(id)
     result = await manager.recalculate(id, expand=request.expand, include_dominated=request.include_dominated)
     result.pop("bundle_candidates", None)
-    return result
+    return await asyncio.to_thread(lambda: JSONResponse(compact_result(result) if request.compact else result))
 
 
 @router.put("/trips/{id}/fares/{offer_id}")
@@ -245,7 +254,7 @@ async def update_airport_connections(id: str, request: UpdateAirportConnections)
     payload = [item.model_dump(mode="json") for item in connections]
     store.update("trips", id, lambda trip: {**trip, "airport_connections": payload,
                                              "revision": trip["revision"]+1})
-    return await manager.recalculate(id)
+    return await recalculate(id)
 
 
 @router.post("/trips/{id}/movements", status_code=201)
@@ -262,7 +271,9 @@ async def add_assumed_movement(id: str, movement: Movement):
     trip["revision"] += 1
     store.put("trips", id, trip)
     store.put("graphs", spec.discovery_key(), snapshot)
-    return await recalculate(id)
+    response = await recalculate(id)
+    response.status_code = 201
+    return response
 
 
 @router.get("/pricing-rules")

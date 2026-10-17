@@ -10,6 +10,8 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
+from .planner_results import compact_trip, expand_trip
+
 DEFAULT_PATH = Path(__file__).resolve().parents[1] / "data" / "planner.sqlite3"
 
 
@@ -43,21 +45,22 @@ class PlannerStore:
         finally:
             connection.close()
 
-    def get(self, collection: str, id: str):
+    def get(self, collection: str, id: str, *, expand=True):
         with self._lock, self._connect() as db:
             row = db.execute("SELECT payload FROM records WHERE collection=? AND id=?", (collection, id)).fetchone()
-            return json.loads(row[0]) if row else None
+            result = json.loads(row[0]) if row else None
+            return expand_trip(result) if result is not None and collection == "trips" and expand else result
 
     def put(self, collection: str, id: str, payload: dict):
         with self._lock, self._connect() as db:
             db.execute("INSERT INTO records VALUES(?,?,?,?) ON CONFLICT(collection,id) DO UPDATE SET payload=excluded.payload,updated=excluded.updated",
-                       (collection, id, json.dumps(payload, default=str, allow_nan=False), time.time()))
+                       (collection, id, json.dumps(compact_trip(payload) if collection == "trips" else payload, default=str, allow_nan=False), time.time()))
         return payload
 
     def list(self, collection: str):
         with self._lock, self._connect() as db:
             rows = db.execute("SELECT payload FROM records WHERE collection=? ORDER BY updated DESC", (collection,)).fetchall()
-            return [json.loads(row[0]) for row in rows]
+            return [expand_trip(json.loads(row[0])) if collection == "trips" else json.loads(row[0]) for row in rows]
 
     def delete(self, collection: str, id: str):
         with self._lock, self._connect() as db:

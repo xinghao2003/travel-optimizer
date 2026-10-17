@@ -70,9 +70,22 @@ def _rule_offer(component: str, movement: Movement, distance, mode, spec, rules,
                      currency=rule.currency, source="rule", estimated=True, label=rule.name)
 
 
+def _fare_index(offers: list[FareOffer], spec: TripSpec):
+    direct = defaultdict(list)
+    bundles = []
+    for offer in offers:
+        if not offer.validated or offer.adults is not None and offer.adults != spec.adults:
+            continue
+        if len(offer.movement_ids) == 1:
+            direct[offer.movement_ids[0]].append(offer)
+        elif len(offer.movement_ids) > 1:
+            bundles.append(offer)
+    return direct, bundles
+
+
 def price_path(path: list[Movement], offers: list[FareOffer], spec: TripSpec,
-               rules: list[PricingRule], extra: list[Charge] | None = None) -> dict:
-    offers = [o for o in offers if o.adults is None or o.adults == spec.adults]
+               rules: list[PricingRule], extra: list[Charge] | None = None, *, fare_index=None) -> dict:
+    direct_offers, bundle_offers = fare_index if fare_index is not None else _fare_index(offers, spec)
     components: dict[str, tuple[Movement, Charge | None]] = {}
     for m in path:
         components[m.id] = (m, None)
@@ -84,9 +97,9 @@ def price_path(path: list[Movement], offers: list[FareOffer], spec: TripSpec,
     choices: list[tuple[int, FareOffer, int, float]] = []
     diagnostics = []
     for id, (movement, charge) in components.items():
-        direct = [o for o in offers if o.validated and o.movement_ids == [id]]
+        direct = list(direct_offers.get(id, ()))
         if charge is None and movement.template_id:
-            direct += [o.model_copy(update={"id": o.id+":"+id, "movement_ids": [id]}) for o in offers if o.validated and o.movement_ids == [movement.template_id]]
+            direct += [o.model_copy(update={"id": o.id+":"+id, "movement_ids": [id]}) for o in direct_offers.get(movement.template_id, ())]
         overrides = [o for o in direct if o.source == "user"]
         if overrides:
             direct = overrides[-1:]
@@ -120,8 +133,8 @@ def price_path(path: list[Movement], offers: list[FareOffer], spec: TripSpec,
                                 "from_id": movement.from_id, "to_id": movement.to_id,
                                 "currency": direct[0].currency,
                                 "reason": "exchange_rate" if direct[0].low is not None and direct[0].currency not in spec.exchange_rates else "missing_fare"})
-    for offer in offers:
-        if not offer.validated or len(offer.movement_ids) < 2 or not set(offer.movement_ids).issubset(indexes):
+    for offer in bundle_offers:
+        if not set(offer.movement_ids).issubset(indexes):
             continue
         mask = sum(1 << indexes[id] for id in offer.movement_ids)
         lo, hi = _amount(offer, spec)
@@ -201,6 +214,8 @@ class Label:
     departure_gateway: str = ""
     arrival_gateway: str = ""
     price: dict | None = None
+    return_mask: int = 0  # Cities already used on the return path; prevents loops.
+    revisiting: bool = False  # Credit city time without repeating first-visit requirements.
 
 
 def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer], rules: list[PricingRule],
@@ -213,6 +228,7 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
     supplied, supplied_fares = supplied_positioning(spec)
     movements = [m for m in movements if m.source != SUPPLIED_SOURCE] + supplied
     offers = supplied_fares + offers
+    fare_index = _fare_index(offers, spec)
     places = spec.places()
     required = {v.place.id: (i, v.min_stay_hours) for i, v in enumerate(spec.visits)}
     full_mask = (1 << len(required))-1
@@ -255,6 +271,8 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
     completed = []
     expanded = 0
     pruned = 0
+    price_calculations = 0
+    price_reuses = 0
 
     def rental_close(label, at):
         if label.rental_pickup is None:
@@ -269,11 +287,22 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
         charge = Charge(id="rental:"+stable_id(label.rental_pickup, label.rental_start, label.city, at),
                         kind=f"Rental: {days} day(s), pickup and drop-off", mode="rental", low=value, high=value, source="rule",
                         from_id=label.rental_pickup, to_id=label.city, country_code=places[label.rental_pickup].country_code)
-        return replace(label, rental_pickup=None, rental_start=None, charges=(*label.charges, charge))
+        return replace(label, rental_pickup=None, rental_start=None, charges=(*label.charges, charge), price=None)
+
+    def quote(label):
+        # Phase changes and completing a route do not change its ticket cover.
+        # New movements create unpriced labels; rental charges invalidate above.
+        nonlocal price_calculations, price_reuses
+        if label.price is None:
+            price_calculations += 1
+            label.price = price_path(label.path, offers, spec, rules, list(label.charges), fare_index=fare_index)
+        else:
+            price_reuses += 1
+        return label.price
 
     def add(label):
         nonlocal pruned
-        label.price = price_path(label.path, offers, spec, rules, list(label.charges))
+        quote(label)
         if "flight" not in spec.modes and not bundle_ids and spec.budget_myr is not None and label.price["low_cents"] > cents(spec.budget_myr):
             return
         bundle_history = tuple((m.from_id, m.to_id, next((s.departure for s in m.segments if s.mode == "flight" and s.departure), m.departure).astimezone(ZoneInfo(places[m.from_id].timezone)).date().isoformat(), m.id if m.id in bundle_ids else None)
@@ -281,7 +310,7 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
         # Rental timing is part of future eligibility, not just a display field.
         key = (label.city, label.phase, label.mask, label.reward, label.own_location, label.own_used,
                label.rental_pickup, label.rental_start, label.departure_gateway, label.arrival_gateway,
-               bundle_history, label.price["uncertainty_key"])
+               bundle_history, label.price["uncertainty_key"], label.return_mask, label.revisiting)
         bucket = labels[key]
 
         def dominates(a, b):
@@ -326,11 +355,12 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
                 stays = [*label.stays, {"place_id": label.city, "arrival": label.arrival.isoformat(), "departure": end.isoformat(), "hours": (end-label.arrival).total_seconds()/3600}]
                 closed = rental_close(replace(label, stays=stays, reward=False, arrival=end), end)
                 if closed is not None and (not closed.own_used or closed.own_location == spec.home.id):
-                    closed.price = price_path(closed.path, offers, spec, rules, list(closed.charges))
+                    quote(closed)
                     completed.append(closed)
                 continue
             for gateway in spec.arrivals:
-                add(replace(label, phase=2, arrival_gateway=gateway.id))
+                add(replace(label, phase=2, arrival_gateway=gateway.id,
+                            return_mask=(1 << required[label.city][0]) if label.city in required else 0))
             continue
         if label.phase == 2 and label.city == label.arrival_gateway:
             add(replace(label, phase=3))
@@ -344,16 +374,17 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
             home_date = closed.arrival.astimezone(ZoneInfo(spec.home.timezone)).date()
             if spec.date_mode == "fixed" and home_date != spec.end_date:
                 continue
-            closed.price = price_path(closed.path, offers, spec, rules, list(closed.charges))
+            quote(closed)
             completed.append(closed)
             continue
         targets = ([label.departure_gateway] if label.phase == 0 else
                    [id for id, (i, _) in required.items() if not label.mask & (1 << i)] if label.phase == 1 else
-                   [label.arrival_gateway] if label.phase == 2 else
+                   list(dict.fromkeys([label.arrival_gateway, *[id for id, (i, _) in required.items()
+                                      if not label.return_mask & (1 << i)]])) if label.phase == 2 else
                    [id for id in dict.fromkeys([spec.home.id, *([label.own_location] if label.own_used and label.own_location != spec.home.id else [])]) if id != label.city])
-        minimum = required[label.city][1] if label.reward else 0
+        minimum = required[label.city][1] if label.reward and not label.revisiting else 0
         ready = label.arrival+timedelta(hours=minimum)
-        commitments = [c for c in spec.commitments if c.place_id == label.city] if label.reward else []
+        commitments = [c for c in spec.commitments if c.place_id == label.city] if label.reward and not label.revisiting else []
         if any(label.arrival > c.start.astimezone(UTC) for c in commitments):
             continue
         ready = max([ready, *(c.end.astimezone(UTC) for c in commitments)])
@@ -399,15 +430,17 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
                     if current.reward:
                         stays = [*stays, {"place_id": current.city, "arrival": current.arrival.isoformat(),
                                          "departure": dep.isoformat(), "hours": (dep-current.arrival).total_seconds()/3600}]
-                    reward = current.phase == 1 and target in required
+                    reward = current.phase in {1, 2} and target in required
                     mask = current.mask | ((1 << required[target][0]) if reward else 0)
                     add(Label(target, current.phase, mask, arr, [*current.path, movement], stays,
                               reward=reward, own_location=target if movement.vehicle_kind == "own" else current.own_location,
                               own_used=current.own_used or movement.vehicle_kind == "own", rental_pickup=rental_pickup,
                               rental_start=rental_start, charges=current.charges,
-                              departure_gateway=current.departure_gateway, arrival_gateway=current.arrival_gateway))
+                              departure_gateway=current.departure_gateway, arrival_gateway=current.arrival_gateway,
+                              return_mask=current.return_mask | ((1 << required[target][0]) if current.phase == 2 and target in required else 0),
+                              revisiting=current.phase == 2 and target in required))
 
-    logger.debug("planner dp.search.done expanded=%d pending=%d completed=%d elapsed=%.2fs", expanded, len(queue), len(completed), clock.monotonic()-started)
+    logger.debug("planner dp.search.done expanded=%d pending=%d completed=%d prices=%d price_reuses=%d elapsed=%.2fs", expanded, len(queue), len(completed), price_calculations, price_reuses, clock.monotonic()-started)
 
     def stay(label):
         return sum(s["hours"] for s in label.stays)
@@ -456,16 +489,25 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
     logger.debug("planner dp.serialize.start frontier=%d elapsed=%.2fs", len(unique), clock.monotonic()-started)
     results = []
     missing = {}
+    # Missing-fare thresholds depend on city time, not on the component being
+    # edited. Index the frontier once instead of rescanning it for every fare
+    # in every itinerary (especially expensive with dominated routes enabled).
+    threshold_stays, threshold_prices = [], []
+    maximum_price = -INF
+    for hours, price in sorted((stay(y), y.price["high_cents"]/100) for y in frontier if y.price["high_cents"] != INF):
+        maximum_price = max(maximum_price, price)
+        threshold_stays.append(hours)
+        threshold_prices.append(maximum_price)
     for id, label in unique.items():
         price = label.price
         total_stay = stay(label)
+        threshold_index = bisect_right(threshold_stays, total_stay+1e-8)-1
+        break_even = round(threshold_prices[threshold_index]-price["cost_low_myr"], 2) if threshold_index >= 0 else None
         for item in price["missing"]:
             entry = missing.setdefault(item["component_id"], {**item, "affected_itineraries": 0, "break_even_myr": None})
             entry["affected_itineraries"] += 1
-            thresholds = [y.price["high_cents"]/100-price["cost_low_myr"] for y in frontier
-                          if y.price["high_cents"] != INF and stay(y) <= total_stay+1e-8]
-            if thresholds:
-                entry["break_even_myr"] = round(max(thresholds), 2)
+            if break_even is not None:
+                entry["break_even_myr"] = break_even
         results.append({"id": id, "departure_gateway": label.departure_gateway, "arrival_gateway": label.arrival_gateway,
                         "movements": [m.model_dump(mode="json") for m in label.path], "stays": label.stays,
                         "stay_hours": round(total_stay, 4), "travel_hours": round(sum(m.duration_minutes for m in label.path)/60, 4),
@@ -477,11 +519,24 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
                         "cost_per_stay_hour_myr": round(price["total_cost_myr"]/total_stay, 2) if price["total_cost_myr"] is not None and total_stay > 0 else None})
     results.sort(key=lambda r: (r["provisional"], r["cost_low_myr"], -r["stay_hours"], r["id"]))
     bundle_candidates = {}
+    ticket_legs = {}
     for label in completed:
         flights = [m for m in label.path if m.mode == "flight"]
         if len(flights) >= 2:
-            ids = tuple(m.id for m in flights)
-            bundle_candidates[ids] = [m.model_dump(mode="json") for m in flights]
+            signature, legs = [], []
+            for m in flights:
+                if m.id not in ticket_legs:
+                    departure = next((s.departure for s in m.segments if s.mode == "flight" and s.departure), m.departure)
+                    day = departure.astimezone(ZoneInfo(places[m.from_id].timezone)).date().isoformat()
+                    ticket_legs[m.id] = ((m.from_id, m.to_id, day), {
+                        "from_id": m.from_id, "to_id": m.to_id,
+                        "segments": [{"mode": "flight", "departure": departure.isoformat()}]})
+                key, leg = ticket_legs[m.id]
+                signature.append(key)
+                legs.append(leg)
+            # Providers query city pairs and dates, not every schedule combination.
+            # Keep all completed histories eligible, but serialize each query once.
+            bundle_candidates.setdefault(tuple(signature), legs)
     logger.debug("planner dp.done routes=%d bundles=%d elapsed=%.2fs", len(results), len(bundle_candidates), clock.monotonic()-started)
     response = {"routes": [r for r in results if r["budget_status"] != "over" and r["id"] in frontier_ids], "refinement_routes": [r for r in results if r["budget_status"] == "over"], "bundle_candidates": list(bundle_candidates.values()), "missing_fares": sorted(missing.values(), key=lambda x: (-x["affected_itineraries"], -(x["break_even_myr"] or 0), x["component_id"])),
             "expanded_labels": expanded, "pruned_labels": pruned, "feasible_count": len(completed),

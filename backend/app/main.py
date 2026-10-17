@@ -18,16 +18,20 @@ from .transitous import transitous
 from .planner_api import router as planner_router
 from .planner_discovery import manager
 from .planner_store import store
+from .planner_debug import planner_debug_monitor
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 logger = logging.getLogger("uvicorn.error")
 
 @asynccontextmanager
 async def lifespan(app):
-    store.recover()
-    yield
-    await manager.close()
-    await transitous.close()
+    async with planner_debug_monitor():
+        store.recover()
+        try:
+            yield
+        finally:
+            await manager.close()
+            await transitous.close()
 
 
 app = FastAPI(title="Wayfinder Multimodal Trip Optimizer", version="3.0.0", lifespan=lifespan)

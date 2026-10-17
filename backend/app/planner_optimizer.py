@@ -7,6 +7,8 @@ persisted graph; a previous frontier is never used as the next search space.
 from __future__ import annotations
 
 import math
+import logging
+import time as clock
 from collections import defaultdict, deque
 from bisect import bisect_right
 from dataclasses import dataclass, replace
@@ -16,6 +18,8 @@ from functools import lru_cache
 from zoneinfo import ZoneInfo
 
 from .planner_models import Charge, FareOffer, Movement, PricingRule, TripSpec, stable_id
+
+logger = logging.getLogger("uvicorn.error")
 
 UTC = timezone.utc
 INF = float("inf")
@@ -199,6 +203,9 @@ class Label:
 def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer], rules: list[PricingRule],
              snapshot_revision: int = 0, trip_revision: int = 0, cancelled=None, label_limit: int | None = None,
              finish_at_home: bool = True) -> dict:
+    started = clock.monotonic()
+    next_progress = started + 5
+    logger.debug("planner dp.start movements=%d offers=%d limit=%s", len(movements), len(offers), label_limit)
     start, end = bounds(spec)
     places = spec.places()
     required = {v.place.id: (i, v.min_stay_hours) for i, v in enumerate(spec.visits)}
@@ -297,6 +304,9 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
             break
         label = queue.popleft()
         expanded += 1
+        if clock.monotonic() >= next_progress:
+            logger.debug("planner dp.progress expanded=%d pending=%d completed=%d pruned=%d elapsed=%.2fs", expanded, len(queue), len(completed), pruned, clock.monotonic()-started)
+            next_progress = clock.monotonic()+5
         if label.phase == 0 and label.city == label.departure_gateway:
             mask = label.mask | ((1 << required[label.city][0]) if label.city in required else 0)
             add(replace(label, phase=1, mask=mask, reward=label.city in required))
@@ -389,13 +399,26 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
                               rental_start=rental_start, charges=current.charges,
                               departure_gateway=current.departure_gateway, arrival_gateway=current.arrival_gateway))
 
+    logger.debug("planner dp.search.done expanded=%d pending=%d completed=%d elapsed=%.2fs", expanded, len(queue), len(completed), clock.monotonic()-started)
+
     def stay(label):
         return sum(s["hours"] for s in label.stays)
 
     # A sorted prefix maximum answers robust two-objective dominance in
     # O(log n) per label, including fare intervals. Avoid an O(n^2) final pass.
-    eligible = [x for x in completed if spec.budget_myr is None or x.price["low_cents"] <= cents(spec.budget_myr)]
-    over_budget = sorted((x for x in completed if spec.budget_myr is not None and x.price["low_cents"] > cents(spec.budget_myr)), key=lambda x: (x.price["low_cents"], -stay(x)))[:10]
+    # Apply after whole-ticket pricing: a bundle or manual fare can price a
+    # flight that has no standalone provider quote. Keep discovery data intact.
+    selectable = completed
+    if spec.exclude_unpriced_flights:
+        selectable = [x for x in completed if
+            {m.id for m in x.path if m.mode == "flight"}.issubset({
+                id for offer in x.price["purchases"]
+                if offer["low"] is not None and offer["high"] is not None
+                and offer["currency"] in spec.exchange_rates
+                for id in offer["movement_ids"]
+            })]
+    eligible = [x for x in selectable if spec.budget_myr is None or x.price["low_cents"] <= cents(spec.budget_myr)]
+    over_budget = sorted((x for x in selectable if spec.budget_myr is not None and x.price["low_cents"] > cents(spec.budget_myr)), key=lambda x: (x.price["low_cents"], -stay(x)))[:10]
     finite = sorted((x for x in eligible if x.price["high_cents"] != INF), key=lambda x: x.price["high_cents"])
     highs, best_stays, best_prices = [], [], []
     best_stay, best_price = -INF, INF
@@ -417,6 +440,7 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
     for label in [*frontier, *over_budget]:
         id = stable_id([(m.id, m.departure) for m in label.path], label.departure_gateway, label.arrival_gateway)
         unique[id] = label
+    logger.debug("planner dp.serialize.start frontier=%d elapsed=%.2fs", len(unique), clock.monotonic()-started)
     results = []
     missing = {}
     for id, label in unique.items():
@@ -445,6 +469,7 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
         if len(flights) >= 2:
             ids = tuple(m.id for m in flights)
             bundle_candidates[ids] = [m.model_dump(mode="json") for m in flights]
+    logger.debug("planner dp.done routes=%d bundles=%d elapsed=%.2fs", len(results), len(bundle_candidates), clock.monotonic()-started)
     return {"routes": [r for r in results if r["budget_status"] != "over"], "refinement_routes": [r for r in results if r["budget_status"] == "over"], "bundle_candidates": list(bundle_candidates.values()), "missing_fares": sorted(missing.values(), key=lambda x: (-x["affected_itineraries"], -(x["break_even_myr"] or 0), x["component_id"])),
             "expanded_labels": expanded, "pruned_labels": pruned, "feasible_count": len(completed),
             "optimization_complete": not bool(queue), "remaining_labels": len(queue), "label_limit": label_limit, "snapshot_revision": snapshot_revision, "trip_revision": trip_revision,

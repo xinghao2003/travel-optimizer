@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import itertools
+import logging
 import math
 import os
 import time as clock
@@ -18,6 +19,8 @@ from .planner_optimizer import bounds, optimize
 from .planner_providers import fetch_flights
 from .planner_store import PlannerStore, store
 from .transitous import transitous
+
+logger = logging.getLogger("uvicorn.error")
 
 UTC = timezone.utc
 TRANSIT_MODES = {"rail": "HIGHSPEED_RAIL,LONG_DISTANCE,NIGHT_RAIL,REGIONAL_RAIL,SUBURBAN", "bus": "BUS", "coach": "COACH", "subway": "SUBWAY", "tram": "TRAM"}
@@ -359,6 +362,8 @@ class DiscoveryManager:
         return [PricingRule.model_validate(r) for r in self.store.list("rules")]
 
     async def recalculate(self, trip_id, snapshot=None, expand=False, job_id=None):
+        started = clock.monotonic()
+        logger.debug("planner recalculate.wait trip=%s job=%s", trip_id, job_id)
         lock = self.optimization_locks.setdefault(trip_id, asyncio.Lock())
         async with lock:
             trip = self.store.get("trips", trip_id)
@@ -369,6 +374,7 @@ class DiscoveryManager:
                 for connection in (AirportConnection.model_validate(item) for item in trip.get("airport_connections", []))
             }
             old_movements = snapshot["movements"]
+            logger.debug("planner normalize.start trip=%s movements=%d", trip_id, len(old_movements))
             normalized = []
             for raw in old_movements:
                 movement = Movement.model_validate(raw)
@@ -414,8 +420,10 @@ class DiscoveryManager:
                 return job_id in self.cancelled_jobs
 
             cancelled = check_cancelled if job_id else None
+            logger.debug("planner optimize.dispatch trip=%s elapsed=%.2fs movements=%d offers=%d label_limit=%d", trip_id, clock.monotonic()-started, len(snapshot["movements"]), len(offers), snapshot["label_limit"])
             result = await asyncio.to_thread(optimize, spec, [Movement.model_validate(m) for m in snapshot["movements"]], offers,
                                              self.rules(), snapshot["revision"], trip["revision"], cancelled, snapshot["label_limit"])
+            logger.debug("planner optimize.return trip=%s elapsed=%.2fs expanded=%d completed=%d routes=%d bundles=%d", trip_id, clock.monotonic()-started, result["expanded_labels"], result["feasible_count"], len(result["routes"]), len(result.get("bundle_candidates", [])))
             result["coverage"] = snapshot.get("coverage", {})
             result["coverage"]["unresolved_movements"] = [{"id": m["id"], "from_id": m["from_id"], "to_id": m["to_id"], "assumptions": m["assumptions"]} for m in snapshot["movements"] if not m.get("usable", True)]
             result["coverage"]["airport_connections_required"] = required_airport_connections(snapshot["movements"])
@@ -426,6 +434,7 @@ class DiscoveryManager:
                 if latest.get("snapshot"):
                     latest["snapshot"] = snapshot
                 self.store.put("trips", trip_id, latest)
+            logger.debug("planner recalculate.done trip=%s elapsed=%.2fs", trip_id, clock.monotonic()-started)
             return result
 
     def start(self, trip_id, budget=100, job_id=None):
@@ -489,6 +498,9 @@ class DiscoveryManager:
             key = stable_id({k: v for k, v in task.items() if k not in {"key", "outcome"}}, spec.adults, spec.departure_start, spec.departure_end,
                             [(p.id, p.latitude, p.longitude, p.flight_code, p.airport_codes) for p in places.values()], sorted(spec.modes),
                             spec.timing.connection_minutes if task["kind"] == "transit" else None)
+        if task["kind"] in {"flight", "bundle"}:
+            # Older cached results omitted Google's first flight result group.
+            key = "flight-groups-v2:" + key
         lock = self.query_locks.setdefault(key, asyncio.Lock())
         async with lock:
             cached = self.store.cached(key)
@@ -589,6 +601,8 @@ class DiscoveryManager:
         snapshot.update(movements=list(movements.values()), offers=list(offers.values()), revision=snapshot["revision"]+1)
 
     async def publish(self, job, spec):
+        started = clock.monotonic()
+        logger.debug("planner publish.start job=%s cursor=%d queue=%d", job["id"], job["cursor"], len(job["queue"]))
         snapshot = job["snapshot"]
         trip = self.store.get("trips", job["trip_id"])
         if trip is None:
@@ -608,6 +622,7 @@ class DiscoveryManager:
                                 "messages": job["messages"][-12:], "bundle_links": job["bundle_links"]}
         snapshot["coverage"]["source_gaps"] = source_gaps
         snapshot["coverage"]["unresolved_movements"] = [{"id": m["id"], "from_id": m["from_id"], "to_id": m["to_id"], "assumptions": m["assumptions"]} for m in snapshot["movements"] if not m.get("usable", True)]
+        logger.debug("planner graph.persist job=%s elapsed=%.2fs movements=%d", job["id"], clock.monotonic()-started, len(snapshot["movements"]))
         self.store.put("graphs", job["discovery_key"], shareable_snapshot(snapshot, spec))
         if TripSpec.model_validate(trip["spec"]).discovery_key() != job["discovery_key"]:
             job["status"] = "superseded"
@@ -620,7 +635,10 @@ class DiscoveryManager:
         known = {t["key"] for t in job["queue"]}
         # Include dominated complete histories too: an undiscovered bundle can
         # make them cheaper than the current one-way frontier.
-        for flights in result.pop("bundle_candidates", []):
+        logger.debug("planner bundles.enqueue.start job=%s candidates=%d elapsed=%.2fs", job["id"], len(result.get("bundle_candidates", [])), clock.monotonic()-started)
+        for candidate_index, flights in enumerate(result.pop("bundle_candidates", [])):
+            if candidate_index % 100 == 0:
+                await asyncio.sleep(0)
             candidates = [("multi-city", flights)]
             for i, first in enumerate(flights):
                 for last in flights[i+1:]:
@@ -641,6 +659,7 @@ class DiscoveryManager:
                     job["queue"].insert(job["cursor"], {"kind": "bundle", "ticket_kind": kind, "key": key, "legs": legs})
         snapshot["coverage"]["pending"] = len(job["queue"])-job["cursor"]
         snapshot["coverage"]["discovery_complete"] = discovery_complete and job["cursor"] == len(job["queue"])
+        logger.debug("planner graph.persist job=%s elapsed=%.2fs movements=%d", job["id"], clock.monotonic()-started, len(snapshot["movements"]))
         self.store.put("graphs", job["discovery_key"], shareable_snapshot(snapshot, spec))
         latest = self.store.get("trips", trip["id"])
         if TripSpec.model_validate(latest["spec"]).discovery_key() == job["discovery_key"]:
@@ -652,6 +671,8 @@ class DiscoveryManager:
             if latest.get("result"):
                 latest["result"]["coverage"] = trip_snapshot.get("coverage", {})
             self.store.put("trips", trip["id"], latest)
+
+        logger.debug("planner publish.done job=%s queue=%d elapsed=%.2fs", job["id"], len(job["queue"]), clock.monotonic()-started)
 
     async def run(self, job, spec):
         if job["id"] in self.cancelled_jobs:
@@ -670,10 +691,13 @@ class DiscoveryManager:
                     job["status"] = "superseded"
                     break
                 task = job["queue"][job["cursor"]]
+                task_started = clock.monotonic()
+                logger.debug("planner query.start job=%s cursor=%d/%d kind=%s key=%s", job["id"], job["cursor"], len(job["queue"]), task["kind"], task["key"])
                 try:
                     outcome, used_request = await self.fetch(task, spec, job["snapshot"])
                 except Exception as exc:
                     outcome, used_request = {"status": "failed", "message": f"{type(exc).__name__}: {str(exc)[:180]}"}, True
+                logger.debug("planner query.done job=%s kind=%s status=%s elapsed=%.2fs", job["id"], task["kind"], outcome["status"], clock.monotonic()-task_started)
                 job["cursor"] += 1
                 job["batch_requests"] += int(used_request)
                 job["requests"] += int(used_request)
@@ -720,6 +744,7 @@ class DiscoveryManager:
             self.store.put("jobs", job["id"], job)
             raise
         except Exception as exc:
+            logger.exception("planner job.failed job=%s cursor=%d", job["id"], job["cursor"])
             job["status"] = "failed"
             job["messages"].append(f"Planner: {type(exc).__name__}: {str(exc)[:180]}")
             self.store.put("jobs", job["id"], job)

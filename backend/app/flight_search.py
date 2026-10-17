@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import date, time
 from typing import Any
 
@@ -32,7 +32,7 @@ class FlightSearchOutcome:
 
 
 def _install_price_tolerant_parser() -> None:
-    """Work around fast-flights 3.1 assuming every Google result has a fare."""
+    """Read both Google result groups and preserve schedules without fares."""
     global _PARSER_INSTALLED
     if _PARSER_INSTALLED:
         return
@@ -46,53 +46,66 @@ def _install_price_tolerant_parser() -> None:
         upstream_parse = fetcher.parse
 
         def parse_with_missing_prices(html: str):
-            try:
+            document = LexborHTMLParser(html)
+            script = document.css_first(r"script.ds\:1")
+            if script is None:
                 return upstream_parse(html)
-            except (IndexError, TypeError):
-                document = LexborHTMLParser(html)
-                script = document.css_first(r"script.ds\:1")
-                if script is None:
-                    raise
-                js = script.text()
-                try:
-                    prefix, encoded_data = js.split("data:", 1)
-                    raw_payload, trailer = encoded_data.rsplit(",", 1)
-                    payload = json.loads(raw_payload)
-                    rows = payload[3][0] or []
-                except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError):
-                    raise
+            js = script.text()
+            try:
+                prefix, encoded_data = js.split("data:", 1)
+                raw_payload, trailer = encoded_data.rsplit(",", 1)
+                payload = json.loads(raw_payload)
+                # Google supplies separate result groups. The installed parser
+                # reads only section 3, so normalize both groups into that slot.
+                rows = []
+                for index in (2, 3):
+                    section = payload[index] if len(payload) > index else None
+                    if section and section[0]:
+                        rows.extend(section[0])
+            except (IndexError, KeyError, TypeError, ValueError):
+                return upstream_parse(html)
 
-                # Keep valid schedules whose prices are absent. A temporary
-                # sentinel lets the upstream schedule parser read those rows;
-                # it is restored to None immediately, never exposed as a fare.
-                priced_rows = []
-                missing = []
-                for row in rows:
-                    try:
-                        price = row[1][0][1]
-                        if price is None:
-                            raise ValueError("price is missing")
-                        priced_rows.append(row)
-                        missing.append(False)
-                    except (IndexError, KeyError, TypeError, ValueError):
-                        row[1] = [[None, -1]]
-                        priced_rows.append(row)
-                        missing.append(True)
-
-                payload[3][0] = priced_rows
-                sanitized_js = (
-                    prefix
-                    + "data:"
-                    + json.dumps(payload, separators=(",", ":"))
-                    + ","
-                    + trailer
-                )
-                parsed = flight_parser.parse_js(sanitized_js)
-                for result, absent in zip(parsed, missing):
-                    if absent:
-                        result.price = None
-                parsed.unpriced_rows = sum(missing)
+            if not rows:
+                # Empty multi-city responses can omit airline metadata too.
+                # Upstream indexes that metadata before checking for results.
+                parsed = flight_parser.ResultList()
+                parsed.unpriced_rows = 0
                 return parsed
+
+            # Keep schedules without quotes. The upstream model needs a numeric
+            # sentinel, which is restored to None before anything leaves here.
+            missing = []
+            for row in rows:
+                try:
+                    price = row[1][0][1]
+                    absent = price is None or price < 0
+                except (IndexError, KeyError, TypeError):
+                    absent = True
+                missing.append(absent)
+                if absent:
+                    row[1] = [[None, -1]]
+
+            if not payload[3]:
+                payload[3] = [rows]
+            else:
+                payload[3][0] = rows
+            sanitized_js = prefix + "data:" + json.dumps(payload, separators=(",", ":")) + "," + trailer
+            parsed = flight_parser.parse_js(sanitized_js)
+            unique = []
+            seen = set()
+            for result, absent in zip(parsed, missing):
+                if absent:
+                    result.price = None
+                # Ignore group/booking metadata when comparing identical
+                # schedules, but retain different fares for the same flights.
+                key = (json.dumps([asdict(f) for f in result.flights], sort_keys=True),
+                       tuple(result.airlines), result.price)
+                if key not in seen:
+                    seen.add(key)
+                    unique.append(result)
+            parsed[:] = unique
+            parsed.unpriced_rows = sum(r.price is None for r in parsed)
+            return parsed
 
         parse_with_missing_prices._wayfinder_resilient = True
         fetcher.parse = parse_with_missing_prices

@@ -10,6 +10,8 @@ frontend/.npm-cache/
 .pip-cache/
 backend/data/planner.sqlite3*
 backend/data/places.sqlite3*
+backend/data/planner-debug.log*
+backend/data/planner-stacks.log
 __pycache__/
 *.py[cod]
 backend/data/road_distance_cache.json

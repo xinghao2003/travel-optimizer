@@ -10,6 +10,7 @@ export type TripSpec = {
   start_date: string; end_date: string; date_mode: "fixed" | "flexible";
   adults: number; budget_myr: number | null; modes: Mode[]; max_transfers: number | null; allow_overnight: boolean;
   departure_start: string; departure_end: string;
+  exclude_unpriced_flights?: boolean;
   commitments: { place_id: string; start: string; end: string }[];
   timing: { connection_minutes: number; flight_before_minutes: number; flight_after_minutes: number; transit_before_minutes: number; transit_after_minutes: number; airport_transfer_fallback_minutes: number | null };
   cars: { own_enabled: boolean; own_capacity: number; own_cost_per_km: number; rental_enabled: boolean; rental_capacity: number; rental_pickups: string[]; rental_dropoffs: string[]; rental_daily_myr: number | null; rental_pickup_myr: number; rental_one_way_myr: number | null; rental_cost_per_km: number | null; taxi_capacity: number };

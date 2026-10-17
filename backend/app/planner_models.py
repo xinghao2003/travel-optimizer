@@ -97,6 +97,7 @@ class TripSpec(Contract):
     modes: list[Mode] = Field(default_factory=lambda: ["flight", "rail", "bus", "coach"])
     max_transfers: int | None = Field(default=None, ge=0, le=10)
     allow_overnight: bool = True
+    exclude_unpriced_flights: bool = False
     departure_start: time = time(9)
     departure_end: time = time(17)
     commitments: list[Commitment] = Field(default_factory=list)

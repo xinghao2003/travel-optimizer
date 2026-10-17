@@ -52,7 +52,17 @@ npm --prefix frontend run build
 uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --app-dir backend --env-file .env
 ```
 
-Open <http://127.0.0.1:8000>. Health: `/api/health`; API documentation: `/docs`. For frontend development, keep the API on port 8000 and run `npm --prefix frontend run dev` in another terminal, then open port 5173. Vite uses `--configLoader runner` on Windows. If a restricted environment prevents its dependency optimizer reading parent directories, use the built app command above.
+Open <http://127.0.0.1:8000>. Health: `/api/health`; API documentation: `/docs`.
+
+For development with backend hot reload, stop the existing backend and run:
+
+```powershell
+.\dev-backend.ps1
+```
+
+This watches Python files under `backend/app` and restarts the API after edits. Database and cache writes do not trigger reloads. Use `./dev-backend.ps1 -Port 8001` for another port. Changes to `.env` require a manual restart. A reload interrupts active discovery jobs; saved data remains available and interrupted jobs can be continued.
+
+For frontend development, keep the API on port 8000 and run `npm --prefix frontend run dev` in another terminal, then open port 5173. Vite uses `--configLoader runner` on Windows. If a restricted environment prevents its dependency optimizer reading parent directories, use the built app command above.
 
 ## Configuration and saved work
 
@@ -63,6 +73,7 @@ See `.env.example`. Set `TRANSITOUS_CONTACT_URL` after coordinating routing use 
 | `PLANNER_DB_PATH` | `backend/data/planner.sqlite3` |
 | `PLANNER_PLACES_PATH` | `backend/data/places.sqlite3` |
 | `PLANNER_LABEL_BATCH` | `25000` |
+| `PLANNER_DEBUG` | `0` (set to `1` for diagnostics) |
 | `OSRM_BASE_URL` | `https://router.project-osrm.org` |
 | `TRANSITOUS_ROUTE_TTL_SECONDS` | `21600` |
 | `TRANSITOUS_EMPTY_ROUTE_TTL_SECONDS` | `900` |
@@ -72,6 +83,8 @@ The planner database uses WAL and schema versioning. Stop the server before copy
 Default assumptions: 90 minutes before flights, 30 after flights, 15 before transit, 10 after transit, and a 30-minute minimum connection. Airport access uses OSRM when available. Otherwise the editable fallback is 45 minutes per side with an unknown fare. Clear the fallback to require resolved access time. An unavailable intercity road never becomes an automatic straight-line driving connection.
 
 Flight responses cache for 15 minutes and road matrices for seven days. Transitous uses its configured TTLs. Reopening a trip does not refresh its provider quotes; expired quotes are shown as stale estimates.
+
+For slow or unresponsive searches, set `PLANNER_DEBUG=1` in `.env` and restart the backend. Stage timings, provider query outcomes, graph persistence, bundle queue generation, and optimizer progress (every five seconds during label expansion) appear in the terminal and rotating `backend/data/planner-debug.log` files. If the API event loop cannot advance for 30 seconds, a separate watchdog writes all Python thread stacks to `backend/data/planner-stacks.log`, repeating every 30 seconds until it recovers. These diagnostics distinguish network waits, optimization, serialization, and event loop blocking. Set `PLANNER_DEBUG=0` and restart to disable them.
 
 ## API and verification
 

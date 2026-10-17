@@ -23,6 +23,8 @@ Dynamic programming preserves different ticket eligibility, vehicle states, and 
 
 Discovery defaults to **100 uncached requests per batch**. Continue adds another batch and reuses caches. Cancel preserves collected work; paused/interrupted jobs can resume. Start a new job when discovery inputs change. Disabled Transitous sends no transit requests. Failed queries can be retried after the queue is exhausted.
 
+New discovery queues use rough date windows from the minimum city stays, combining all visit orders and gateway choices. This optimistic filter assumes zero travel time and keeps whole departure-local calendar days; exact schedules, buffers, and commitments are checked by the optimizer. Own-car recovery retains broad windows because it may require additional detours. Existing saved queues keep their original tasks; start a new discovery job to use the narrowed queue. Discovery currently recalculates after every four processed queries and at a batch boundary; unchanged optimization inputs reuse the previous result.
+
 Optimization defaults to **25,000 expanded labels**. Hitting the limit is explicitly marked incomplete. Continue increases the allowance and recomputes from the saved graph, rather than searching only the previous frontier. Accommodation, sightseeing hours, and reliability remain later phases.
 
 ## Run on Windows

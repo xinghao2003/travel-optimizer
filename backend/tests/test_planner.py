@@ -6,13 +6,13 @@ import tempfile
 import unittest
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import httpx
 
-from app.planner_discovery import DiscoveryManager, flight_movement, transit_fare, transit_movements
+from app.planner_discovery import DiscoveryManager, flight_movement, rough_date_windows, tasks_for, transit_fare, transit_movements
 from app.planner_models import Charge, Commitment, FareOffer, Movement, Place, PricingRule, TripSpec, Visit
 from app.planner_optimizer import bounds, optimize, price_path
 from app.planner_store import PlannerStore
@@ -43,6 +43,47 @@ def movement(id, origin, dest, dep, arr, mode="flight", **kwargs):
 
 def fare(id, amount, ids=None, **kwargs):
     return FareOffer(id="fare:"+id, movement_ids=ids or [id], low=amount, high=amount, **kwargs)
+
+
+class DiscoveryDateTests(unittest.TestCase):
+    def test_minimum_stays_narrow_dates_for_both_visit_orders(self):
+        spec = trip(visits=[Visit(place=A, min_stay_hours=72), Visit(place=B, min_stay_hours=72)])
+        spec.end_date = date(2027, 2, 20)
+        windows = rough_date_windows(spec)
+        for city, other in ((A, B), (B, A)):
+            self.assertEqual(windows[HOME.id, city.id][1].date(), date(2027, 2, 14))
+            self.assertEqual(windows[city.id, other.id][0].date(), date(2027, 2, 13))
+            self.assertEqual(windows[city.id, other.id][1].date(), date(2027, 2, 17))
+            self.assertEqual(windows[city.id, HOME.id][0].date(), date(2027, 2, 16))
+        with patch("app.planner_discovery.transitous.contact_url", "https://example.test"):
+            queue = tasks_for(spec)
+        keys = [q["key"] for q in queue]
+        self.assertEqual(len(keys), len(set(keys)))
+        for q in queue:
+            if q["kind"] == "transit":
+                low, high = windows[q["from_id"], q["to_id"]]
+                self.assertLessEqual(low.date().isoformat(), q["date"])
+                self.assertLessEqual(q["date"], high.date().isoformat())
+
+    def test_impossible_stay_total_does_not_query_schedules(self):
+        spec = trip(visits=[Visit(place=A, min_stay_hours=72), Visit(place=B, min_stay_hours=72)])
+        self.assertEqual(rough_date_windows(spec), {})
+        with patch("app.planner_discovery.transitous.contact_url", "https://example.test"):
+            self.assertEqual(tasks_for(spec), [{"kind": "road", "key": "road"}])
+
+    def test_timezone_edge_date_and_gateway_visit_are_kept(self):
+        home = HOME.model_copy(update={"timezone": "Asia/Kuala_Lumpur"})
+        korea = A.model_copy(update={"timezone": "Asia/Seoul"})
+        spec = TripSpec(home=home, departures=[korea], arrivals=[home],
+                        visits=[Visit(place=korea, min_stay_hours=72)],
+                        start_date=date(2027, 2, 5), end_date=date(2027, 2, 14))
+        windows = rough_date_windows(spec)
+        self.assertEqual(windows[korea.id, home.id][0].astimezone(ZoneInfo(korea.timezone)).date(), date(2027, 2, 8))
+        self.assertEqual(windows[korea.id, home.id][1].astimezone(ZoneInfo(korea.timezone)).date(), date(2027, 2, 15))
+
+    def test_own_car_recovery_keeps_broad_windows(self):
+        spec = trip(cars={"own_enabled": True})
+        self.assertEqual(rough_date_windows(spec), {pair: bounds(spec) for pair in itertools.permutations(spec.places(), 2)})
 
 
 class OptimizerTests(unittest.TestCase):
@@ -192,6 +233,18 @@ class OptimizerTests(unittest.TestCase):
 
 
 class ProviderNormalizationTests(unittest.TestCase):
+    def test_bundle_leg_building_loads_catalog_once(self):
+        from app.planner_discovery import iata_metros, make_leg
+        iata_metros.cache_clear()
+        self.addCleanup(iata_metros.cache_clear)
+        origin = HOME.model_copy(update={"flight_code": "PEN", "airport_codes": ["PEN"]})
+        dest = A.model_copy(update={"flight_code": "SEL", "airport_codes": ["ICN"]})
+        with patch("airportsdata.load_iata_macs", return_value={"SEL": {"airports": {"ICN": {}, "GMP": {}}}}) as load:
+            for _ in range(100):
+                leg = make_leg(origin, dest, "2027-02-10")
+                self.assertEqual(leg["to_airports"], ["GMP", "ICN"])
+            load.assert_called_once()
+
     def test_flight_provider_keeps_unknown_schedules_and_checks_complete_bundles(self):
         from app.planner_providers import fetch_flights
         leg = {"from_id": "KUL", "to_id": "SIN", "date": "2027-02-10", "from_code": "KUL", "to_code": "SIN", "from_airports": ["KUL"], "to_airports": ["SIN"], "timezone": "Asia/Kuala_Lumpur"}
@@ -247,6 +300,55 @@ class PersistenceAndJobsTests(unittest.IsolatedAsyncioTestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.db = PlannerStore(Path(self.temp.name)/"planner.sqlite3")
+
+    async def test_bundle_preparation_reuses_legs_and_deduplicates_queries(self):
+        from app.planner_discovery import make_leg
+        spec = trip()
+        record = self.db.new_trip(spec.model_dump(mode="json"))
+        snapshot = {"revision": 1, "movements": [], "offers": [], "roads": {}, "coverage": {}}
+        job = {"id": "bundle-test", "trip_id": record["id"], "discovery_key": spec.discovery_key(),
+               "snapshot": snapshot, "queue": [], "cursor": 0, "requests": 0, "cache_hits": 0,
+               "outcomes": {}, "messages": [], "bundle_links": []}
+        out = {"from_id": HOME.id, "to_id": A.id, "segments": [{"mode": "flight", "departure": dt(10).isoformat()}]}
+        back = {"from_id": A.id, "to_id": HOME.id, "segments": [{"mode": "flight", "departure": dt(12).isoformat()}]}
+        manager = DiscoveryManager(self.db)
+        manager.recalculate = AsyncMock(return_value={"bundle_candidates": [[out, back] for _ in range(300)]})
+        with patch("app.planner_discovery.iata_metros", return_value={}), patch("app.planner_discovery.make_leg", wraps=make_leg) as build:
+            await manager.publish(job, spec)
+            self.assertEqual(build.call_count, 2)
+        self.assertEqual(len(job["queue"]), 2)
+        self.assertEqual({t["ticket_kind"] for t in job["queue"]}, {"multi-city", "round-trip"})
+        self.assertEqual(len({t["key"] for t in job["queue"]}), 2)
+
+    async def test_publish_reuses_unchanged_graph_but_recalculates_new_fares(self):
+        spec = trip(modes=["rail"])
+        record = self.db.new_trip(spec.model_dump(mode="json"))
+        movements = [movement("out", HOME, A, dt(10), dt(10, 10), mode="rail"),
+                     movement("back", A, HOME, dt(12, 16), dt(12, 17), mode="rail")]
+        snapshot = {"revision": 1, "movements": [m.model_dump(mode="json") for m in movements],
+                    "offers": [fare("out", 20).model_dump(mode="json"), fare("back", 20).model_dump(mode="json")],
+                    "roads": {}, "coverage": {}}
+        job = {"id": "reuse-test", "trip_id": record["id"], "discovery_key": spec.discovery_key(),
+               "snapshot": snapshot, "queue": [], "cursor": 0, "requests": 0, "cache_hits": 0,
+               "outcomes": {}, "messages": [], "bundle_links": []}
+        manager = DiscoveryManager(self.db)
+        manager.recalculate = AsyncMock(wraps=manager.recalculate)
+        with patch("app.planner_discovery.transitous.contact_url", "https://example.test"):
+            await manager.publish(job, spec)
+            snapshot["revision"] += 1  # An empty query only changes coverage/revision.
+            await manager.publish(job, spec)
+            self.assertEqual(manager.recalculate.await_count, 1)
+            saved = self.db.get("trips", record["id"])
+            self.assertEqual(saved["result"]["snapshot_revision"], snapshot["revision"])
+            self.assertEqual(saved["result"]["routes"][0]["total_cost_myr"], 40)
+            snapshot["offers"][0].update(low=30, high=30)
+            await manager.publish(job, spec)
+            self.assertEqual(manager.recalculate.await_count, 2)
+            saved = self.db.get("trips", record["id"])
+            self.assertEqual(saved["result"]["routes"][0]["total_cost_myr"], 50)
+            snapshot["label_limit"] = 50000
+            await manager.publish(job, spec)
+            self.assertEqual(manager.recalculate.await_count, 3)
 
     async def test_restart_preserves_rules_edits_and_recovers_jobs(self):
         record = self.db.new_trip(trip().model_dump(mode="json"))

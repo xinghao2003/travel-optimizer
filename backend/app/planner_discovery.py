@@ -10,6 +10,7 @@ import os
 import time as clock
 import uuid
 from datetime import date, datetime, time, timedelta, timezone
+from functools import lru_cache
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -34,10 +35,21 @@ def timestamp(value):
     return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(UTC)
 
 
-def airport_places(spec):
+@lru_cache(maxsize=1)
+def iata_airports():
     import airportsdata
-    airports = airportsdata.load("IATA")
-    metros = airportsdata.load_iata_macs()
+    return airportsdata.load("IATA")
+
+
+@lru_cache(maxsize=1)
+def iata_metros():
+    import airportsdata
+    return airportsdata.load_iata_macs()
+
+
+def airport_places(spec):
+    airports = iata_airports()
+    metros = iata_metros()
     result = {}
     for city in spec.places().values():
         for code in set(city.airport_codes) | set(metros.get(city.flight_code, {}).get("airports", {})):
@@ -53,14 +65,53 @@ def seed_dates(spec):
     return [spec.start_date+timedelta(days=round(days*i/max(1, n-1))) for i in range(n)]
 
 
+def rough_date_windows(spec):
+    """Optimistic pair windows using only minimum stays, with zero travel time.
+
+    Union all gateway/visit orders so a pair remains searchable whenever any
+    order might work. Exact schedules, buffers and commitments belong to the DP.
+    """
+    start, end = bounds(spec)
+    # Own-car recovery can introduce detours outside the simple gateway paths.
+    if spec.cars.own_enabled:
+        return {pair: (start, end) for pair in itertools.permutations(spec.places(), 2)}
+    stays = {v.place.id: v.min_stay_hours for v in spec.visits}
+    windows = {}
+    for order in itertools.permutations(stays):
+        for departure in spec.departures:
+            for arrival in spec.arrivals:
+                path = [spec.home.id, departure.id, *(id for id in order if id != departure.id), arrival.id, spec.home.id]
+                path = [id for i, id in enumerate(path) if i == 0 or id != path[i-1]]
+                unspent = set(stays)
+                elapsed = 0
+                for a, b in zip(path, path[1:]):
+                    if a in unspent:
+                        elapsed += stays[a]
+                        unspent.remove(a)
+                    earliest = start+timedelta(hours=elapsed)
+                    latest = end-timedelta(hours=sum(stays[id] for id in unspent))
+                    if earliest > latest:
+                        continue
+                    old = windows.get((a, b), (earliest, latest))
+                    windows[a, b] = (min(old[0], earliest), max(old[1], latest))
+    return windows
+
+
 def tasks_for(spec):
     places = spec.places()
     pairs = list(itertools.permutations(places, 2))
+    windows = rough_date_windows(spec)
     tasks = [{"kind": "road", "key": "road"}] if any(m in {"flight", "car", "taxi"} for m in spec.modes) else []
     seen = {"road"}
     has_transit = bool(transitous.contact_url) and any(mode in TRANSIT_MODES for mode in spec.modes)
 
     def task(a, b, day, kind):
+        window = windows.get((a, b))
+        if window is None:
+            return
+        zone = ZoneInfo(places[a].timezone)
+        if not window[0].astimezone(zone).date() <= day <= window[1].astimezone(zone).date():
+            return
         key = stable_id(kind, a, b, day.isoformat())
         if key in seen:
             return
@@ -101,8 +152,7 @@ def tasks_for(spec):
 
 
 def make_leg(origin, dest, day):
-    import airportsdata
-    metros = airportsdata.load_iata_macs()
+    metros = iata_metros()
     origin_airports = sorted(set(origin.airport_codes) | set(metros.get(origin.flight_code, {}).get("airports", {})))
     dest_airports = sorted(set(dest.airport_codes) | set(metros.get(dest.flight_code, {}).get("airports", {})))
     return {"from_id": origin.id, "to_id": dest.id, "date": day,
@@ -356,6 +406,7 @@ class DiscoveryManager:
         self.cancelled_jobs = set()
         self.query_locks = {}
         self.optimization_locks = {}
+        self.published_inputs = {}
         self.http_limit = asyncio.Semaphore(2)
 
     def rules(self):
@@ -631,13 +682,35 @@ class DiscoveryManager:
         self.store.put("trips", trip["id"], trip)
         if job["id"] in self.cancelled_jobs:
             return
-        result = await self.recalculate(trip["id"], snapshot, job_id=job["id"])
+        # Empty/unsupported provider responses still update coverage, but do not
+        # change the optimization problem. Avoid solving the same graph again.
+        pricing_rules = self.store.list("rules")
+        now = datetime.now(UTC)
+        inputs = stable_id(trip["revision"], trip["spec"], trip.get("offers", []),
+                           trip.get("airport_connections", []), pricing_rules,
+                           snapshot["movements"], snapshot.get("offers", []),
+                           snapshot.get("roads", {}), snapshot.get("label_limit"),
+                           [o.get("expires_at") is not None and timestamp(o["expires_at"]) < now
+                            for o in snapshot.get("offers", [])])
+        if self.published_inputs.get(job["id"]) == inputs and trip.get("result"):
+            logger.debug("planner optimize.reuse job=%s reason=unchanged_inputs", job["id"])
+            result = copy.deepcopy(trip["result"])
+            result.update(snapshot_revision=snapshot["revision"], coverage=snapshot.get("coverage", {}))
+            trip["result"] = result
+            self.store.put("trips", trip["id"], trip)
+        else:
+            result = await self.recalculate(trip["id"], snapshot, job_id=job["id"])
         known = {t["key"] for t in job["queue"]}
         # Include dominated complete histories too: an undiscovered bundle can
         # make them cheaper than the current one-way frontier.
         logger.debug("planner bundles.enqueue.start job=%s candidates=%d elapsed=%.2fs", job["id"], len(result.get("bundle_candidates", [])), clock.monotonic()-started)
+        bundle_started = clock.monotonic()
+        places = spec.places()
+        leg_cache = {}
+        seen_tickets = set()
+        added = 0
         for candidate_index, flights in enumerate(result.pop("bundle_candidates", [])):
-            if candidate_index % 100 == 0:
+            if candidate_index % 32 == 0:
                 await asyncio.sleep(0)
             candidates = [("multi-city", flights)]
             for i, first in enumerate(flights):
@@ -645,18 +718,29 @@ class DiscoveryManager:
                     if first["from_id"] == last["to_id"] and first["to_id"] == last["from_id"]:
                         candidates.append(("round-trip", [first, last]))
             for kind, selected in candidates:
-                legs = []
+                signature = []
                 for m in selected:
-                    origin, dest = spec.places()[m["from_id"]], spec.places()[m["to_id"]]
+                    origin = places[m["from_id"]]
                     actual = next(s for s in m["segments"] if s["mode"] == "flight")
                     day = timestamp(actual["departure"]).astimezone(ZoneInfo(origin.timezone)).date().isoformat()
-                    legs.append(make_leg(origin, dest, day))
+                    signature.append((m["from_id"], m["to_id"], day))
+                ticket = (kind, tuple(signature))
+                if ticket in seen_tickets:
+                    continue
+                seen_tickets.add(ticket)
+                legs = []
+                for a, b, day in signature:
+                    if (a, b, day) not in leg_cache:
+                        leg_cache[a, b, day] = make_leg(places[a], places[b], day)
+                    legs.append(leg_cache[a, b, day])
                 key = stable_id(kind, legs)
                 if key not in known:
                     known.add(key)
                     # Put a discovered ticket opportunity next, keeping progress
                     # deterministic and the provider request budget authoritative.
                     job["queue"].insert(job["cursor"], {"kind": "bundle", "ticket_kind": kind, "key": key, "legs": legs})
+                    added += 1
+        logger.debug("planner bundles.enqueue.done job=%s unique_tickets=%d unique_legs=%d added=%d elapsed=%.3fs", job["id"], len(seen_tickets), len(leg_cache), added, clock.monotonic()-bundle_started)
         snapshot["coverage"]["pending"] = len(job["queue"])-job["cursor"]
         snapshot["coverage"]["discovery_complete"] = discovery_complete and job["cursor"] == len(job["queue"])
         logger.debug("planner graph.persist job=%s elapsed=%.2fs movements=%d", job["id"], clock.monotonic()-started, len(snapshot["movements"]))
@@ -672,6 +756,7 @@ class DiscoveryManager:
                 latest["result"]["coverage"] = trip_snapshot.get("coverage", {})
             self.store.put("trips", trip["id"], latest)
 
+        self.published_inputs[job["id"]] = inputs
         logger.debug("planner publish.done job=%s queue=%d elapsed=%.2fs", job["id"], len(job["queue"]), clock.monotonic()-started)
 
     async def run(self, job, spec):
@@ -751,6 +836,7 @@ class DiscoveryManager:
         finally:
             self.running.pop(job["id"], None)
             self.live_jobs.pop(job["id"], None)
+            self.published_inputs.pop(job["id"], None)
 
     async def close(self):
         pending = list(self.running.values())

@@ -29,6 +29,23 @@ class UpdateAirportConnections(BaseModel):
     connections: list[AirportConnection] = Field(default_factory=list, max_length=120)
 
 
+class SharedFareValues(BaseModel):
+    component_ids: list[str] = Field(min_length=1, max_length=5000)
+    low: float = Field(ge=0, allow_inf_nan=False)
+    high: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    currency: str = Field(default="MYR", pattern=r"^[A-Za-z]{3}$")
+    label: str = Field(default="Shared transfer estimate", max_length=200)
+
+
+class SharedFareRequest(SharedFareValues):
+    expected_revision: int
+
+
+class SharedEstimatesRequest(BaseModel):
+    estimates: list[SharedFareValues] = Field(min_length=1, max_length=5000)
+    expected_revision: int
+
+
 def get_trip(id):
     trip = store.get("trips", id)
     if trip is None:
@@ -163,6 +180,51 @@ async def edit_fare(id: str, offer_id: str, offer: FareOffer):
         return record
     store.update("trips", id, update)
     return await recalculate(id)
+
+
+async def save_shared_estimates(id: str, estimates: list[SharedFareValues], expected_revision: int):
+    trip = get_trip(id)
+    if trip["revision"] != expected_revision:
+        raise HTTPException(409, "This trip changed. Reload it before saving.")
+    component_ids = [key for estimate in estimates for key in estimate.component_ids]
+    ids = set(component_ids)
+    if len(ids) != len(component_ids):
+        raise HTTPException(422, "Fare components must be unique across saved estimates.")
+    if any(e.high is not None and e.high < e.low for e in estimates):
+        raise HTTPException(422, "Maximum fare must be at least the minimum.")
+    result = trip.get("result") or {}
+    movements = [*(trip.get("snapshot") or {}).get("movements", []),
+                 *(m for route in [*result.get("routes", []), *result.get("refinement_routes", [])] for m in route["movements"])]
+    charges = {c["id"] for m in movements for c in m.get("charges", [])}
+    charges.update(c["id"] for route in [*result.get("routes", []), *result.get("refinement_routes", [])] for c in route.get("extra_charges", []))
+    known = {m["id"] for m in movements} | charges
+    if not ids.issubset(known):
+        raise HTTPException(422, "Every fare component must belong to this trip.")
+    # Each amount is per component, never a bundle price for their union.
+    adults = TripSpec.model_validate(trip["spec"]).adults
+    offers = [FareOffer(id="user:"+key, movement_ids=[key], kind="charge" if key in charges else "one-way",
+                        low=e.low, high=e.high, currency=e.currency, source="user",
+                        adults=adults, estimated=True, label=e.label).model_dump(mode="json")
+              for e in estimates for key in e.component_ids]
+    def update(record):
+        if record["revision"] != expected_revision:
+            raise HTTPException(409, "This trip changed. Reload it before saving.")
+        replaced = {o["id"] for o in offers}
+        record["offers"] = [o for o in record["offers"] if o["id"] not in replaced] + offers
+        record["revision"] += 1
+        return record
+    store.update("trips", id, update)
+    return await recalculate(id)
+
+
+@router.post("/trips/{id}/fares/batch")
+async def apply_shared_fare(id: str, request: SharedFareRequest):
+    return await save_shared_estimates(id, [request], request.expected_revision)
+
+
+@router.post("/trips/{id}/fares/estimates")
+async def apply_shared_estimates(id: str, request: SharedEstimatesRequest):
+    return await save_shared_estimates(id, request.estimates, request.expected_revision)
 
 
 @router.delete("/trips/{id}/fares/{offer_id}")

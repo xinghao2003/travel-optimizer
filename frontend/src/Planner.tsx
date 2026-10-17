@@ -3,6 +3,8 @@ import { Compass, LoaderCircle, Play, Plus, Save, Square, ArrowRight, RefreshCw 
 import { Button } from "./components/ui/button";
 import { AdvancedSettings, FareEditor, Field, NumberField, PlaceChips, PlacePicker, RulesEditor } from "./components/PlannerForms";
 import { PositioningSettings } from "./components/PositioningSettings";
+import { MissingFaresTable, type SharedFare } from "./components/MissingFaresTable";
+import { groupMissingFares } from "./lib/missingFares";
 import { api, blankTrip, localTime, modes, money, routeCost, type AirportConnection, type AirportConnectionRequirement, type AirportTransferMode, type Job, type Movement, type Offer, type Place, type PricingRule, type Result, type Route, type SavedSummary, type SavedTrip, type TripDraft, type TripSpec } from "./lib/planner";
 import "./planner.css";
 
@@ -172,7 +174,6 @@ export default function Planner() {
   const [comparisonId, setComparisonId] = useState<string | null>(null);
   const [ranking, setRanking] = useState("cheapest");
   const [routePage, setRoutePage] = useState(0);
-  const [farePage, setFarePage] = useState(0);
   const [budget, setBudget] = useState(100);
   const [busy, setBusy] = useState(false);
   const [loadingTrip, setLoadingTrip] = useState(true);
@@ -188,7 +189,7 @@ export default function Planner() {
   const session = useRef(0);
   const places = useMemo(() => [...new Map([...(draft.home ? [draft.home] : []), ...draft.departures, ...draft.arrivals, ...draft.visits.map(v => v.place)].map(p => [p.id, p])).values()], [draft]);
   const byId = useMemo(() => new Map(places.map(p => [p.id, p])), [places]);
-  const placeName = (id: string) => byId.get(id)?.name ?? id;
+  const placeName = (id: string) => byId.get(id)?.name ?? (id.startsWith("airport:") ? `${id.slice(8)} airport` : id);
 
   function edit(value: TripDraft) {
     const validPositioning = (item: { direction: "outbound" | "return"; gateway_id: string }) =>
@@ -315,6 +316,12 @@ export default function Planner() {
     const next = await api<SavedTrip>(`/trips/${record.id}`);
     if (savedRef.current?.id === record.id) { accept(next); acceptResult(updated, record.id); setSaveStatus("Fare saved · frontier recalculated"); }
   }
+  async function applySharedFares(estimates: SharedFare[]) {
+    const record = await saveSpec();
+    const updated = await api<Result>(`/trips/${record.id}/fares/estimates`, "POST", { estimates, expected_revision: record.revision });
+    const next = await api<SavedTrip>(`/trips/${record.id}`);
+    if (savedRef.current?.id === record.id) { accept(next); acceptResult(updated, record.id); setSaveStatus("Shared estimates saved · frontier recalculated"); }
+  }
   async function removePrice(id: string) {
     if (!savedRef.current) return;
     const tripId = savedRef.current.id;
@@ -334,9 +341,11 @@ export default function Planner() {
     const score = (r: Route) => r.total_cost_myr === null ? Infinity : (maxCost > minCost ? (r.total_cost_myr - minCost) / (maxCost - minCost) : 0) + (maxStay > minStay ? (maxStay - r.stay_hours) / (maxStay - minStay) : 0);
     return items.sort((a, b) => ranking === "stay" ? b.stay_hours - a.stay_hours || a.cost_low_myr - b.cost_low_myr : ranking === "balanced" ? score(a) - score(b) || a.cost_low_myr - b.cost_low_myr : Number(a.provisional) - Number(b.provisional) || a.cost_low_myr - b.cost_low_myr || b.stay_hours - a.stay_hours);
   }, [result, ranking]);
-  const missingFares = (result?.missing_fares ?? []).filter(fare => !fare.label.startsWith("Airport transfer "));
+  const missingFareGroups = useMemo(() => groupMissingFares(
+    (result?.missing_fares ?? []).filter(fare => !fare.label.startsWith("Airport transfer ")),
+    [...(result?.routes ?? []), ...(result?.refinement_routes ?? [])],
+  ), [result]);
   useEffect(() => { setRoutePage(p => Math.min(p, Math.max(0, Math.ceil(routes.length / 40) - 1))); }, [routes.length]);
-  useEffect(() => { setFarePage(p => Math.min(p, Math.max(0, Math.ceil(missingFares.length / 25) - 1))); }, [missingFares.length]);
   const selected = routes.find(r => r.id === selectedId) ?? result?.refinement_routes?.find(r => r.id === selectedId) ?? routes[0] ?? null;
   const compare = routes.find(r => r.id === comparisonId) ?? null;
   const active = !!job && ["running", "queued"].includes(job.status);
@@ -380,9 +389,9 @@ export default function Planner() {
 
     {result && <>
       {(result.discovery_required || dirty) && <div className="p-notice">{dirty ? "Trip changes are being saved; displayed results belong to the previous revision." : "Transport discovery is needed for these trip inputs. Saved fare edits remain available."}</div>}
-      {missingFares.length > 0 && <section className="p-panel"><div className="p-panel-heading"><div><span className="p-step">03</span><h2>Refine important missing fares</h2></div><span className="p-tag">Optional</span></div><p>Explore preliminary options now, or price the components that affect the most potential frontier itineraries.</p><div className="p-missing-list">{missingFares.slice(farePage * 25, (farePage + 1) * 25).map(f => <div key={f.component_id}><div><strong>{placeName(f.from_id)} → {placeName(f.to_id)} · {f.label}</strong><small>{f.affected_itineraries} potential alternatives{f.break_even_myr !== null ? ` · reference break-even ${money(f.break_even_myr)}` : ""}{f.reason === "exchange_rate" ? ` · add a ${f.currency} exchange rate above` : ""}</small></div><FareEditor componentId={f.component_id} label={`${placeName(f.from_id)} to ${placeName(f.to_id)} ${f.label}`} offer={offerFor(f.component_id)} onSave={updatePrice} onRemove={removePrice} /></div>)}</div>{missingFares.length > 25 && <div className="p-actions"><Button type="button" size="sm" variant="secondary" disabled={farePage === 0} onClick={() => setFarePage(p => Math.max(0, p - 1))}>Previous missing fares</Button><span>{missingFares.length} components · page {farePage + 1}</span><Button type="button" size="sm" variant="secondary" disabled={(farePage + 1) * 25 >= missingFares.length} onClick={() => setFarePage(p => p + 1)}>Next missing fares</Button></div>}</section>}
 
       {saved && <AirportConnectionsTable key={saved.id} tripId={saved.id} requirements={saved.airport_connections_required ?? coverage?.airport_connections_required ?? noAirportConnectionRequirements} connections={saved.airport_connections ?? noAirportConnections} report={setError} onSaved={(record, updated) => { accept(record); acceptResult(updated, record.id); setSaveStatus("Airport connections saved · frontier recalculated"); }} />}
+      {missingFareGroups.length > 0 && <MissingFaresTable key={saved?.id} storageKey={`wayfinder:pending-estimates:${saved?.id}`} groups={missingFareGroups} placeName={placeName} offerFor={offerFor} onApply={applySharedFares} onSave={updatePrice} onRemove={removePrice} />}
       {!!unresolvedAccess.length && <details className="p-panel"><summary>{unresolvedAccess.length} retrieved journeys need airport access timing</summary>{unresolvedAccess.map(m => <p key={m.id}>{placeName(m.from_id)} → {placeName(m.to_id)}: {m.assumptions.join(" · ")}</p>)}</details>}
       <section className="p-panel" aria-labelledby="frontier-title"><div className="p-panel-heading"><div><span className="p-step">04</span><h2 id="frontier-title">Your cost–time frontier</h2></div><span className="p-tag">{routes.length} alternatives</span></div><p>{coverage?.discovery_complete ? "Discovery queue exhausted" : "Preliminary discovery"} · {result.optimization_complete ? "Optimization complete for this snapshot" : "Optimization incomplete"} · snapshot {result.snapshot_revision}</p><p className="p-hint">Circles: priced offers. Diamonds: estimates. Horizontal bands: fare ranges; their selection marker is the midpoint, not an expected price. Unknown totals stay in the list below. Optimality covers retrieved options and stated assumptions.</p>
         <ParetoExplorer routes={routes} selected={selected?.id ?? null} onSelect={setSelectedId} />

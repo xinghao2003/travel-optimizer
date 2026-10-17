@@ -170,6 +170,27 @@ class Charge(Contract):
     country_code: str | None = None
 
 
+AirportTransferMode = Literal["rail", "bus", "coach", "subway", "tram", "car", "taxi"]
+
+
+class AirportConnection(Contract):
+    from_airport: str = Field(pattern=r"^[A-Za-z]{3}$")
+    to_airport: str = Field(pattern=r"^[A-Za-z]{3}$")
+    mode: AirportTransferMode
+    duration_minutes: float = Field(gt=0)
+    fare_amount: float | None = Field(default=None, ge=0)
+    currency: str = Field(default="MYR", pattern=r"^[A-Za-z]{3}$")
+
+    @model_validator(mode="after")
+    def normalize_connection(self):
+        self.from_airport = self.from_airport.upper()
+        self.to_airport = self.to_airport.upper()
+        self.currency = self.currency.upper()
+        if self.from_airport == self.to_airport:
+            raise ValueError("An airport connection must join two different airports.")
+        return self
+
+
 class Movement(Contract):
     id: str
     template_id: str | None = None

@@ -84,7 +84,8 @@ class PlannerStore:
 
     def new_trip(self, spec: dict):
         id = uuid.uuid4().hex
-        return self.put("trips", id, {"id": id, "revision": 1, "spec": spec, "snapshot": None, "latest_job_id": None, "offers": []})
+        return self.put("trips", id, {"id": id, "revision": 1, "spec": spec, "snapshot": None,
+                                       "latest_job_id": None, "offers": [], "airport_connections": []})
 
     def recover(self):
         for job in self.list("jobs"):

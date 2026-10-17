@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import itertools
 import math
 import os
@@ -12,7 +13,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
-from .planner_models import Charge, FareOffer, Movement, Place, PricingRule, Segment, TripSpec, stable_id
+from .planner_models import AirportConnection, Charge, FareOffer, Movement, Place, PricingRule, Segment, TripSpec, stable_id
 from .planner_optimizer import bounds, optimize
 from .planner_providers import fetch_flights
 from .planner_store import PlannerStore, store
@@ -106,12 +107,13 @@ def make_leg(origin, dest, day):
             "from_airports": origin_airports, "to_airports": dest_airports, "timezone": origin.timezone}
 
 
-def flight_movement(origin, dest, segments, spec, roads):
+def flight_movement(origin, dest, segments, spec, roads, airport_connections=None):
     raw_departure, raw_arrival = timestamp(segments[0]["departure"]), timestamp(segments[-1]["arrival"])
     id = "flight:"+stable_id(origin.id, dest.id, segments, spec.adults)
     normalized = [Segment.model_validate(s) for s in segments]
     assumptions = []
     charges = []
+    airport_connections = airport_connections or {}
     access_minutes = []
     usable = True
     for kind, city, airport, reverse in (("access", origin, segments[0]["from_id"], False), ("egress", dest, segments[-1]["to_id"], True)):
@@ -150,15 +152,46 @@ def flight_movement(origin, dest, segments, spec, roads):
         if i:
             previous = flights[i-1]
             airport_change = previous.to_id != flight.from_id
-            gap = (flight.departure-previous.arrival).total_seconds()
-            if gap > 0:
-                chronology.append(Segment(mode="transfer" if airport_change else "wait", from_name=previous.to_name, to_name=flight.from_name,
-                                          departure=previous.arrival, arrival=flight.departure, duration_minutes=gap/60,
-                                          from_timezone=previous.to_timezone, to_timezone=flight.from_timezone,
-                                          source="Airport change needs confirmation" if airport_change else "Scheduled connection", assumed=airport_change))
             if airport_change:
-                usable = False
-                assumptions.append(f"Airport change {previous.to_id} → {flight.from_id}: provide a verified connection before using this journey")
+                gap_minutes = (flight.departure-previous.arrival).total_seconds()/60
+                connection = airport_connections.get((previous.to_id, flight.from_id))
+                if connection and connection.duration_minutes <= gap_minutes:
+                    transfer_arrival = previous.arrival+timedelta(minutes=connection.duration_minutes)
+                    chronology.append(Segment(mode=connection.mode, from_name=previous.to_name, to_name=flight.from_name,
+                                              departure=previous.arrival, arrival=transfer_arrival,
+                                              duration_minutes=connection.duration_minutes, from_id=previous.to_id,
+                                              to_id=flight.from_id, from_timezone=previous.to_timezone,
+                                              to_timezone=flight.from_timezone, source="User-verified airport transfer", assumed=True))
+                    remaining_minutes = gap_minutes-connection.duration_minutes
+                    if remaining_minutes > 0:
+                        chronology.append(Segment(mode="wait", from_name=flight.from_name, to_name=flight.from_name,
+                                                  departure=transfer_arrival, arrival=flight.departure,
+                                                  duration_minutes=remaining_minutes, from_id=flight.from_id,
+                                                  to_id=flight.from_id, from_timezone=flight.from_timezone,
+                                                  to_timezone=flight.from_timezone, source="Layover after airport transfer", assumed=True))
+                    charges.append(Charge(id=f"{id}:airport-transfer:{i}", kind=f"Airport transfer {previous.to_id} → {flight.from_id}",
+                                          mode=connection.mode, low=connection.fare_amount, high=connection.fare_amount,
+                                          currency=connection.currency, source="user", from_id=f"airport:{previous.to_id}",
+                                          to_id=f"airport:{flight.from_id}"))
+                else:
+                    if gap_minutes > 0:
+                        chronology.append(Segment(mode="transfer", from_name=previous.to_name, to_name=flight.from_name,
+                                                  departure=previous.arrival, arrival=flight.departure, duration_minutes=gap_minutes,
+                                                  from_timezone=previous.to_timezone, to_timezone=flight.from_timezone,
+                                                  source="Airport change needs confirmation" if not connection else "Airport transfer exceeds available layover",
+                                                  assumed=True))
+                    usable = False
+                    if connection:
+                        assumptions.append(f"Airport connection {previous.to_id} → {flight.from_id} needs {connection.duration_minutes:g} minutes but only {max(0, gap_minutes):g} are available")
+                    else:
+                        assumptions.append(f"Airport change {previous.to_id} → {flight.from_id}: add a verified connection before using this journey")
+            else:
+                gap_minutes = (flight.departure-previous.arrival).total_seconds()/60
+                if gap_minutes > 0:
+                    chronology.append(Segment(mode="wait", from_name=previous.to_name, to_name=flight.from_name,
+                                              departure=previous.arrival, arrival=flight.departure, duration_minutes=gap_minutes,
+                                              from_timezone=previous.to_timezone, to_timezone=flight.from_timezone,
+                                              source="Scheduled connection"))
         chronology.append(flight)
     if spec.timing.flight_after_minutes:
         chronology.append(Segment(mode="wait", from_name=flights[-1].to_name, to_name=flights[-1].to_name, departure=raw_arrival,
@@ -172,6 +205,56 @@ def flight_movement(origin, dest, segments, spec, roads):
     return Movement(id=id, from_id=origin.id, to_id=dest.id, mode="flight", departure=dep, arrival=arr, usable=usable,
                     duration_minutes=(arr-dep).total_seconds()/60, transfers=len(segments)-1,
                     segments=chronology, charges=charges, source="Google Flights / fast-flights", assumptions=assumptions)
+
+
+def shareable_snapshot(snapshot, spec):
+    """Remove trip-scoped airport-transfer overlays before caching a graph by discovery key."""
+    shared = copy.deepcopy(snapshot)
+    places = spec.places()
+    for raw in shared.get("movements", []):
+        movement = Movement.model_validate(raw)
+        if movement.source != "Google Flights / fast-flights" or movement.from_id not in places or movement.to_id not in places:
+            continue
+        flights = [segment.model_dump(mode="json") for segment in movement.segments if segment.mode == "flight"]
+        rebuilt = flight_movement(places[movement.from_id], places[movement.to_id], flights, spec, shared.get("roads", {}))
+        if rebuilt is None:
+            continue
+        rebuilt.id = movement.id
+        rebuilt.search_url = movement.search_url
+        for charge in rebuilt.charges:
+            if charge.kind == "Airport access":
+                charge.id = movement.id+":access"
+            elif charge.kind == "Airport egress":
+                charge.id = movement.id+":egress"
+        raw.clear()
+        raw.update(rebuilt.model_dump(mode="json"))
+    shared.setdefault("coverage", {})["unresolved_movements"] = [
+        {"id": movement["id"], "from_id": movement["from_id"], "to_id": movement["to_id"], "assumptions": movement["assumptions"]}
+        for movement in shared.get("movements", []) if not movement.get("usable", True)
+    ]
+    return shared
+
+
+def required_airport_connections(movements):
+    airport_pairs = {}
+    for movement in movements:
+        if movement.get("source") != "Google Flights / fast-flights":
+            continue
+        flights = [segment for segment in movement.get("segments", []) if segment.get("mode") == "flight"]
+        for previous, following in zip(flights, flights[1:]):
+            from_airport, to_airport = previous.get("to_id"), following.get("from_id")
+            if from_airport and to_airport and from_airport != to_airport:
+                key = (from_airport, to_airport)
+                pair = airport_pairs.setdefault(key, {"from_airport": from_airport, "to_airport": to_airport,
+                                                      "from_name": previous.get("to_name", from_airport),
+                                                      "to_name": following.get("from_name", to_airport),
+                                                      "journey_count": 0, "unresolved_journey_count": 0})
+                pair["journey_count"] += 1
+                unresolved_prefixes = (f"Airport change {from_airport} → {to_airport}:",
+                                       f"Airport connection {from_airport} → {to_airport} ")
+                if any(assumption.startswith(unresolved_prefixes) for assumption in movement.get("assumptions", [])):
+                    pair["unresolved_journey_count"] += 1
+    return sorted(airport_pairs.values(), key=lambda item: (item["from_airport"], item["to_airport"]))
 
 
 def transit_fare(itinerary, adults):
@@ -280,7 +363,11 @@ class DiscoveryManager:
         async with lock:
             trip = self.store.get("trips", trip_id)
             spec = TripSpec.model_validate(trip["spec"])
-            snapshot = snapshot or trip.get("snapshot") or {"revision": 0, "movements": [], "offers": [], "coverage": {}}
+            snapshot = copy.deepcopy(snapshot or trip.get("snapshot") or {"revision": 0, "movements": [], "offers": [], "coverage": {}})
+            airport_connections = {
+                (connection.from_airport, connection.to_airport): connection
+                for connection in (AirportConnection.model_validate(item) for item in trip.get("airport_connections", []))
+            }
             old_movements = snapshot["movements"]
             normalized = []
             for raw in old_movements:
@@ -290,13 +377,17 @@ class DiscoveryManager:
                     continue
                 if movement.source == "Google Flights / fast-flights":
                     segments = [s.model_dump(mode="json") for s in movement.segments if s.mode == "flight"]
-                    updated = flight_movement(spec.places()[movement.from_id], spec.places()[movement.to_id], segments, spec, snapshot.get("roads", {}))
+                    updated = flight_movement(spec.places()[movement.from_id], spec.places()[movement.to_id], segments, spec,
+                                              snapshot.get("roads", {}), airport_connections)
                     if updated is None:
                         continue
                     updated.id = movement.id
                     updated.search_url = movement.search_url
                     for charge in updated.charges:
-                        charge.id = movement.id+(":access" if "access" in charge.kind else ":egress")
+                        if charge.kind == "Airport access":
+                            charge.id = movement.id+":access"
+                        elif charge.kind == "Airport egress":
+                            charge.id = movement.id+":egress"
                     movement = updated
                 elif movement.source == "Transitous / MOTIS" and movement.segments:
                     movement = movement.model_copy(update={"departure": movement.segments[0].departure-timedelta(minutes=spec.timing.transit_before_minutes),
@@ -327,6 +418,7 @@ class DiscoveryManager:
                                              self.rules(), snapshot["revision"], trip["revision"], cancelled, snapshot["label_limit"])
             result["coverage"] = snapshot.get("coverage", {})
             result["coverage"]["unresolved_movements"] = [{"id": m["id"], "from_id": m["from_id"], "to_id": m["to_id"], "assumptions": m["assumptions"]} for m in snapshot["movements"] if not m.get("usable", True)]
+            result["coverage"]["airport_connections_required"] = required_airport_connections(snapshot["movements"])
             result["discovery_required"] = snapshot.get("discovery_key") != spec.discovery_key()
             latest = self.store.get("trips", trip_id)
             if latest["revision"] == trip["revision"] and (not latest.get("snapshot") or latest["snapshot"]["revision"] <= snapshot["revision"]):
@@ -516,7 +608,7 @@ class DiscoveryManager:
                                 "messages": job["messages"][-12:], "bundle_links": job["bundle_links"]}
         snapshot["coverage"]["source_gaps"] = source_gaps
         snapshot["coverage"]["unresolved_movements"] = [{"id": m["id"], "from_id": m["from_id"], "to_id": m["to_id"], "assumptions": m["assumptions"]} for m in snapshot["movements"] if not m.get("usable", True)]
-        self.store.put("graphs", job["discovery_key"], snapshot)
+        self.store.put("graphs", job["discovery_key"], shareable_snapshot(snapshot, spec))
         if TripSpec.model_validate(trip["spec"]).discovery_key() != job["discovery_key"]:
             job["status"] = "superseded"
             return
@@ -549,12 +641,16 @@ class DiscoveryManager:
                     job["queue"].insert(job["cursor"], {"kind": "bundle", "ticket_kind": kind, "key": key, "legs": legs})
         snapshot["coverage"]["pending"] = len(job["queue"])-job["cursor"]
         snapshot["coverage"]["discovery_complete"] = discovery_complete and job["cursor"] == len(job["queue"])
-        self.store.put("graphs", job["discovery_key"], snapshot)
+        self.store.put("graphs", job["discovery_key"], shareable_snapshot(snapshot, spec))
         latest = self.store.get("trips", trip["id"])
         if TripSpec.model_validate(latest["spec"]).discovery_key() == job["discovery_key"]:
-            latest["snapshot"] = snapshot
+            trip_snapshot = latest.get("snapshot") or copy.deepcopy(snapshot)
+            for key in ("processed", "pending", "requests", "cache_hits", "outcomes", "discovery_complete", "messages", "bundle_links", "source_gaps"):
+                if key in snapshot.get("coverage", {}):
+                    trip_snapshot.setdefault("coverage", {})[key] = snapshot["coverage"][key]
+            latest["snapshot"] = trip_snapshot
             if latest.get("result"):
-                latest["result"]["coverage"] = snapshot["coverage"]
+                latest["result"]["coverage"] = trip_snapshot.get("coverage", {})
             self.store.put("trips", trip["id"], latest)
 
     async def run(self, job, spec):

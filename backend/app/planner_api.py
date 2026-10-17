@@ -4,8 +4,8 @@ import asyncio
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from .planner_discovery import manager
-from .planner_models import FareOffer, Movement, PricingRule, TripSpec
+from .planner_discovery import manager, required_airport_connections
+from .planner_models import AirportConnection, FareOffer, Movement, PricingRule, TripSpec
 from .planner_places import search_places
 from .planner_store import store
 
@@ -23,6 +23,10 @@ class SearchRequest(BaseModel):
 
 class OptimizationRequest(BaseModel):
     expand: bool = False
+
+
+class UpdateAirportConnections(BaseModel):
+    connections: list[AirportConnection] = Field(default_factory=list, max_length=120)
 
 
 def get_trip(id):
@@ -51,6 +55,7 @@ async def create_trip(spec: TripSpec):
 @router.get("/trips/{id}")
 async def read_trip(id: str, include_graph: bool = False):
     trip = get_trip(id)
+    trip["airport_connections_required"] = required_airport_connections((trip.get("snapshot") or {}).get("movements", []))
     if not include_graph and trip.get("snapshot"):
         trip["snapshot"] = {k: v for k, v in trip["snapshot"].items() if k not in {"movements", "roads"}} | {"movements": []}
     return trip
@@ -165,6 +170,19 @@ async def delete_fare(id: str, offer_id: str):
     get_trip(id)
     store.update("trips", id, lambda t: {**t, "offers": [o for o in t["offers"] if o["id"] != offer_id], "revision": t["revision"]+1})
     return await recalculate(id)
+
+
+@router.put("/trips/{id}/airport-connections")
+async def update_airport_connections(id: str, request: UpdateAirportConnections):
+    get_trip(id)
+    connections = request.connections
+    keys = [(item.from_airport, item.to_airport) for item in connections]
+    if len(keys) != len(set(keys)):
+        raise HTTPException(422, "Enter each directed airport pair only once.")
+    payload = [item.model_dump(mode="json") for item in connections]
+    store.update("trips", id, lambda trip: {**trip, "airport_connections": payload,
+                                             "revision": trip["revision"]+1})
+    return await manager.recalculate(id)
 
 
 @router.post("/trips/{id}/movements", status_code=201)

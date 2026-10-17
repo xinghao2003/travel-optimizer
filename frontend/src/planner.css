@@ -70,6 +70,18 @@
 .p-missing-list { max-height: 480px; overflow-y: auto; }
 .p-missing-list > div { padding: 12px 0; border-bottom: 1px solid #edf1f0; }
 .p-missing-list small { display: block; margin-top: 4px; }
+.p-airport-table-wrap { overflow-x: auto; margin: 16px 0 10px; }
+.p-airport-table { width: 100%; min-width: 780px; border-collapse: collapse; text-align: left; }
+.p-airport-table th, .p-airport-table td { padding: 9px 8px; border-bottom: 1px solid #edf1f0; vertical-align: middle; }
+.p-airport-table thead th { color: #61777d; font-size: 10px; font-weight: 700; white-space: nowrap; }
+.p-airport-table tbody th { min-width: 155px; color: #21353d; font-size: 12px; }
+.p-airport-table tbody th small { display: block; font-weight: 400; margin-top: 3px; }
+.p-airport-table td:nth-child(2) { color: #61777d; font-size: 12px; text-align: center; }
+.p-airport-table td select, .p-airport-table td input { min-width: 88px !important; height: 34px !important; padding: 5px 7px !important; }
+.p-airport-table td:nth-child(3) select { min-width: 110px !important; }
+.p-airport-table td:nth-child(6) input { min-width: 64px !important; width: 64px !important; text-transform: uppercase; }
+.p-airport-clear { border: 0; border-radius: 6px; background: transparent; color: #71868a; font-size: 18px; padding: 4px 8px; }
+.p-airport-clear:hover { background: #f2f5f4; color: #a64239; }
 .pareto-chart { height: 380px; width: 100%; min-width: 0; }
 .p-route-sort { justify-content: space-between; margin: 14px 0; }
 .p-route-sort .p-field { flex-basis: 270px; }

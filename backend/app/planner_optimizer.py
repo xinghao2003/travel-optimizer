@@ -86,7 +86,10 @@ def price_path(path: list[Movement], offers: list[FareOffer], spec: TripSpec,
         elif not any(o.low is not None for o in direct):
             rule = _rule_offer(id, movement, charge.distance_km if charge else movement.distance_km,
                                charge.mode if charge else movement.mode, spec, rules, charge)
-            if rule:
+            if charge and charge.source == "user" and charge.low is not None:
+                direct = [FareOffer(id="charge:"+id, movement_ids=[id], kind="charge", low=charge.low,
+                                    high=charge.high, currency=charge.currency, source="user", estimated=True, label=charge.kind)]
+            elif rule:
                 direct = [rule]
             elif charge and charge.low is not None:
                 direct = [FareOffer(id="charge:"+id, movement_ids=[id], kind="charge", low=charge.low,

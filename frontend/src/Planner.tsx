@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Compass, LoaderCircle, Play, Plus, Save, Square, ArrowRight, RefreshCw } from "lucide-react";
 import { Button } from "./components/ui/button";
 import { AdvancedSettings, FareEditor, Field, NumberField, PlaceChips, PlacePicker, RulesEditor } from "./components/PlannerForms";
-import { api, blankTrip, localTime, modes, money, routeCost, type Job, type Movement, type Offer, type Place, type PricingRule, type Result, type Route, type SavedSummary, type SavedTrip, type TripDraft, type TripSpec } from "./lib/planner";
+import { api, blankTrip, localTime, modes, money, routeCost, type AirportConnection, type AirportConnectionRequirement, type AirportTransferMode, type Job, type Movement, type Offer, type Place, type PricingRule, type Result, type Route, type SavedSummary, type SavedTrip, type TripDraft, type TripSpec } from "./lib/planner";
 import "./planner.css";
 
 const LazyPareto = lazy(() => import("./components/ParetoExplorer").then(m => ({ default: m.ParetoExplorer })));
@@ -12,6 +12,108 @@ function ParetoExplorer(props: { routes: Route[]; selected: string | null; onSel
 }
 function PlannerMap(props: { places: Place[]; route: Route | null }) {
   return <Suspense fallback={<div className="p-empty">Loading the itinerary map…</div>}><LazyMap {...props} /></Suspense>;
+}
+
+type AirportConnectionDraft = {
+  from_airport: string;
+  to_airport: string;
+  from_name: string;
+  to_name: string;
+  journey_count: number;
+  unresolved_journey_count: number;
+  required: boolean;
+  mode: AirportTransferMode | "";
+  duration_minutes: number | null;
+  fare_amount: number | null;
+  currency: string;
+};
+
+const airportTransferModes: AirportTransferMode[] = modes.filter((mode): mode is AirportTransferMode => mode !== "flight");
+const noAirportConnectionRequirements: AirportConnectionRequirement[] = [];
+const noAirportConnections: AirportConnection[] = [];
+
+function airportConnectionRows(requirements: AirportConnectionRequirement[], connections: AirportConnection[]): AirportConnectionDraft[] {
+  const requiredByPair = new Map(requirements.map(item => [`${item.from_airport}>${item.to_airport}`, item]));
+  const connectionByPair = new Map(connections.map(item => [`${item.from_airport}>${item.to_airport}`, item]));
+  const keys = [...new Set([...requiredByPair.keys(), ...connectionByPair.keys()])].sort();
+  return keys.map(key => {
+    const requirement = requiredByPair.get(key);
+    const connection = connectionByPair.get(key);
+    const [from_airport, to_airport] = key.split(">");
+    return {
+      from_airport, to_airport,
+      from_name: requirement?.from_name ?? from_airport,
+      to_name: requirement?.to_name ?? to_airport,
+      journey_count: requirement?.journey_count ?? 0,
+      unresolved_journey_count: requirement?.unresolved_journey_count ?? 0,
+      required: !!requirement,
+      mode: connection?.mode ?? "",
+      duration_minutes: connection?.duration_minutes ?? null,
+      fare_amount: connection?.fare_amount ?? null,
+      currency: connection?.currency ?? "MYR",
+    };
+  });
+}
+
+function AirportConnectionsTable({ tripId, requirements, connections, onSaved, report }: {
+  tripId: string;
+  requirements: AirportConnectionRequirement[];
+  connections: AirportConnection[];
+  onSaved: (record: SavedTrip, result: Result) => void;
+  report: (message: string) => void;
+}) {
+  const requirementSignature = JSON.stringify(requirements);
+  const connectionSignature = JSON.stringify(connections);
+  const [rows, setRows] = useState<AirportConnectionDraft[]>(() => airportConnectionRows(requirements, connections));
+  const [busy, setBusy] = useState(false);
+  useEffect(() => setRows(airportConnectionRows(requirements, connections)), [tripId, requirementSignature, connectionSignature, requirements, connections]);
+
+  if (!rows.length) return null;
+  const requiredJourneys = requirements.reduce((sum, item) => sum + item.journey_count, 0);
+  const pairKey = (row: Pick<AirportConnectionDraft, "from_airport" | "to_airport">) => `${row.from_airport}>${row.to_airport}`;
+  function updateRow(key: string, change: Partial<AirportConnectionDraft>) {
+    setRows(current => current.map(row => pairKey(row) === key ? { ...row, ...change } : row));
+  }
+  function clearOrRemove(row: AirportConnectionDraft) {
+    if (row.required) updateRow(pairKey(row), { mode: "", duration_minutes: null, fare_amount: null, currency: "MYR" });
+    else setRows(current => current.filter(item => pairKey(item) !== pairKey(row)));
+  }
+  async function save() {
+    setBusy(true);
+    try {
+      const incomplete = rows.some(row => (row.mode || row.duration_minutes !== null || row.fare_amount !== null)
+        && (!row.mode || row.duration_minutes === null || !Number.isFinite(row.duration_minutes) || row.duration_minutes <= 0));
+      if (incomplete) throw new Error("Complete the mode and positive transfer time, or clear that row before saving.");
+      if (rows.some(row => row.fare_amount !== null && (!Number.isFinite(row.fare_amount) || row.fare_amount < 0))) throw new Error("Enter a nonnegative party fare or leave it blank.");
+      const configured = rows.filter(row => row.mode && row.duration_minutes !== null && row.duration_minutes > 0)
+        .map(({ from_airport, to_airport, mode, duration_minutes, fare_amount, currency }) => ({
+          from_airport, to_airport, mode, duration_minutes, fare_amount,
+          currency: fare_amount === null ? "MYR" : (currency || "MYR").toUpperCase(),
+        }));
+      if (configured.some(row => row.fare_amount !== null && !/^[A-Z]{3}$/.test(row.currency))) throw new Error("Use a three-letter currency code for each fare.");
+      const result = await api<Result>(`/trips/${tripId}/airport-connections`, "PUT", { connections: configured });
+      const record = await api<SavedTrip>(`/trips/${tripId}`);
+      onSaved(record, result);
+    } catch (err) { report(err instanceof Error ? err.message : "Airport connections could not be saved."); }
+    finally { setBusy(false); }
+  }
+
+  return <section className="p-panel" aria-labelledby="airport-connections-title">
+    <div className="p-panel-heading"><div><span className="p-step">↔</span><h2 id="airport-connections-title">Airport connections</h2></div><span className="p-tag">{requirements.length} unique pairs · {requiredJourneys} journeys</span></div>
+    <p>Enter a connection you have checked for each airport change. Its duration should include your transfer buffer and must fit the scheduled layover. One directed pair applies to every matching journey in this trip; the reverse direction is a separate row.</p>
+    <div className="p-airport-table-wrap"><table className="p-airport-table"><thead><tr><th scope="col">Airport change</th><th scope="col">Journeys</th><th scope="col">Mode</th><th scope="col">Transfer time · min</th><th scope="col">Party fare</th><th scope="col">Currency</th><th scope="col"><span className="sr-only">Clear or remove</span></th></tr></thead>
+      <tbody>{rows.map(row => <tr key={pairKey(row)}>
+        <th scope="row"><strong>{row.from_airport} → {row.to_airport}</strong><small>{row.from_name} → {row.to_name}{!row.required && " · saved"}</small></th>
+        <td>{row.required ? <>{row.journey_count}<small className={row.unresolved_journey_count > 0 ? "p-warning" : ""}>{row.unresolved_journey_count} unresolved</small></> : "—"}</td>
+        <td><select aria-label={`${row.from_airport} to ${row.to_airport} transfer mode`} value={row.mode} onChange={event => updateRow(pairKey(row), { mode: event.target.value as AirportTransferMode | "" })}><option value="">Choose mode</option>{airportTransferModes.map(mode => <option value={mode} key={mode}>{mode}</option>)}</select></td>
+        <td><input aria-label={`${row.from_airport} to ${row.to_airport} transfer time in minutes`} type="number" min="1" step="1" value={row.duration_minutes ?? ""} onChange={event => updateRow(pairKey(row), { duration_minutes: event.target.value === "" ? null : Number(event.target.value) })} /></td>
+        <td><input aria-label={`${row.from_airport} to ${row.to_airport} total party fare`} type="number" min="0" step="0.01" placeholder="Unknown" value={row.fare_amount ?? ""} onChange={event => updateRow(pairKey(row), { fare_amount: event.target.value === "" ? null : Number(event.target.value) })} /></td>
+        <td><input aria-label={`${row.from_airport} to ${row.to_airport} fare currency`} maxLength={3} value={row.currency} onChange={event => updateRow(pairKey(row), { currency: event.target.value.toUpperCase() })} /></td>
+        <td><button className="p-airport-clear" type="button" onClick={() => clearOrRemove(row)} aria-label={row.required ? `Clear ${row.from_airport} to ${row.to_airport}` : `Remove saved ${row.from_airport} to ${row.to_airport}`}>×</button></td>
+      </tr>)}</tbody>
+    </table></div>
+    <div className="p-actions"><Button type="button" size="sm" disabled={busy} onClick={() => void save()}>{busy ? "Saving…" : "Save connections"}</Button><span className="p-hint">Rows without both a mode and positive duration remain unresolved. Blank fare keeps transfer cost unknown.</span></div>
+  </section>;
 }
 
 function BundleEntry({ route, placeName, save, report }: { route: Route; placeName: (id: string) => string; save: (offer: Offer) => Promise<void>; report: (s: string) => void }) {
@@ -225,14 +327,19 @@ export default function Planner() {
     const score = (r: Route) => r.total_cost_myr === null ? Infinity : (maxCost > minCost ? (r.total_cost_myr - minCost) / (maxCost - minCost) : 0) + (maxStay > minStay ? (maxStay - r.stay_hours) / (maxStay - minStay) : 0);
     return items.sort((a, b) => ranking === "stay" ? b.stay_hours - a.stay_hours || a.cost_low_myr - b.cost_low_myr : ranking === "balanced" ? score(a) - score(b) || a.cost_low_myr - b.cost_low_myr : Number(a.provisional) - Number(b.provisional) || a.cost_low_myr - b.cost_low_myr || b.stay_hours - a.stay_hours);
   }, [result, ranking]);
+  const missingFares = (result?.missing_fares ?? []).filter(fare => !fare.label.startsWith("Airport transfer "));
   useEffect(() => { setRoutePage(p => Math.min(p, Math.max(0, Math.ceil(routes.length / 40) - 1))); }, [routes.length]);
-  useEffect(() => { setFarePage(p => Math.min(p, Math.max(0, Math.ceil((result?.missing_fares.length ?? 0) / 25) - 1))); }, [result?.missing_fares.length]);
+  useEffect(() => { setFarePage(p => Math.min(p, Math.max(0, Math.ceil(missingFares.length / 25) - 1))); }, [missingFares.length]);
   const selected = routes.find(r => r.id === selectedId) ?? result?.refinement_routes?.find(r => r.id === selectedId) ?? routes[0] ?? null;
   const compare = routes.find(r => r.id === comparisonId) ?? null;
   const active = !!job && ["running", "queued"].includes(job.status);
   const allOffers = [...(saved?.snapshot?.offers ?? []), ...(saved?.offers ?? [])];
   const offerFor = (id: string) => [...allOffers].reverse().find(o => o.movement_ids.length === 1 && o.movement_ids[0] === id);
   const coverage = result?.coverage;
+  const unresolvedAccess = (coverage?.unresolved_movements ?? []).map(movement => ({
+    ...movement,
+    assumptions: movement.assumptions.filter(assumption => !assumption.startsWith("Airport change ") && !assumption.startsWith("Airport connection ")),
+  })).filter(movement => movement.assumptions.length > 0);
   const extras = selected?.extra_charges ?? [];
 
   if (loadingTrip) return <main className="optimizer app-shell" aria-busy="true"><div className="p-empty" role="status">Loading your saved trip…</div></main>;
@@ -263,9 +370,10 @@ export default function Planner() {
 
     {result && <>
       {(result.discovery_required || dirty) && <div className="p-notice">{dirty ? "Trip changes are being saved; displayed results belong to the previous revision." : "Transport discovery is needed for these trip inputs. Saved fare edits remain available."}</div>}
-      {result.missing_fares.length > 0 && <section className="p-panel"><div className="p-panel-heading"><div><span className="p-step">03</span><h2>Refine important missing fares</h2></div><span className="p-tag">Optional</span></div><p>Explore preliminary options now, or price the components that affect the most potential frontier itineraries.</p><div className="p-missing-list">{result.missing_fares.slice(farePage * 25, (farePage + 1) * 25).map(f => <div key={f.component_id}><div><strong>{placeName(f.from_id)} → {placeName(f.to_id)} · {f.label}</strong><small>{f.affected_itineraries} potential alternatives{f.break_even_myr !== null ? ` · reference break-even ${money(f.break_even_myr)}` : ""}{f.reason === "exchange_rate" ? ` · add a ${f.currency} exchange rate above` : ""}</small></div><FareEditor componentId={f.component_id} label={`${placeName(f.from_id)} to ${placeName(f.to_id)} ${f.label}`} offer={offerFor(f.component_id)} onSave={updatePrice} onRemove={removePrice} /></div>)}</div>{result.missing_fares.length > 25 && <div className="p-actions"><Button type="button" size="sm" variant="secondary" disabled={farePage === 0} onClick={() => setFarePage(p => Math.max(0, p - 1))}>Previous missing fares</Button><span>{result.missing_fares.length} components · page {farePage + 1}</span><Button type="button" size="sm" variant="secondary" disabled={(farePage + 1) * 25 >= result.missing_fares.length} onClick={() => setFarePage(p => p + 1)}>Next missing fares</Button></div>}</section>}
+      {missingFares.length > 0 && <section className="p-panel"><div className="p-panel-heading"><div><span className="p-step">03</span><h2>Refine important missing fares</h2></div><span className="p-tag">Optional</span></div><p>Explore preliminary options now, or price the components that affect the most potential frontier itineraries.</p><div className="p-missing-list">{missingFares.slice(farePage * 25, (farePage + 1) * 25).map(f => <div key={f.component_id}><div><strong>{placeName(f.from_id)} → {placeName(f.to_id)} · {f.label}</strong><small>{f.affected_itineraries} potential alternatives{f.break_even_myr !== null ? ` · reference break-even ${money(f.break_even_myr)}` : ""}{f.reason === "exchange_rate" ? ` · add a ${f.currency} exchange rate above` : ""}</small></div><FareEditor componentId={f.component_id} label={`${placeName(f.from_id)} to ${placeName(f.to_id)} ${f.label}`} offer={offerFor(f.component_id)} onSave={updatePrice} onRemove={removePrice} /></div>)}</div>{missingFares.length > 25 && <div className="p-actions"><Button type="button" size="sm" variant="secondary" disabled={farePage === 0} onClick={() => setFarePage(p => Math.max(0, p - 1))}>Previous missing fares</Button><span>{missingFares.length} components · page {farePage + 1}</span><Button type="button" size="sm" variant="secondary" disabled={(farePage + 1) * 25 >= missingFares.length} onClick={() => setFarePage(p => p + 1)}>Next missing fares</Button></div>}</section>}
 
-      {!!coverage?.unresolved_movements?.length && <details className="p-panel"><summary>{coverage.unresolved_movements.length} retrieved journeys need verified access or airport changes</summary>{coverage.unresolved_movements.map(m => <p key={m.id}>{placeName(m.from_id)} → {placeName(m.to_id)}: {m.assumptions.join(" · ")}</p>)}<p>Add a verified assumed connection above to make an unresolved journey usable.</p></details>}
+      {saved && <AirportConnectionsTable key={saved.id} tripId={saved.id} requirements={saved.airport_connections_required ?? coverage?.airport_connections_required ?? noAirportConnectionRequirements} connections={saved.airport_connections ?? noAirportConnections} report={setError} onSaved={(record, updated) => { accept(record); acceptResult(updated, record.id); setSaveStatus("Airport connections saved · frontier recalculated"); }} />}
+      {!!unresolvedAccess.length && <details className="p-panel"><summary>{unresolvedAccess.length} retrieved journeys need airport access timing</summary>{unresolvedAccess.map(m => <p key={m.id}>{placeName(m.from_id)} → {placeName(m.to_id)}: {m.assumptions.join(" · ")}</p>)}</details>}
       <section className="p-panel" aria-labelledby="frontier-title"><div className="p-panel-heading"><div><span className="p-step">04</span><h2 id="frontier-title">Your cost–time frontier</h2></div><span className="p-tag">{routes.length} alternatives</span></div><p>{coverage?.discovery_complete ? "Discovery queue exhausted" : "Preliminary discovery"} · {result.optimization_complete ? "Optimization complete for this snapshot" : "Optimization incomplete"} · snapshot {result.snapshot_revision}</p><p className="p-hint">Circles: priced offers. Diamonds: estimates. Horizontal bands: fare ranges; their selection marker is the midpoint, not an expected price. Unknown totals stay in the list below. Optimality covers retrieved options and stated assumptions.</p>
         <ParetoExplorer routes={routes} selected={selected?.id ?? null} onSelect={setSelectedId} />
         {!result.optimization_complete && !active && !job && saved && <Button type="button" size="sm" onClick={() => void act(async () => { acceptResult(await api<Result>(`/trips/${saved.id}/optimize`, "POST", { expand: true }), saved.id); })}>Continue optimizing</Button>}
@@ -280,7 +388,7 @@ export default function Planner() {
       {selected && <section className="p-panel" aria-labelledby="details-title"><div className="p-panel-heading"><div><span className="p-step">05</span><h2 id="details-title">Itinerary details</h2>{selected.budget_status === "over" && <span className="p-tag uncertain">Outside budget · fare refinement only</span>}</div><strong>{routeCost(selected)}</strong></div><div className="p-detail-layout"><div><PlannerMap places={places} route={selected} /><p className="p-hint">City reference points and schematic connections; lines do not show road or track geometry.</p></div><div className="p-timeline"><h3>Time in each required city</h3>{selected.stays.map((s, i) => <div key={`${s.place_id}:${i}`}><span className="p-timeline-dot" /><strong>{placeName(s.place_id)} <span>{s.hours.toFixed(1)} h</span></strong><small>{localTime(s.arrival, byId.get(s.place_id)?.timezone ?? "UTC")}<ArrowRight size={13} />{localTime(s.departure, byId.get(s.place_id)?.timezone ?? "UTC")}</small><progress max={selected.stay_hours || 1} value={s.hours} /></div>)}<p className="p-hint">City-stay hours include nights, exclude all transportation and terminal overhead, and do not count time at home or other positioning cities.</p></div></div>
         <div className="p-leg-details">{selected.movements.map((m, i) => <details key={`${m.id}:${i}`} open={i === 0}><summary><span className="p-leg-index">{i + 1}</span><strong>{placeName(m.from_id)} → {placeName(m.to_id)}</strong><span className="p-tag">{m.mode}{m.vehicle_kind ? ` · ${m.vehicle_kind}` : ""}</span><span>{(m.duration_minutes / 60).toFixed(1)} h</span></summary><div className="p-leg-content"><p>{localTime(m.departure, byId.get(m.from_id)?.timezone ?? "UTC")} → {localTime(m.arrival, byId.get(m.to_id)?.timezone ?? "UTC")}<br /><small>{m.source} · {m.transfers} transfers{m.distance_km !== null ? ` · ${m.distance_km.toFixed(1)} km` : ""}</small></p>{m.assumptions.map(a => <p className="p-notice" key={a}>{a}</p>)}
           {m.segments.length > 0 && <ul className="p-segments">{m.segments.map((s, j) => <li key={j}><strong>{s.mode}: {s.from_name} → {s.to_name}</strong><small>{s.departure && `${localTime(s.departure, s.from_timezone ?? "UTC")} (${s.from_timezone ?? "UTC"}) → ${localTime(s.arrival, s.to_timezone ?? "UTC")} (${s.to_timezone ?? "UTC"}) · `}{s.service} {s.operator}{s.source ? ` · ${s.source}` : ""}{s.assumed ? " · assumed" : ""}{s.duration_minutes !== null ? ` · ${s.duration_minutes.toFixed(0)} min` : ""}</small></li>)}</ul>}
-          <FareEditor componentId={m.id} label={`Standalone ${m.mode} fare`} offer={offerFor(m.id)} onSave={updatePrice} onRemove={removePrice} />{m.charges.map(c => <FareEditor key={c.id} componentId={c.id} label={c.kind} offer={offerFor(c.id)} onSave={updatePrice} onRemove={removePrice} />)}{m.search_url && <a href={m.search_url} target="_blank" rel="noreferrer">Open flight search ↗</a>}</div></details>)}</div>
+          <FareEditor componentId={m.id} label={`Standalone ${m.mode} fare`} offer={offerFor(m.id)} onSave={updatePrice} onRemove={removePrice} />{m.charges.filter(c => !c.kind.startsWith("Airport transfer ")).map(c => <FareEditor key={c.id} componentId={c.id} label={c.kind} offer={offerFor(c.id)} onSave={updatePrice} onRemove={removePrice} />)}{m.search_url && <a href={m.search_url} target="_blank" rel="noreferrer">Open flight search ↗</a>}</div></details>)}</div>
         {extras.map(c => <FareEditor key={c.id} componentId={c.id} label={c.kind} offer={offerFor(c.id)} onSave={updatePrice} onRemove={removePrice} />)}
         <h3>Ticket purchases and cost breakdown</h3><div className="p-purchases">{selected.purchases.map(o => <div key={o.id}><strong>{o.label || o.kind}<small>{o.kind} · {o.movement_ids.length} component(s) · {o.source}{o.estimated ? " estimate" : ""}</small></strong><span>{o.low === o.high ? money(o.low, o.currency) : `${money(o.low, o.currency)} – ${money(o.high, o.currency)}`}</span>{o.source === "user" && <button type="button" aria-label={`Remove fare ${o.label}`} onClick={() => void act(() => removePrice(o.id))}>×</button>}</div>)}</div>
         <p className="p-hint">Each ticket is charged once. Combined flight tickets do not include separately listed airport transfers. Average fare per stay hour: {money(selected.cost_per_stay_hour_myr)}. Prices are quotes or assumptions, not booking guarantees.</p>

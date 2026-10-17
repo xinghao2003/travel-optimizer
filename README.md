@@ -19,6 +19,10 @@ A local multimodal trip optimizer that compares total party transportation cost 
 
 The ECharts frontier links to a MapLibre map, city-stay timeline, transport details, and purchase breakdown. Comparison shows the additional money per additional city hour. Average fare per stay hour is a separate descriptive metric. Map connections are schematic, not track or road geometry.
 
+Frontier cards show the party fare per city-stay hour beside travel time; bounded fare intervals show the corresponding ratio interval, and unbounded totals stay unknown. The chart defaults to linear axes fitted to the data, with optional logarithmic cost and city-hour axes and a zoom reset. Log controls are unavailable when an axis contains zero/non-positive values; alternatives are not silently hidden. The frontier omits dominated histories under the retrieved fares and constraints, while the underlying schedules and fares remain saved for future recalculation.
+
+**Show dominated alternatives** optionally loads other completed, budget/fare-eligible histories from the saved graph without provider queries. They appear as selectable grey points and itinerary cards; the frontier line still connects only non-dominated options. First loading recalculates the graph; later toggles reuse the loaded results. This view is not exhaustive enumeration: dominance pruning may already have removed other partial histories during search.
+
 ## Pricing and search coverage
 
 One-way, round-trip, and multi-city purchases cover exact movements and cannot overlap or be charged twice. Google Flights queries request the whole party; returned prices are not multiplied again. The installed fast-flights parser can return only outbound segments for round trips and fail multi-city parsing. These are **not complete bundle quotes**: the app provides search links and accepts manually entered whole-ticket prices.

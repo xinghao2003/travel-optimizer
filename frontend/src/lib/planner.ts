@@ -28,7 +28,7 @@ export type Offer = { id: string; movement_ids: string[]; kind: "one-way" | "rou
 export type PricingRule = { id: string; name: string; mode: string; from_id: string | null; to_id: string | null; service: string | null; country_code: string | null; kind: "fixed" | "per-km"; low: number; high: number | null; unit: "party" | "person" | "vehicle"; capacity: number; currency: string; priority: number };
 export type Route = { id: string; departure_gateway: string; arrival_gateway: string; movements: Movement[]; stays: { place_id: string; arrival: string; departure: string; hours: number }[]; stay_hours: number; travel_hours: number; total_cost_myr: number | null; cost_low_myr: number; cost_high_myr: number | null; estimated: boolean; purchases: Offer[]; extra_charges: Charge[]; budget_status: string; provisional: boolean; cost_per_stay_hour_myr: number | null };
 export type Coverage = { unresolved_movements?: { id: string; from_id: string; to_id: string; assumptions: string[] }[]; airport_connections_required?: AirportConnectionRequirement[]; source_gaps?: string[]; processed?: number; pending?: number; requests?: number; cache_hits?: number; outcomes?: Record<string, number>; discovery_complete?: boolean; messages?: string[]; bundle_links?: { kind: string; status: string; url: string; legs: { from_id: string; to_id: string; date: string }[] }[] };
-export type Result = { routes: Route[]; refinement_routes?: Route[]; missing_fares: { component_id: string; movement_id: string; label: string; from_id: string; to_id: string; affected_itineraries: number; break_even_myr: number | null; reason: string; currency: string }[]; expanded_labels: number; pruned_labels: number; feasible_count: number; optimization_complete: boolean; snapshot_revision: number; trip_revision: number; coverage: Coverage; discovery_required: boolean; optimality_scope: string };
+export type Result = { routes: Route[]; dominated_routes?: Route[]; refinement_routes?: Route[]; missing_fares: { component_id: string; movement_id: string; label: string; from_id: string; to_id: string; affected_itineraries: number; break_even_myr: number | null; reason: string; currency: string }[]; expanded_labels: number; pruned_labels: number; feasible_count: number; optimization_complete: boolean; snapshot_revision: number; trip_revision: number; coverage: Coverage; discovery_required: boolean; optimality_scope: string };
 export type SavedTrip = { id: string; revision: number; spec: TripSpec; offers: Offer[]; airport_connections?: AirportConnection[]; airport_connections_required?: AirportConnectionRequirement[]; latest_job_id: string | null; result?: Result; snapshot: { revision: number; movements: Movement[]; offers: Offer[]; coverage: Coverage } | null };
 export type Job = { id: string; trip_id: string; status: "queued" | "running" | "paused" | "cancelled" | "complete" | "interrupted" | "failed" | "superseded"; processed: number; pending: number; requests: number; cache_hits: number; failed_queries: number; messages: string[]; bundle_links: Coverage["bundle_links"] };
 export type SavedSummary = { id: string; name: string; revision: number; start_date: string; end_date: string };
@@ -47,6 +47,12 @@ export function money(value: number | null, currency = "MYR") {
 }
 export function routeCost(route: Route) {
   return route.total_cost_myr !== null ? money(route.total_cost_myr) : route.cost_high_myr === null ? `${money(route.cost_low_myr)} + unknown` : `${money(route.cost_low_myr)} – ${money(route.cost_high_myr)}`;
+}
+export function cityHourCost(route: Route) {
+  if (route.stay_hours <= 0) return "Cost/city h unavailable";
+  if (route.cost_per_stay_hour_myr !== null) return `${money(route.cost_per_stay_hour_myr)}/city h`;
+  if (route.cost_high_myr !== null) return `${money(route.cost_low_myr/route.stay_hours)}–${money(route.cost_high_myr/route.stay_hours)}/city h`;
+  return "Cost/city h unknown";
 }
 export function localTime(value: string | null, zone: string) {
   return value ? new Intl.DateTimeFormat("en-MY", { dateStyle: "medium", timeStyle: "short", timeZone: zone }).format(new Date(value)) : "Flexible departure";

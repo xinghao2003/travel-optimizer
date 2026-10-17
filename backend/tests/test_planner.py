@@ -87,6 +87,23 @@ class DiscoveryDateTests(unittest.TestCase):
 
 
 class OptimizerTests(unittest.TestCase):
+    def test_optional_dominated_routes_do_not_change_frontier(self):
+        spec = trip()
+        ms = [movement("fast", HOME, A, dt(10), dt(10, 10)),
+              movement("slow", HOME, A, dt(10), dt(10, 12), mode="rail"),
+              movement("back", A, HOME, dt(12, 16), dt(12, 17))]
+        offers = [fare("fast", 100), fare("slow", 100), fare("back", 50)]
+        baseline = optimize(spec, ms, offers, [])
+        expanded = optimize(spec, ms, offers, [], include_dominated=True)
+        self.assertNotIn("dominated_routes", baseline)
+        self.assertEqual([r["id"] for r in expanded["routes"]], [r["id"] for r in baseline["routes"]])
+        self.assertEqual(len(expanded["dominated_routes"]), 1)
+        other = expanded["dominated_routes"][0]
+        best = expanded["routes"][0]
+        self.assertEqual(other["movements"][0]["id"], "slow")
+        self.assertLess(other["stay_hours"], best["stay_hours"])
+        self.assertEqual(other["total_cost_myr"], best["total_cost_myr"])
+
     def test_stays_use_arrival_and_departure_including_outward_and_return(self):
         spec = trip()
         movements = [movement("slow", HOME, A, dt(10), dt(10, 15)), movement("fast", HOME, A, dt(10), dt(10, 10)), movement("back", A, HOME, dt(12, 17), dt(12, 18))]

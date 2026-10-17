@@ -23,6 +23,7 @@ class SearchRequest(BaseModel):
 
 class OptimizationRequest(BaseModel):
     expand: bool = False
+    include_dominated: bool = False
 
 
 class UpdateAirportConnections(BaseModel):
@@ -148,7 +149,7 @@ async def cancel_search(id: str):
 @router.post("/trips/{id}/optimize")
 async def recalculate(id: str, request: OptimizationRequest = OptimizationRequest()):
     get_trip(id)
-    result = await manager.recalculate(id, expand=request.expand)
+    result = await manager.recalculate(id, expand=request.expand, include_dominated=request.include_dominated)
     result.pop("bundle_candidates", None)
     return result
 
@@ -160,9 +161,9 @@ async def edit_fare(id: str, offer_id: str, offer: FareOffer):
         raise HTTPException(422, "Offer ID must match its URL.")
     snapshot = trip.get("snapshot") or {}
     known = {m["id"] for m in snapshot.get("movements", [])}
-    known.update(m["id"] for r in trip.get("result", {}).get("routes", []) for m in r["movements"])
+    known.update(m["id"] for r in [*trip.get("result", {}).get("routes", []), *trip.get("result", {}).get("dominated_routes", [])] for m in r["movements"])
     known.update(c["id"] for m in snapshot.get("movements", []) for c in m.get("charges", []))
-    known.update(c["id"] for r in trip.get("result", {}).get("routes", []) for c in r.get("extra_charges", []))
+    known.update(c["id"] for r in [*trip.get("result", {}).get("routes", []), *trip.get("result", {}).get("dominated_routes", [])] for c in r.get("extra_charges", []))
     if not set(offer.movement_ids).issubset(known):
         raise HTTPException(422, "Every fare component must belong to this trip's retrieved movements or current rental charges.")
     if offer.kind in {"round-trip", "multi-city"}:
@@ -194,9 +195,9 @@ async def save_shared_estimates(id: str, estimates: list[SharedFareValues], expe
         raise HTTPException(422, "Maximum fare must be at least the minimum.")
     result = trip.get("result") or {}
     movements = [*(trip.get("snapshot") or {}).get("movements", []),
-                 *(m for route in [*result.get("routes", []), *result.get("refinement_routes", [])] for m in route["movements"])]
+                 *(m for route in [*result.get("routes", []), *result.get("dominated_routes", []), *result.get("refinement_routes", [])] for m in route["movements"])]
     charges = {c["id"] for m in movements for c in m.get("charges", [])}
-    charges.update(c["id"] for route in [*result.get("routes", []), *result.get("refinement_routes", [])] for c in route.get("extra_charges", []))
+    charges.update(c["id"] for route in [*result.get("routes", []), *result.get("dominated_routes", []), *result.get("refinement_routes", [])] for c in route.get("extra_charges", []))
     known = {m["id"] for m in movements} | charges
     if not ids.issubset(known):
         raise HTTPException(422, "Every fare component must belong to this trip.")

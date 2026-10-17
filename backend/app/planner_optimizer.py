@@ -205,7 +205,7 @@ class Label:
 
 def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer], rules: list[PricingRule],
              snapshot_revision: int = 0, trip_revision: int = 0, cancelled=None, label_limit: int | None = None,
-             finish_at_home: bool = True) -> dict:
+             finish_at_home: bool = True, include_dominated: bool = False) -> dict:
     started = clock.monotonic()
     next_progress = started + 5
     logger.debug("planner dp.start movements=%d offers=%d limit=%s", len(movements), len(offers), label_limit)
@@ -448,6 +448,11 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
     for label in [*frontier, *over_budget]:
         id = stable_id([(m.id, m.departure) for m in label.path], label.departure_gateway, label.arrival_gateway)
         unique[id] = label
+    frontier_ids = {stable_id([(m.id, m.departure) for m in label.path], label.departure_gateway, label.arrival_gateway) for label in frontier}
+    if include_dominated:
+        for label in eligible:
+            id = stable_id([(m.id, m.departure) for m in label.path], label.departure_gateway, label.arrival_gateway)
+            unique[id] = label
     logger.debug("planner dp.serialize.start frontier=%d elapsed=%.2fs", len(unique), clock.monotonic()-started)
     results = []
     missing = {}
@@ -478,7 +483,10 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
             ids = tuple(m.id for m in flights)
             bundle_candidates[ids] = [m.model_dump(mode="json") for m in flights]
     logger.debug("planner dp.done routes=%d bundles=%d elapsed=%.2fs", len(results), len(bundle_candidates), clock.monotonic()-started)
-    return {"routes": [r for r in results if r["budget_status"] != "over"], "refinement_routes": [r for r in results if r["budget_status"] == "over"], "bundle_candidates": list(bundle_candidates.values()), "missing_fares": sorted(missing.values(), key=lambda x: (-x["affected_itineraries"], -(x["break_even_myr"] or 0), x["component_id"])),
+    response = {"routes": [r for r in results if r["budget_status"] != "over" and r["id"] in frontier_ids], "refinement_routes": [r for r in results if r["budget_status"] == "over"], "bundle_candidates": list(bundle_candidates.values()), "missing_fares": sorted(missing.values(), key=lambda x: (-x["affected_itineraries"], -(x["break_even_myr"] or 0), x["component_id"])),
             "expanded_labels": expanded, "pruned_labels": pruned, "feasible_count": len(completed),
             "optimization_complete": not bool(queue), "remaining_labels": len(queue), "label_limit": label_limit, "snapshot_revision": snapshot_revision, "trip_revision": trip_revision,
             "optimality_scope": "Retrieved schedules, fare offers, and road departures at readiness / connection / return-boundary events"}
+    if include_dominated:
+        response["dominated_routes"] = [r for r in results if r["budget_status"] != "over" and r["id"] not in frontier_ids]
+    return response

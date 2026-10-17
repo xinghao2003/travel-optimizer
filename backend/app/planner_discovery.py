@@ -418,7 +418,7 @@ class DiscoveryManager:
     def rules(self):
         return [PricingRule.model_validate(r) for r in self.store.list("rules")]
 
-    async def recalculate(self, trip_id, snapshot=None, expand=False, job_id=None):
+    async def recalculate(self, trip_id, snapshot=None, expand=False, job_id=None, include_dominated=False):
         started = clock.monotonic()
         logger.debug("planner recalculate.wait trip=%s job=%s", trip_id, job_id)
         lock = self.optimization_locks.setdefault(trip_id, asyncio.Lock())
@@ -479,7 +479,7 @@ class DiscoveryManager:
             cancelled = check_cancelled if job_id else None
             logger.debug("planner optimize.dispatch trip=%s elapsed=%.2fs movements=%d offers=%d label_limit=%d", trip_id, clock.monotonic()-started, len(snapshot["movements"]), len(offers), snapshot["label_limit"])
             result = await asyncio.to_thread(optimize, spec, [Movement.model_validate(m) for m in snapshot["movements"]], offers,
-                                             self.rules(), snapshot["revision"], trip["revision"], cancelled, snapshot["label_limit"])
+                                             self.rules(), snapshot["revision"], trip["revision"], cancelled, snapshot["label_limit"], include_dominated=include_dominated)
             logger.debug("planner optimize.return trip=%s elapsed=%.2fs expanded=%d completed=%d routes=%d bundles=%d", trip_id, clock.monotonic()-started, result["expanded_labels"], result["feasible_count"], len(result["routes"]), len(result.get("bundle_candidates", [])))
             result["coverage"] = snapshot.get("coverage", {})
             result["coverage"]["unresolved_movements"] = [{"id": m["id"], "from_id": m["from_id"], "to_id": m["to_id"], "assumptions": m["assumptions"]} for m in snapshot["movements"] if not m.get("usable", True)]

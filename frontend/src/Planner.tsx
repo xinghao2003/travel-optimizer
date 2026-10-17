@@ -5,12 +5,12 @@ import { AdvancedSettings, FareEditor, Field, NumberField, PlaceChips, PlacePick
 import { PositioningSettings } from "./components/PositioningSettings";
 import { MissingFaresTable, type SharedFare } from "./components/MissingFaresTable";
 import { groupMissingFares } from "./lib/missingFares";
-import { api, blankTrip, localTime, modes, money, routeCost, type AirportConnection, type AirportConnectionRequirement, type AirportTransferMode, type Job, type Movement, type Offer, type Place, type PricingRule, type Result, type Route, type SavedSummary, type SavedTrip, type TripDraft, type TripSpec } from "./lib/planner";
+import { api, blankTrip, cityHourCost, localTime, modes, money, routeCost, type AirportConnection, type AirportConnectionRequirement, type AirportTransferMode, type Job, type Movement, type Offer, type Place, type PricingRule, type Result, type Route, type SavedSummary, type SavedTrip, type TripDraft, type TripSpec } from "./lib/planner";
 import "./planner.css";
 
 const LazyPareto = lazy(() => import("./components/ParetoExplorer").then(m => ({ default: m.ParetoExplorer })));
 const LazyMap = lazy(() => import("./components/PlannerMap").then(m => ({ default: m.PlannerMap })));
-function ParetoExplorer(props: { routes: Route[]; selected: string | null; onSelect: (id: string) => void }) {
+function ParetoExplorer(props: { routes: Route[]; dominated?: Route[]; selected: string | null; onSelect: (id: string) => void }) {
   return <Suspense fallback={<div className="p-empty">Loading the frontier chart…</div>}><LazyPareto {...props} /></Suspense>;
 }
 function PlannerMap(props: { places: Place[]; route: Route | null }) {
@@ -174,6 +174,7 @@ export default function Planner() {
   const [comparisonId, setComparisonId] = useState<string | null>(null);
   const [ranking, setRanking] = useState("cheapest");
   const [routePage, setRoutePage] = useState(0);
+  const [showDominated, setShowDominated] = useState(false);
   const [budget, setBudget] = useState(100);
   const [busy, setBusy] = useState(false);
   const [loadingTrip, setLoadingTrip] = useState(true);
@@ -334,16 +335,19 @@ export default function Planner() {
   }
 
   const routes = useMemo(() => {
-    const items = [...(result?.routes ?? [])];
+    const items = [...(result?.routes ?? []), ...(showDominated ? result?.dominated_routes ?? [] : [])];
     const finite = items.filter(r => r.total_cost_myr !== null);
     const costs = finite.map(r => r.total_cost_myr as number), stays = finite.map(r => r.stay_hours);
     const minCost = Math.min(...costs), maxCost = Math.max(...costs), minStay = Math.min(...stays), maxStay = Math.max(...stays);
     const score = (r: Route) => r.total_cost_myr === null ? Infinity : (maxCost > minCost ? (r.total_cost_myr - minCost) / (maxCost - minCost) : 0) + (maxStay > minStay ? (maxStay - r.stay_hours) / (maxStay - minStay) : 0);
     return items.sort((a, b) => ranking === "stay" ? b.stay_hours - a.stay_hours || a.cost_low_myr - b.cost_low_myr : ranking === "balanced" ? score(a) - score(b) || a.cost_low_myr - b.cost_low_myr : Number(a.provisional) - Number(b.provisional) || a.cost_low_myr - b.cost_low_myr || b.stay_hours - a.stay_hours);
-  }, [result, ranking]);
+  }, [result, ranking, showDominated]);
+  useEffect(() => {
+    if (!busy && result?.dominated_routes === undefined) setShowDominated(false);
+  }, [result, busy]);
   const missingFareGroups = useMemo(() => groupMissingFares(
     (result?.missing_fares ?? []).filter(fare => !fare.label.startsWith("Airport transfer ")),
-    [...(result?.routes ?? []), ...(result?.refinement_routes ?? [])],
+    [...(result?.routes ?? []), ...(result?.dominated_routes ?? []), ...(result?.refinement_routes ?? [])],
   ), [result]);
   useEffect(() => { setRoutePage(p => Math.min(p, Math.max(0, Math.ceil(routes.length / 40) - 1))); }, [routes.length]);
   const selected = routes.find(r => r.id === selectedId) ?? result?.refinement_routes?.find(r => r.id === selectedId) ?? routes[0] ?? null;
@@ -393,13 +397,27 @@ export default function Planner() {
       {saved && <AirportConnectionsTable key={saved.id} tripId={saved.id} requirements={saved.airport_connections_required ?? coverage?.airport_connections_required ?? noAirportConnectionRequirements} connections={saved.airport_connections ?? noAirportConnections} report={setError} onSaved={(record, updated) => { accept(record); acceptResult(updated, record.id); setSaveStatus("Airport connections saved · frontier recalculated"); }} />}
       {missingFareGroups.length > 0 && <MissingFaresTable key={saved?.id} storageKey={`wayfinder:pending-estimates:${saved?.id}`} groups={missingFareGroups} placeName={placeName} offerFor={offerFor} onApply={applySharedFares} onSave={updatePrice} onRemove={removePrice} />}
       {!!unresolvedAccess.length && <details className="p-panel"><summary>{unresolvedAccess.length} retrieved journeys need airport access timing</summary>{unresolvedAccess.map(m => <p key={m.id}>{placeName(m.from_id)} → {placeName(m.to_id)}: {m.assumptions.join(" · ")}</p>)}</details>}
-      <section className="p-panel" aria-labelledby="frontier-title"><div className="p-panel-heading"><div><span className="p-step">04</span><h2 id="frontier-title">Your cost–time frontier</h2></div><span className="p-tag">{routes.length} alternatives</span></div><p>{coverage?.discovery_complete ? "Discovery queue exhausted" : "Preliminary discovery"} · {result.optimization_complete ? "Optimization complete for this snapshot" : "Optimization incomplete"} · snapshot {result.snapshot_revision}</p><p className="p-hint">Circles: priced offers. Diamonds: estimates. Horizontal bands: fare ranges; their selection marker is the midpoint, not an expected price. Unknown totals stay in the list below. Optimality covers retrieved options and stated assumptions.</p>
-        <ParetoExplorer routes={routes} selected={selected?.id ?? null} onSelect={setSelectedId} />
+      <section className="p-panel" aria-labelledby="frontier-title"><div className="p-panel-heading"><div><span className="p-step">04</span><h2 id="frontier-title">Your cost–time frontier</h2></div><span className="p-tag">{result.routes.length} frontier alternatives{showDominated && result.dominated_routes ? ` + ${result.dominated_routes.length} dominated` : ""}</span></div><p>{coverage?.discovery_complete ? "Discovery queue exhausted" : "Preliminary discovery"} · {result.optimization_complete ? "Optimization complete for this snapshot" : "Optimization incomplete"} · snapshot {result.snapshot_revision}</p><p className="p-hint">Circles: priced offers. Diamonds: estimates. Horizontal bands: fare ranges; their selection marker is the midpoint, not an expected price. Unknown totals stay in the list below. Optimality covers retrieved options and stated assumptions.</p>
+        <p className="p-hint">{result.feasible_count.toLocaleString()} completed histories evaluated. The frontier keeps cost/city-time tradeoffs under your fare and budget settings. Other histories are hidden by default; source schedules and fares remain saved.</p>
+        <div className="p-inline"><label className="p-check"><input type="checkbox" checked={showDominated} disabled={busy} onChange={e => {
+          if (!e.target.checked) { setShowDominated(false); return; }
+          if (result.dominated_routes !== undefined) { setShowDominated(true); return; }
+          setShowDominated(true);
+          void act(async () => {
+            try {
+              const record = await saveSpec();
+              const updated = await api<Result>(`/trips/${record.id}/optimize`, "POST", { include_dominated: true });
+              accept(await api<SavedTrip>(`/trips/${record.id}`)); acceptResult(updated, record.id);
+            } catch (err) { setShowDominated(false); throw err; }
+          });
+        }} />Show dominated alternatives</label>{busy && <span className="p-hint">Calculating…</span>}</div>
+        <p className="p-hint">Grey points are other completed alternatives from this search, usually below/right of the frontier. First loading them recalculates saved data without provider requests. Earlier pruning may have removed other histories.</p>
+        <ParetoExplorer routes={result.routes} dominated={showDominated ? result.dominated_routes : undefined} selected={selected?.id ?? null} onSelect={setSelectedId} />
         {!result.optimization_complete && !active && !job && saved && <Button type="button" size="sm" onClick={() => void act(async () => { acceptResult(await api<Result>(`/trips/${saved.id}/optimize`, "POST", { expand: true }), saved.id); })}>Continue optimizing</Button>}
-        <div className="p-inline p-route-sort"><Field label="Order frontier alternatives"><select value={ranking} onChange={e => setRanking(e.target.value)}><option value="cheapest">Lowest known total</option><option value="stay">Most city-stay hours</option><option value="balanced">Balanced · equal cost/time weights</option></select></Field><small>Ordering does not change frontier membership.</small></div>
+        <div className="p-inline p-route-sort"><Field label={showDominated ? "Order displayed alternatives" : "Order frontier alternatives"}><select value={ranking} onChange={e => setRanking(e.target.value)}><option value="cheapest">Lowest known total</option><option value="stay">Most city-stay hours</option><option value="balanced">Balanced · equal cost/time weights</option></select></Field><small>Ordering does not change frontier membership.</small></div>
         {!routes.length && <div className="p-empty">No feasible itinerary has been found in the collected data. {job?.pending ? "Continue discovery or add a missing connection." : "Check coverage, dates, minimum stays, and transport assumptions."}</div>}
         {!routes.length && !!result.refinement_routes?.length && <details className="p-details"><summary>Review an over-budget candidate to add a ticket quote</summary><p>These are up to ten fare-refinement examples, outside your current budget. They are not plotted as feasible frontier options.</p>{result.refinement_routes.map(r => <Button key={r.id} type="button" size="sm" variant="secondary" onClick={() => setSelectedId(r.id)}>{routeCost(r)} · {r.stay_hours.toFixed(1)} city hours</Button>)}</details>}
-        <div className="p-route-grid">{routes.slice(Math.min(routePage, Math.max(0, Math.ceil(routes.length / 40) - 1)) * 40, (Math.min(routePage, Math.max(0, Math.ceil(routes.length / 40) - 1)) + 1) * 40).map((r, i) => <button type="button" key={r.id} className={`p-route-card ${selected?.id === r.id ? "selected" : ""}`} aria-pressed={selected?.id === r.id} onClick={() => setSelectedId(r.id)}><span className="p-route-number">{String(i + Math.min(routePage, Math.max(0, Math.ceil(routes.length / 40) - 1)) * 40 + 1).padStart(2, "0")}</span><div><strong>{routeCost(r)}</strong><span>{r.stay_hours.toFixed(1)} city hours · {r.travel_hours.toFixed(1)} h travel</span><small>{placeName(r.departure_gateway)} outward · {placeName(r.arrival_gateway)} return</small><small>{r.movements.map(m => m.mode).join(" → ")}</small></div><span className={`p-tag ${r.provisional ? "uncertain" : ""}`}>{r.provisional ? "Provisional" : r.estimated ? "Includes estimates" : "Priced"}</span>{r.budget_status === "uncertain" && <small className="p-warning">Budget compliance uncertain</small>}</button>)}</div>
+        <div className="p-route-grid">{routes.slice(Math.min(routePage, Math.max(0, Math.ceil(routes.length / 40) - 1)) * 40, (Math.min(routePage, Math.max(0, Math.ceil(routes.length / 40) - 1)) + 1) * 40).map((r, i) => <button type="button" key={r.id} className={`p-route-card ${selected?.id === r.id ? "selected" : ""}`} aria-pressed={selected?.id === r.id} onClick={() => setSelectedId(r.id)}><span className="p-route-number">{String(i + Math.min(routePage, Math.max(0, Math.ceil(routes.length / 40) - 1)) * 40 + 1).padStart(2, "0")}</span><div><strong>{routeCost(r)}</strong><span>{r.stay_hours.toFixed(1)} city hours · {r.travel_hours.toFixed(1)} h travel · <span title="Total party fare divided by city-stay hours">{cityHourCost(r)}</span></span><small>{placeName(r.departure_gateway)} outward · {placeName(r.arrival_gateway)} return</small><small>{r.movements.map(m => m.mode).join(" → ")}</small></div><span className={`p-tag ${r.provisional ? "uncertain" : ""}`}>{result.dominated_routes?.some(other => other.id === r.id) ? "Dominated" : r.provisional ? "Provisional" : r.estimated ? "Includes estimates" : "Priced"}</span>{r.budget_status === "uncertain" && <small className="p-warning">Budget compliance uncertain</small>}</button>)}</div>
         {routes.length > 40 && <div className="p-actions"><Button type="button" size="sm" variant="secondary" disabled={routePage === 0} onClick={() => setRoutePage(p => Math.max(0, p - 1))}>Previous alternatives</Button><span>Page {Math.min(routePage + 1, Math.ceil(routes.length / 40))} / {Math.ceil(routes.length / 40)}</span><Button type="button" size="sm" variant="secondary" disabled={(routePage + 1) * 40 >= routes.length} onClick={() => setRoutePage(p => p + 1)}>Next alternatives</Button></div>}
         {selected && routes.length > 1 && <div className="p-comparison"><Field label="Compare selected itinerary with"><select value={comparisonId ?? ""} onChange={e => setComparisonId(e.target.value || null)}><option value="">Choose another alternative</option>{routes.filter(r => r.id !== selected.id).map(r => <option value={r.id} key={r.id}>{routeCost(r)} · {r.stay_hours.toFixed(1)} city hours</option>)}</select></Field>{compare && compare.id !== selected.id && <p>Selected itinerary: <strong>{(selected.stay_hours - compare.stay_hours).toFixed(1)} additional city hours</strong>{selected.total_cost_myr !== null && compare.total_cost_myr !== null && <> for <strong>{money(selected.total_cost_myr - compare.total_cost_myr)} additional cost</strong>{selected.stay_hours > compare.stay_hours && ` · ${money((selected.total_cost_myr - compare.total_cost_myr) / (selected.stay_hours - compare.stay_hours))} per additional hour`}</>}{(selected.provisional || compare.provisional) && " · resolve fare ranges to compare an exact additional cost"}.</p>}</div>}
       </section>

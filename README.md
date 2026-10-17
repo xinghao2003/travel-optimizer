@@ -1,66 +1,96 @@
 # Wayfinder Routes
 
-A local multi-city flight and scheduled-rail planner. Choose an origin, a date window, and one to four destination cities. Every selected city is visited once; the app compares every destination order and can return to the origin at the end.
+A local multimodal trip optimizer that compares total party transportation cost with hours spent in required cities, including positioning from home and back.
 
-Flight fares are searched from Google Flights through [`fast-flights`](https://github.com/AWeirdDev/flights). Scheduled rail itineraries are requested from the public [Transitous API](https://transitous.org/api/) (MOTIS). City and airport codes, coordinates, and IANA timezones come from the local [`airportsdata`](https://github.com/mborsetti/airportsdata) catalog. Transitous stop lookup is best-effort: when a nearby stop is present in its feeds, the planner uses its stop ID; otherwise it tries the airport-city coordinates. Coverage depends on Transitous feeds and is not available for every country or every city. No Transitous API key is required.
+## Trip setup and results
 
-## Trip search behavior and limits
+- Choose a home/base, up to three departure candidates, up to three arrival candidates, and one to four required cities. The optimizer chooses one departure and one arrival candidate and the visit order.
+- Fixed dates are the default: leave home on the start date and arrive back on the end date. Flexible dates permit the entire journey anywhere inside those bounds. Boundaries use the home timezone.
+- Set individual minimum stays in elapsed hours, one to nine adult travelers, a party budget in MYR, allowed modes, maximum transfers per intercity journey, overnight travel, and city-local fixed commitments. Overnight means crossing midnight in the departure timezone.
+- Flight, rail, bus, coach, subway, tram, car, and taxi are modeled. Full flight timestamps include layovers and actual airport timezones. City/terminal access, readiness buffers, and final travel home are included. City-stay hours include nights; home, positioning cities, and transportation do not count.
+- Edit fixed/ranged fares, save reusable fixed/distance pricing rules, and enter currency conversion rates. Overrides take precedence over retrieved fares; rules estimate missing prices. Person/party/vehicle units and seating capacity are explicit. Connector rules use their actual city/airport endpoints and country.
+- Unknown fares stay unknown. Range/unknown routes are provisional, and uncertain budget compliance is flagged. Definitely over-budget routes stay outside the frontier; up to ten examples are available for ticket/fare refinement.
+- An own car must be physically available and recovered to home. Rentals require declared pickup/drop-off locations, daily/driving costs, and one-way charges. Rentals are returned at an allowed location before changing transport. Rental inventory is not live.
+- Trips, fare edits, rules, graphs, and discovery checkpoints persist in SQLite. Fare, timing, and driving-price edits recalculate saved data. Changed cities, dates, travelers, or coverage may require more discovery.
 
-- The trip uses one adult, economy fares, and MYR. Each selected destination is mandatory. The planner exhaustively compares every order for up to four destinations (24 possible orders).
-- Travel legs are assigned dates across the start/end window while honoring the selected minimum nights at every destination. The end date is the final return-to-origin travel date when “Return to start city” is selected; otherwise it is the last day of the final destination stay. The planner does not search every possible date; it distributes available days across the destination stays.
-- Searches use one-way queries for each possible city pair at its assigned leg date. Four destinations can require up to 44 flight searches and 44 Transitous rail searches; each service is queried with a small concurrency limit. Google may return no results, omit prices, change its page data, or temporarily block requests. Transitous may not have rail data for a selected city pair or date.
-- The preferred departure window defaults to 09:00–17:00 local time at each departure city. It filters flight departures and sets the Transitous rail timetable window. Flight result times use the origin airport's timezone; rail times use each stop's timezone. The planner requests rail-only itineraries and shows the scheduled departure/arrival, train or route name, operator, and station names when provided by the feed.
-- When a rail itinerary is available, the result list includes a separate rail alternative even when the selected ranking preference favors a priced flight. This keeps unpriced train options visible without treating them as free.
-- The balanced ranking weighs known total fare, transport time, and fare per destination-stay hour equally. Destination-stay hours use the selected date window less travel time between destinations; lower fare per stay hour indicates better value. Incomplete fares do not receive a value score until all route fares are known.
-- Transitous stop lookups and itinerary responses are cached in a local SQLite database outside the project directory. Successful itinerary responses are cached for 6 hours and empty results for 15 minutes. Stop lookups are cached for 30 days and empty lookups for 1 day. Set `TRANSITOUS_ROUTE_TTL_SECONDS` or `TRANSITOUS_EMPTY_ROUTE_TTL_SECONDS` to change route cache lifetimes (seconds; zero disables caching). Transient HTTP failures are not cached. Airport coordinates and timezones are read from the installed local catalog; Transitous supplies nearby stop IDs and names when available.
-- Rail fares are not currently used in route totals. Unknown fares are never treated as zero: routes containing a rail leg show an incomplete total, and “Lowest total” ranks routes using only known fares. “Shortest” can select rail based on timetable duration.
-- Flight results link back to a Google Flights search. Prices and schedules can change and are not booking guarantees. Map lines connect city locations and do not represent rail-track geometry.
+The ECharts frontier links to a MapLibre map, city-stay timeline, transport details, and purchase breakdown. Comparison shows the additional money per additional city hour. Average fare per stay hour is a separate descriptive metric. Map connections are schematic, not track or road geometry.
 
-Transitous asks projects to identify themselves and coordinate before sending routing traffic or many requests. Rail lookups stay disabled until `TRANSITOUS_CONTACT_URL` is set to the project homepage or maintainer contact URL; the client sends it in its User-Agent. Contact Transitous about this planner's routing load before enabling it. The app sends no credentials or API key and makes no Transitous calls until a user submits a trip search after configuration. The UI links to Transitous source attribution.
+## Pricing and search coverage
 
-The `fast-flights` query builder can serialize multi-city queries, but its published getting-started docs still describe multi-city as unsupported and its parser can fail when Google returns rows without prices. Wayfinder therefore requests one-way legs and filters rows without a fare before passing the remaining response through the package parser.
+One-way, round-trip, and multi-city purchases cover exact movements and cannot overlap or be charged twice. Google Flights queries request the whole party; returned prices are not multiplied again. The installed fast-flights parser can return only outbound segments for round trips and fail multi-city parsing. These are **not complete bundle quotes**: the app provides search links and accepts manually entered whole-ticket prices.
 
-## Run locally on Windows
+Dynamic programming preserves different ticket eligibility, vehicle states, and fare uncertainty. Ticket cover is exact. Ranking changes display order, not frontier membership. **Optimality applies to the retrieved event graph and stated assumptions, not every ticket worldwide.** Road departures are instantiated at readiness, connection, and return-boundary events; continuous-time traffic/rental optimization is not claimed. Feed gaps, missing quotes, failures, and unsearched dates remain visible. Stale provider quotes and user conversion rates are estimates.
 
-Install uv and Node.js 20.19+ (or 22.12+). From the project root, use uv to install Python 3.13 and create the environment:
+Discovery defaults to **100 uncached requests per batch**. Continue adds another batch and reuses caches. Cancel preserves collected work; paused/interrupted jobs can resume. Start a new job when discovery inputs change. Disabled Transitous sends no transit requests. Failed queries can be retried after the queue is exhausted.
+
+Optimization defaults to **25,000 expanded labels**. Hitting the limit is explicitly marked incomplete. Continue increases the allowance and recomputes from the saved graph, rather than searching only the previous frontier. Accommodation, sightseeing hours, and reliability remain later phases.
+
+## Run on Windows
+
+Use uv and Node.js 20.19+ or 22.12+. The root `pyproject.toml` declares Python 3.13 and the backend dependencies; `uv.lock` records the resolved versions.
 
 ```powershell
 uv python install 3.13
-uv venv --python 3.13 .venv
-uv pip install --python .venv\Scripts\python.exe -r backend\requirements.txt
+uv sync
 npm --prefix frontend install
 Copy-Item .env.example .env
 ```
 
-Edit `.env` and set `TRANSITOUS_CONTACT_URL` to your project homepage or maintainer contact URL after coordinating with Transitous. No Transitous API key is required. The real `.env` is ignored by Git; `.env.example` contains the supported settings and can be committed.
-
-Start the API in one PowerShell window:
+Optional city catalog for places without airports:
 
 ```powershell
-uv run --no-project --python .venv\Scripts\python.exe -- uvicorn app.main:app --reload --app-dir backend --env-file .env
+New-Item -ItemType Directory -Force data\geonames
+Invoke-WebRequest https://download.geonames.org/export/dump/cities500.zip -OutFile data\geonames\cities500.zip
 ```
 
-Start the frontend in another PowerShell window:
+The existing local archive is reused. Without it, airport-backed cities and custom coordinate entries remain available. First lookup builds a city index. A replaced archive or airport-data package rebuilds that index after server restart; saved trips use a separate database.
 
-```powershell
-npm --prefix frontend run dev
-```
-
-Open <http://127.0.0.1:5173>. The API health check is at <http://127.0.0.1:8000/api/health>.
-
-## Run the built app with one local server
+Build and serve with one process:
 
 ```powershell
 npm --prefix frontend run build
-uv run --no-project --python .venv\Scripts\python.exe -- uvicorn app.main:app --host 127.0.0.1 --port 8000 --app-dir backend --env-file .env
+uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --app-dir backend --env-file .env
 ```
 
-Open <http://127.0.0.1:8000>. FastAPI serves the generated frontend from `frontend/dist` when that directory exists.
+Open <http://127.0.0.1:8000>. Health: `/api/health`; API documentation: `/docs`. For frontend development, keep the API on port 8000 and run `npm --prefix frontend run dev` in another terminal, then open port 5173. Vite uses `--configLoader runner` on Windows. If a restricted environment prevents its dependency optimizer reading parent directories, use the built app command above.
 
-## Configuration
+## Configuration and saved work
 
-The airport buffer is editable in the trip form. Transitous settings, including the API base and local cache TTLs, are documented in `.env.example`. The default cache is `%LOCALAPPDATA%\Wayfinder Routes\transitous-cache.sqlite3` on Windows, `$XDG_CACHE_HOME/Wayfinder Routes/transitous-cache.sqlite3` on Linux/macOS, or `~/.cache/Wayfinder Routes/transitous-cache.sqlite3` when `XDG_CACHE_HOME` is unset.
+See `.env.example`. Set `TRANSITOUS_CONTACT_URL` after coordinating routing use with Transitous. Keep source attribution. The public service has regional feed gaps and its own [API usage policy](https://transitous.org/api/); an empty result does not prove that transportation is unavailable.
 
-To trace a search through the backend and Transitous, add `--log-level debug` to the Uvicorn command. Debug logs include airport codes, travel dates, the preferred local departure window, matched stop names, endpoint/cache status, and the offset timestamp sent to `/v6/plan`; coordinates, contact URLs, and credentials are omitted.
+| Setting | Default |
+| --- | --- |
+| `PLANNER_DB_PATH` | `backend/data/planner.sqlite3` |
+| `PLANNER_PLACES_PATH` | `backend/data/places.sqlite3` |
+| `PLANNER_LABEL_BATCH` | `25000` |
+| `OSRM_BASE_URL` | `https://router.project-osrm.org` |
+| `TRANSITOUS_ROUTE_TTL_SECONDS` | `21600` |
+| `TRANSITOUS_EMPTY_ROUTE_TTL_SECONDS` | `900` |
 
-Airport data is provided by airportsdata under the MIT License. The map uses MapLibre and an OpenFreeMap style with OpenStreetMap contributors credited in the map.
+The planner database uses WAL and schema versioning. Stop the server before copying a backup, or include its active `-wal`/`-shm` files. The city index is disposable; the planner database contains user work. Both are ignored by Git. Existing Transitous caching remains in the platform application-cache directory.
+
+Default assumptions: 90 minutes before flights, 30 after flights, 15 before transit, 10 after transit, and a 30-minute minimum connection. Airport access uses OSRM when available. Otherwise the editable fallback is 45 minutes per side with an unknown fare. Clear the fallback to require resolved access time. An unavailable intercity road never becomes an automatic straight-line driving connection.
+
+Flight responses cache for 15 minutes and road matrices for seven days. Transitous uses its configured TTLs. Reopening a trip does not refresh its provider quotes; expired quotes are shown as stale estimates.
+
+## API and verification
+
+The `/api/v2` API provides city lookup; trip CRUD with `expected_revision`; discovery start/status/continue/cancel; optimization; fare editing; assumed connections; and reusable pricing rules. Main actions:
+
+- `POST /trips/{id}/searches` with `{ "budget": 100 }`.
+- `GET /searches/{id}`, `POST /searches/{id}/continue`, `POST /searches/{id}/cancel`.
+- `POST /trips/{id}/optimize`; `{ "expand": true }` increases the solver allowance.
+- `PUT/DELETE /trips/{id}/fares/{offer_id}`, `POST /trips/{id}/movements`.
+- `GET /pricing-rules`, `PUT/DELETE /pricing-rules/{id}`.
+
+Trip reads omit the large movement graph unless `?include_graph=true` is supplied. Results identify trip/snapshot revisions and discovery/optimization completion. The frontend rejects stale results. `/api/routes` remains a compatibility adapter for single-origin requests with assigned dates, using the new schedule-aware engine.
+
+```powershell
+$env:PYTHONPATH = "backend"
+uv run python -m unittest discover -s backend/tests -v
+npm --prefix frontend run build
+```
+
+If uv's global cache is inaccessible, set `$env:UV_CACHE_DIR = ".uv-cache"` in PowerShell before running uv commands. Deterministic tests cover exhaustive small-graph comparison, mixed modes, bundle discounts and overlap, fare uncertainty, traveler/vehicle units, timing/DST, positioning, car recovery, rental fees, caching, budgets, cancellation, revision conflicts, and restart persistence. Browser interactions and live provider checks are separate validations.
+
+Sources: [fast-flights](https://github.com/AWeirdDev/flights), [Transitous](https://transitous.org/sources/), [OSRM](https://project-osrm.org/), GeoNames (CC BY 4.0), airportsdata (MIT), and MapLibre/OpenFreeMap with OpenStreetMap attribution.

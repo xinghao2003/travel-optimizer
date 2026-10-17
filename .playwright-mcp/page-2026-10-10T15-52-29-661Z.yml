@@ -1,0 +1,186 @@
+- main [ref=e3]:
+  - generic [ref=e4]:
+    - generic [ref=e10]:
+      - generic [ref=e11]: Wayfinder China
+      - generic [ref=e12]: Flight + high-speed rail planner
+    - generic [ref=e13]:
+      - generic [ref=e14]: 25 Dec 2026
+      - generic [ref=e19]: 3 Jan 2027
+      - generic [ref=e20]: Saved prices
+  - generic [ref=e21]:
+    - generic [ref=e22]:
+      - generic [ref=e23]: KUALA LUMPUR CHINA KUALA LUMPUR
+      - heading "Find a better way across China." [level=1] [ref=e28]
+      - paragraph [ref=e29]: Pair snapshot flight fares with a road-distance proxy for a hypothetical rail leg.
+    - generic [ref=e30]:
+      - generic [ref=e31]:
+        - strong [ref=e32]: "25"
+        - generic [ref=e33]: cities found
+      - generic [ref=e34]:
+        - strong [ref=e35]: "40"
+        - generic [ref=e36]: priced flights
+      - generic [ref=e37]:
+        - strong [ref=e38]: —
+        - generic [ref=e39]: routes in view
+  - generic [ref=e40]: Fares are saved Skyscanner snapshots, not live quotes. Rail costs and times are estimates only.
+  - generic [ref=e42]:
+    - generic [ref=e43]:
+      - generic [ref=e44]:
+        - generic [ref=e45]:
+          - generic [ref=e46]: ROUTE OVERVIEW
+          - heading "China at a glance" [level=2] [ref=e47]
+        - generic [ref=e48]:
+          - generic [ref=e49]: Flight
+          - generic [ref=e51]: Estimated rail
+      - generic [ref=e53]:
+        - generic "Map of Kuala Lumpur and available China flight cities" [ref=e54]:
+          - region "Map" [ref=e56]
+          - generic [ref=e57]:
+            - generic [ref=e59]:
+              - button "Zoom in"
+              - button "Zoom out"
+            - group [ref=e61]:
+              - generic "Toggle attribution" [ref=e62]
+        - generic [ref=e63]:
+          - generic [ref=e64]: Lowest flight fare
+          - generic [ref=e69]: Higher
+      - generic [ref=e70]:
+        - generic [ref=e71]: City-center markers
+        - generic [ref=e76]: Click a city to set arrival or departure
+    - generic [ref=e77]:
+      - generic [ref=e84]:
+        - heading "Trip settings" [level=2] [ref=e85]
+        - paragraph [ref=e86]: Adjust the estimates and narrow your options.
+      - generic [ref=e87]:
+        - generic [ref=e88]:
+          - generic [ref=e89]:
+            - text: Rail estimate
+            - generic [ref=e90]: Editable assumptions
+          - generic [ref=e91]:
+            - generic [ref=e92]:
+              - generic [ref=e93]: Average speed
+              - generic [ref=e94]:
+                - spinbutton "Average speed km/h" [ref=e95]: "200"
+                - generic [ref=e96]: km/h
+            - generic [ref=e97]:
+              - generic [ref=e98]: Distance factor
+              - generic [ref=e99]:
+                - spinbutton "Distance factor ×" [ref=e100]: "1"
+                - generic [ref=e101]: ×
+            - generic [ref=e102]:
+              - generic [ref=e103]: Fare per km
+              - generic [ref=e104]:
+                - spinbutton "Fare per km CNY" [ref=e105]: "0.45"
+                - generic [ref=e106]: CNY
+            - generic [ref=e107]:
+              - generic [ref=e108]: Exchange rate
+              - generic [ref=e109]:
+                - spinbutton "Exchange rate MYR / CNY" [ref=e110]: "0.6"
+                - generic [ref=e111]: MYR / CNY
+            - generic [ref=e112]:
+              - generic [ref=e113]: Station overhead
+              - generic [ref=e114]:
+                - spinbutton "Station overhead min" [ref=e115]: "30"
+                - generic [ref=e116]: min
+        - generic [ref=e118]:
+          - generic [ref=e119]:
+            - text: Your limits
+            - generic [ref=e120]: Optional
+          - generic [ref=e121]:
+            - generic [ref=e122]:
+              - generic [ref=e123]: Max rail time
+              - generic [ref=e124]:
+                - spinbutton "Max rail time hours" [ref=e125]
+                - generic [ref=e126]: hours
+            - generic [ref=e127]:
+              - generic [ref=e128]: Max total budget
+              - generic [ref=e129]:
+                - spinbutton "Max total budget MYR" [ref=e130]
+                - generic [ref=e131]: MYR
+          - generic [ref=e132]:
+            - generic [ref=e133]:
+              - generic [ref=e134]: Arrive in
+              - combobox "Arrive in" [ref=e135]:
+                - option "Any city" [selected]
+                - option "Beijing"
+                - option "Changsha"
+                - option "Chengdu"
+                - option "Chongqing"
+                - option "Fuzhou"
+                - option "Guangzhou"
+                - option "Guiyang"
+                - option "Haikou"
+                - option "Hangzhou"
+                - option "Hong Kong"
+                - option "Kunming"
+                - option "Macau"
+                - option "Nanjing"
+                - option "Nanning"
+                - option "Qingdao"
+                - option "Shanghai"
+                - option "Shantou"
+                - option "Shenzhen"
+                - option "Wuhan"
+                - option "Xi'an"
+                - option "Xiamen"
+                - option "Zhengzhou"
+            - generic [ref=e136]:
+              - generic [ref=e137]: Fly home from
+              - combobox "Fly home from" [ref=e138]:
+                - option "Any city" [selected]
+                - option "Beijing"
+                - option "Changsha"
+                - option "Chengdu"
+                - option "Chongqing"
+                - option "Guangzhou"
+                - option "Haikou"
+                - option "Hangzhou"
+                - option "Jinan"
+                - option "Kunming"
+                - option "Nanjing"
+                - option "Nanning"
+                - option "Qingdao"
+                - option "Shanghai"
+                - option "Shantou"
+                - option "Shenzhen"
+                - option "Wuhan"
+                - option "Xiamen"
+                - option "Zhengzhou"
+        - generic [ref=e140]:
+          - generic [ref=e141]:
+            - text: Rank routes
+            - generic [ref=e142]: Sort by
+          - group "Optimization preference" [ref=e143]:
+            - button "Lowest cost" [ref=e144] [cursor=pointer]
+            - button "Shortest rail" [ref=e148] [cursor=pointer]
+            - button "Balanced" [ref=e156] [cursor=pointer]
+        - generic [ref=e160]: Rail distance uses OSRM driving distances. Train availability and direct service are not confirmed.
+  - generic [ref=e169]:
+    - generic [ref=e170]:
+      - generic [ref=e171]:
+        - generic [ref=e172]: FLIGHT + RAIL COMBINATIONS
+        - heading "Compare your routes 0 options" [level=2] [ref=e173]:
+          - text: Compare your routes
+          - generic [ref=e174]: 0 options
+        - paragraph [ref=e175]: Any arrival · any departure · ranked by estimated total cost
+      - button "Refresh results" [ref=e176] [cursor=pointer]
+    - generic [ref=e182]:
+      - table [ref=e184]:
+        - rowgroup [ref=e185]:
+          - row [ref=e186]:
+            - columnheader "#" [ref=e187]
+            - columnheader "Arrive" [ref=e188]
+            - columnheader "Fly home" [ref=e189]
+            - columnheader "Flights" [ref=e190]
+            - columnheader "Est. rail" [ref=e191]
+            - columnheader "Total" [ref=e192]
+            - columnheader "Rail time" [ref=e193]
+            - columnheader "Select route" [ref=e194]
+        - rowgroup
+      - generic [ref=e195]:
+        - generic [ref=e196]: Showing 0 of up to 0 priced flight pairings
+        - generic [ref=e198]: Snapshot fares · estimates in MYR
+  - generic [ref=e199]:
+    - generic [ref=e200]: Wayfinder China · Local route planner
+    - generic [ref=e201]: · Map tiles © OpenStreetMap contributors
+    - generic [ref=e202]: Hypothetical rail estimates are not train schedules or confirmed connections.

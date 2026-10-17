@@ -1,0 +1,16 @@
+[project]
+name = "wayfinder-route-optimizer"
+version = "1.0.0"
+description = "Local multimodal trip optimizer"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "fastapi>=0.115,<1.0",
+    "uvicorn[standard]>=0.30,<1.0",
+    "httpx>=0.27,<1.0",
+    "fast-flights==3.1.0",
+    "airportsdata>=20260905,<20270000",
+    "tzdata>=2024.1",
+]
+
+[tool.uv]
+package = false

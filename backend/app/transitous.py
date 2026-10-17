@@ -314,6 +314,7 @@ class TransitousClient:
         ttl_seconds: int,
         empty_ttl_seconds: int,
         is_empty,
+        on_request=None,
     ) -> Any:
         key_material = self.base_url + path + "?" + urlencode(sorted(params.items()))
         key = hashlib.sha256(key_material.encode("utf-8")).hexdigest()
@@ -333,6 +334,8 @@ class TransitousClient:
                 logger.debug("Transitous cache hit for %s", path)
                 return cached
             self.api_requests += 1
+            if on_request is not None:
+                on_request()
             logger.debug("Transitous request to %s (cache miss)", path)
             try:
                 response = await self._http.get(f"{self.base_url}{path}", params=params)

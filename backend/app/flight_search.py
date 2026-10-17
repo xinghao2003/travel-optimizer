@@ -45,10 +45,10 @@ def _install_price_tolerant_parser() -> None:
 
         upstream_parse = fetcher.parse
 
-        def parse_with_unpriced_rows_skipped(html: str):
+        def parse_with_missing_prices(html: str):
             try:
                 return upstream_parse(html)
-            except IndexError:
+            except (IndexError, TypeError):
                 document = LexborHTMLParser(html)
                 script = document.css_first(r"script.ds\:1")
                 if script is None:
@@ -62,16 +62,22 @@ def _install_price_tolerant_parser() -> None:
                 except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError):
                     raise
 
+                # Keep valid schedules whose prices are absent. A temporary
+                # sentinel lets the upstream schedule parser read those rows;
+                # it is restored to None immediately, never exposed as a fare.
                 priced_rows = []
-                skipped = 0
+                missing = []
                 for row in rows:
                     try:
                         price = row[1][0][1]
                         if price is None:
                             raise ValueError("price is missing")
                         priced_rows.append(row)
+                        missing.append(False)
                     except (IndexError, KeyError, TypeError, ValueError):
-                        skipped += 1
+                        row[1] = [[None, -1]]
+                        priced_rows.append(row)
+                        missing.append(True)
 
                 payload[3][0] = priced_rows
                 sanitized_js = (
@@ -82,11 +88,14 @@ def _install_price_tolerant_parser() -> None:
                     + trailer
                 )
                 parsed = flight_parser.parse_js(sanitized_js)
-                parsed.unpriced_rows = skipped
+                for result, absent in zip(parsed, missing):
+                    if absent:
+                        result.price = None
+                parsed.unpriced_rows = sum(missing)
                 return parsed
 
-        parse_with_unpriced_rows_skipped._wayfinder_resilient = True
-        fetcher.parse = parse_with_unpriced_rows_skipped
+        parse_with_missing_prices._wayfinder_resilient = True
+        fetcher.parse = parse_with_missing_prices
         _PARSER_INSTALLED = True
 
 

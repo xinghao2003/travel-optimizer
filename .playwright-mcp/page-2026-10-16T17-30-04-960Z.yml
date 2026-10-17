@@ -1,0 +1,140 @@
+- main [ref=e3]:
+  - generic [ref=e4]:
+    - generic [ref=e10]:
+      - generic [ref=e11]: Wayfinder Routes
+      - generic [ref=e12]: The cost of more time in your cities
+    - generic [ref=e13]:
+      - generic [ref=e14]: Saved trip
+      - combobox "Saved trip" [ref=e15]:
+        - option "Saved trips" [selected]
+      - button "New" [ref=e16] [cursor=pointer]
+  - generic [ref=e18]:
+    - generic [ref=e19]: MULTIMODAL MULTI-CITY TRIPS
+    - heading "Choose what to spend. See how much time you gain." [level=1] [ref=e20]: Choose what to spend.See how much time you gain.
+    - paragraph [ref=e21]: Explore the trade-offs between transportation cost and hours in your required cities, including your journey from home and back.
+  - region [ref=e22]:
+    - generic [ref=e23]:
+      - generic [ref=e24]:
+        - generic [ref=e25]: "01"
+        - heading "Your trip" [level=2] [ref=e26]
+      - generic [ref=e27]: Choose your trip
+    - generic [ref=e28]:
+      - generic [ref=e29]:
+        - generic [ref=e30]: Trip name
+        - textbox "Trip name" [ref=e31]: My trip
+      - generic [ref=e32]:
+        - generic [ref=e33]: Start date
+        - textbox "Start date" [ref=e34]: 2026-11-16
+      - generic [ref=e35]:
+        - generic [ref=e36]: End date
+        - textbox "End date" [ref=e37]: 2026-11-24
+      - generic [ref=e38]:
+        - generic [ref=e39]: Date mode
+        - combobox "Date mode" [ref=e40]:
+          - option "Fixed outward and return dates" [selected]
+          - option "Optimize within this date window"
+    - paragraph [ref=e41]: Leave home on the start date and arrive back on the end date, including positioning journeys.
+    - generic [ref=e42]:
+      - generic [ref=e44]:
+        - generic [ref=e45]:
+          - generic [ref=e46]: Home / base city
+          - combobox "Home / base city" [ref=e47]
+        - button "Add a place by coordinates" [ref=e48] [cursor=pointer]
+      - generic [ref=e49]:
+        - generic [ref=e50]:
+          - generic [ref=e51]:
+            - generic [ref=e52]: Possible departure cities (0/3)
+            - combobox "Possible departure cities (0/3)" [ref=e53]
+          - button "Add a place by coordinates" [ref=e54] [cursor=pointer]
+        - text: Leave empty to use home.
+      - generic [ref=e55]:
+        - generic [ref=e56]:
+          - generic [ref=e57]:
+            - generic [ref=e58]: Possible arrival cities (0/3)
+            - combobox "Possible arrival cities (0/3)" [ref=e59]
+          - button "Add a place by coordinates" [ref=e60] [cursor=pointer]
+        - text: Leave empty to return directly to home.
+    - generic [ref=e62]:
+      - generic [ref=e63]:
+        - generic [ref=e64]: Required cities (0/4) · visit order is flexible
+        - combobox "Required cities (0/4) · visit order is flexible" [ref=e65]
+      - button "Add a place by coordinates" [ref=e66] [cursor=pointer]
+    - generic [ref=e67]:
+      - generic [ref=e68]:
+        - generic [ref=e69]: Adult travelers
+        - spinbutton "Adult travelers" [ref=e70]: "1"
+      - generic [ref=e71]:
+        - generic [ref=e72]: Total party budget · MYR
+        - spinbutton "Total party budget · MYR" [ref=e73]
+      - generic [ref=e74]:
+        - generic [ref=e75]: Maximum transfers per intercity journey
+        - spinbutton "Maximum transfers per intercity journey" [ref=e76]
+      - generic [ref=e77]:
+        - generic [ref=e78]: Local departure window starts
+        - textbox "Local departure window starts" [ref=e79]: 09:00
+      - generic [ref=e80]:
+        - generic [ref=e81]: Local departure window ends
+        - textbox "Local departure window ends" [ref=e82]: 17:00
+    - group "Allowed intercity transportation" [ref=e83]:
+      - generic [ref=e85]:
+        - checkbox "flight" [checked] [ref=e86]
+        - text: flight
+      - generic [ref=e87]:
+        - checkbox "rail" [checked] [ref=e88]
+        - text: rail
+      - generic [ref=e89]:
+        - checkbox "bus" [checked] [ref=e90]
+        - text: bus
+      - generic [ref=e91]:
+        - checkbox "coach" [checked] [ref=e92]
+        - text: coach
+      - generic [ref=e93]:
+        - checkbox "subway" [ref=e94]
+        - text: subway
+      - generic [ref=e95]:
+        - checkbox "tram" [ref=e96]
+        - text: tram
+      - generic [ref=e97]:
+        - checkbox "car" [ref=e98]
+        - text: car
+      - generic [ref=e99]:
+        - checkbox "taxi" [ref=e100]
+        - text: taxi
+      - generic [ref=e101]:
+        - checkbox "Allow overnight travel" [checked] [ref=e102]
+        - text: Allow overnight travel
+    - group [ref=e103]:
+      - generic "Timing, commitments, driving, and currencies" [ref=e104] [cursor=pointer]
+      - option "Choose a required city" [selected]
+    - generic [ref=e105]:
+      - generic [ref=e106]:
+        - generic [ref=e107]: Provider requests per batch
+        - spinbutton "Provider requests per batch" [ref=e108]: "100"
+      - button "Save & recalculate" [disabled] [ref=e109] [cursor=pointer]
+      - button "Discover transport" [disabled] [ref=e114] [cursor=pointer]
+  - group [ref=e118]:
+    - generic "Reusable pricing rules 0 saved" [ref=e119] [cursor=pointer]:
+      - text: Reusable pricing rules
+      - generic [ref=e120]: 0 saved
+    - option "*" [selected]
+    - option "flight"
+    - option "rail"
+    - option "bus"
+    - option "coach"
+    - option "subway"
+    - option "tram"
+    - option "car"
+    - option "taxi"
+    - option "rental"
+    - option "Fixed / range" [selected]
+    - option "Per kilometer"
+    - option "Per person" [selected]
+    - option "Whole party"
+    - option "Per vehicle"
+    - option "Any place" [selected]
+    - option "Any place" [selected]
+  - generic [ref=e121]:
+    - text: Wayfinder Routes · Flights via fast-flights · Scheduled transit via
+    - link "Transitous sources" [ref=e122] [cursor=pointer]:
+      - /url: https://transitous.org/sources/
+    - text: · Road estimates via OSRM · Cities © GeoNames · Airports © airportsdata · Map © OpenStreetMap contributors

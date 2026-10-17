@@ -18,6 +18,7 @@ from functools import lru_cache
 from zoneinfo import ZoneInfo
 
 from .planner_models import Charge, FareOffer, Movement, PricingRule, TripSpec, stable_id
+from .planner_positioning import SUPPLIED_SOURCE, positioning_allowed, supplied_positioning
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -31,8 +32,10 @@ def cents(value: float) -> int:
 
 def bounds(spec: TripSpec):
     zone = ZoneInfo(spec.home.timezone)
-    start = datetime.combine(spec.start_date, time.min, zone).astimezone(UTC)
-    end = datetime.combine(spec.end_date+timedelta(days=1), time.min, zone).astimezone(UTC)-timedelta(microseconds=1)
+    start = datetime.combine(spec.start_date, spec.home_departure_earliest or time.min, zone).astimezone(UTC)
+    end = (datetime.combine(spec.end_date, spec.home_arrival_latest, zone).astimezone(UTC)
+           if spec.home_arrival_latest is not None else
+           datetime.combine(spec.end_date+timedelta(days=1), time.min, zone).astimezone(UTC)-timedelta(microseconds=1))
     return start, end
 
 
@@ -207,6 +210,9 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
     next_progress = started + 5
     logger.debug("planner dp.start movements=%d offers=%d limit=%s", len(movements), len(offers), label_limit)
     start, end = bounds(spec)
+    supplied, supplied_fares = supplied_positioning(spec)
+    movements = [m for m in movements if m.source != SUPPLIED_SOURCE] + supplied
+    offers = supplied_fares + offers
     places = spec.places()
     required = {v.place.id: (i, v.min_stay_hours) for i, v in enumerate(spec.visits)}
     full_mask = (1 << len(required))-1
@@ -353,6 +359,8 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
         ready = max([ready, *(c.end.astimezone(UTC) for c in commitments)])
         for target in targets:
             for template in edges[label.city, target]:
+                if not positioning_allowed(spec, template, label.phase):
+                    continue
                 if label.phase == 3 and label.own_used and label.own_location == label.city != spec.home.id and target == spec.home.id and template.vehicle_kind != "own":
                     continue
                 if template.vehicle_kind == "own" and (not spec.cars.own_enabled or label.own_location != label.city or spec.adults > spec.cars.own_capacity):
@@ -373,7 +381,7 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
                         continue
                     service = next((s.departure for s in movement.segments if s.mode not in {"transfer", "walk", "foot", "wait"} and s.departure), dep)
                     local = service.astimezone(ZoneInfo(places[movement.from_id].timezone)).time().replace(tzinfo=None)
-                    if not spec.departure_start <= local <= spec.departure_end:
+                    if movement.source != SUPPLIED_SOURCE and not spec.departure_start <= local <= spec.departure_end:
                         continue
                     if not label.path and spec.date_mode == "fixed" and dep.astimezone(ZoneInfo(spec.home.timezone)).date() != spec.start_date:
                         continue

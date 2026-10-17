@@ -19,6 +19,7 @@ from .planner_models import AirportConnection, Charge, FareOffer, Movement, Plac
 from .planner_optimizer import bounds, optimize
 from .planner_providers import fetch_flights
 from .planner_store import PlannerStore, store
+from .planner_positioning import search_modes
 from .transitous import transitous
 
 logger = logging.getLogger("uvicorn.error")
@@ -106,6 +107,11 @@ def tasks_for(spec):
     has_transit = bool(transitous.contact_url) and any(mode in TRANSIT_MODES for mode in spec.modes)
 
     def task(a, b, day, kind):
+        allowed_modes = search_modes(spec, a, b)
+        if kind == "flight" and "flight" not in allowed_modes:
+            return
+        if kind == "transit" and not any(m in TRANSIT_MODES for m in allowed_modes):
+            return
         window = windows.get((a, b))
         if window is None:
             return
@@ -548,7 +554,8 @@ class DiscoveryManager:
         else:
             key = stable_id({k: v for k, v in task.items() if k not in {"key", "outcome"}}, spec.adults, spec.departure_start, spec.departure_end,
                             [(p.id, p.latitude, p.longitude, p.flight_code, p.airport_codes) for p in places.values()], sorted(spec.modes),
-                            spec.timing.connection_minutes if task["kind"] == "transit" else None)
+                            spec.timing.connection_minutes if task["kind"] == "transit" else None,
+                            search_modes(spec, task.get("from_id"), task.get("to_id")))
         if task["kind"] in {"flight", "bundle"}:
             # Older cached results omitted Google's first flight result group.
             key = "flight-groups-v2:" + key
@@ -582,7 +589,7 @@ class DiscoveryManager:
                 zone = ZoneInfo(origin.timezone)
                 start = datetime.combine(date.fromisoformat(task["date"]), spec.departure_start, zone)
                 params = {"fromPlace": f"{origin.latitude},{origin.longitude}", "toPlace": f"{dest.latitude},{dest.longitude}",
-                          "time": start.isoformat(timespec="seconds"), "arriveBy": "false", "transitModes": ",".join(TRANSIT_MODES[m] for m in spec.modes if m in TRANSIT_MODES),
+                          "time": start.isoformat(timespec="seconds"), "arriveBy": "false", "transitModes": ",".join(TRANSIT_MODES[m] for m in search_modes(spec, task["from_id"], task["to_id"]) if m in TRANSIT_MODES),
                           "searchWindow": str(int((datetime.combine(start.date(), spec.departure_end)-datetime.combine(start.date(), spec.departure_start)).total_seconds())),
                           "timetableView": "true", "numItineraries": "10", "joinInterlinedLegs": "false"}
                 params["minTransferTime"] = str(spec.timing.connection_minutes)
@@ -641,7 +648,8 @@ class DiscoveryManager:
                                                kind=task.get("ticket_kind", "one-way"), low=value, high=value,
                                                label="Google Flights party fare", search_url=outcome.get("search_url")))
         elif task["kind"] == "transit" and outcome.get("payload"):
-            new_movements, new_offers = transit_movements(outcome["payload"], places[task["from_id"]], places[task["to_id"]], spec, task["date"])
+            pair_spec = spec.model_copy(update={"modes": search_modes(spec, task["from_id"], task["to_id"])})
+            new_movements, new_offers = transit_movements(outcome["payload"], places[task["from_id"]], places[task["to_id"]], pair_spec, task["date"])
         for m in new_movements:
             movements[m.id] = m.model_dump(mode="json")
         for o in new_offers:
@@ -718,6 +726,8 @@ class DiscoveryManager:
                     if first["from_id"] == last["to_id"] and first["to_id"] == last["from_id"]:
                         candidates.append(("round-trip", [first, last]))
             for kind, selected in candidates:
+                if any("flight" not in search_modes(spec, m["from_id"], m["to_id"]) for m in selected):
+                    continue
                 signature = []
                 for m in selected:
                     origin = places[m["from_id"]]

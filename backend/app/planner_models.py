@@ -83,6 +83,33 @@ class TimingSettings(Contract):
     airport_transfer_fallback_minutes: int | None = Field(default=45, ge=0, le=600)
 
 
+class PositioningPolicy(Contract):
+    direction: Literal["outbound", "return"]
+    gateway_id: str
+    mode: Mode
+    search_more: bool = True
+    available: bool = True
+
+
+class PositioningService(Contract):
+    id: str = Field(min_length=1, max_length=160)
+    direction: Literal["outbound", "return"]
+    gateway_id: str
+    mode: Mode
+    departure: datetime
+    arrival: datetime
+    fare_amount: float | None = Field(default=None, ge=0)
+    currency: str = Field(default="MYR", pattern=r"^[A-Za-z]{3}$")
+    label: str = Field(default="Supplied positioning service", max_length=160)
+
+    @model_validator(mode="after")
+    def validate_service(self):
+        if self.departure.tzinfo is None or self.arrival.tzinfo is None or self.arrival <= self.departure:
+            raise ValueError("Positioning services need increasing timezone-aware departure and arrival times.")
+        self.currency = self.currency.upper()
+        return self
+
+
 class TripSpec(Contract):
     name: str = Field(default="My trip", min_length=1, max_length=120)
     home: Place
@@ -98,6 +125,10 @@ class TripSpec(Contract):
     max_transfers: int | None = Field(default=None, ge=0, le=10)
     allow_overnight: bool = True
     exclude_unpriced_flights: bool = False
+    home_departure_earliest: time | None = None
+    home_arrival_latest: time | None = None
+    positioning_policies: list[PositioningPolicy] = Field(default_factory=list, max_length=48)
+    positioning_services: list[PositioningService] = Field(default_factory=list, max_length=120)
     departure_start: time = time(9)
     departure_end: time = time(17)
     commitments: list[Commitment] = Field(default_factory=list)
@@ -127,6 +158,17 @@ class TripSpec(Contract):
         self.exchange_rates["MYR"] = 1
         if any(c.place_id not in ids for c in self.commitments):
             raise ValueError("Fixed commitments must belong to required destinations.")
+        if self.start_date == self.end_date and self.home_departure_earliest and self.home_arrival_latest and self.home_departure_earliest >= self.home_arrival_latest:
+            raise ValueError("Latest home arrival must follow earliest home departure.")
+        policy_keys = [(p.direction, p.gateway_id, p.mode) for p in self.positioning_policies]
+        if len(policy_keys) != len(set(policy_keys)):
+            raise ValueError("Positioning policies must be unique per direction, gateway, and mode.")
+        if len({s.id for s in self.positioning_services}) != len(self.positioning_services):
+            raise ValueError("Positioning service IDs must be unique.")
+        for item in [*self.positioning_policies, *self.positioning_services]:
+            gateways = self.departures if item.direction == "outbound" else self.arrivals
+            if item.gateway_id == self.home.id or item.gateway_id not in {p.id for p in gateways}:
+                raise ValueError("Positioning must reference a non-home gateway in the selected direction.")
         return self
 
     def places(self) -> dict[str, Place]:
@@ -134,9 +176,12 @@ class TripSpec(Contract):
 
     def discovery_key(self) -> str:
         # Constraints/prices can change without throwing away provider data.
-        return stable_id(self.home, self.departures, self.arrivals,
-                         [v.place for v in self.visits], self.start_date, self.end_date,
-                         self.adults, sorted(self.modes), self.departure_start, self.departure_end)
+        parts = (self.home, self.departures, self.arrivals,
+                 [v.place for v in self.visits], self.start_date, self.end_date,
+                 self.adults, sorted(self.modes), self.departure_start, self.departure_end)
+        if self.home_departure_earliest is None and self.home_arrival_latest is None and not self.positioning_policies:
+            return stable_id(*parts)
+        return stable_id(*parts, self.home_departure_earliest, self.home_arrival_latest, self.positioning_policies)
 
 
 class Segment(Contract):

@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Compass, LoaderCircle, Play, Plus, Save, Square, ArrowRight, RefreshCw } from "lucide-react";
 import { Button } from "./components/ui/button";
 import { AdvancedSettings, FareEditor, Field, NumberField, PlaceChips, PlacePicker, RulesEditor } from "./components/PlannerForms";
+import { PositioningSettings } from "./components/PositioningSettings";
 import { api, blankTrip, localTime, modes, money, routeCost, type AirportConnection, type AirportConnectionRequirement, type AirportTransferMode, type Job, type Movement, type Offer, type Place, type PricingRule, type Result, type Route, type SavedSummary, type SavedTrip, type TripDraft, type TripSpec } from "./lib/planner";
 import "./planner.css";
 
@@ -190,6 +191,12 @@ export default function Planner() {
   const placeName = (id: string) => byId.get(id)?.name ?? id;
 
   function edit(value: TripDraft) {
+    const validPositioning = (item: { direction: "outbound" | "return"; gateway_id: string }) =>
+      item.gateway_id !== value.home?.id && (item.direction === "outbound" ? value.departures : value.arrivals).some(p => p.id === item.gateway_id);
+    value = { ...value,
+      positioning_policies: (value.positioning_policies ?? []).filter(validPositioning),
+      positioning_services: value.home?.id === draftRef.current.home?.id ? (value.positioning_services ?? []).filter(validPositioning) : [],
+    };
     draftRef.current = value; setDraft(value); version.current++; dirtyRef.current = true; setDirty(true); setSaveStatus("Unsaved changes"); setError("");
   }
   function accept(record: SavedTrip, replaceDraft = false) {
@@ -362,6 +369,7 @@ export default function Planner() {
       <label className="p-check"><input type="checkbox" checked={draft.exclude_unpriced_flights ?? false} onChange={e => edit({ ...draft, exclude_unpriced_flights: e.target.checked })} />Ignore flights with unknown fares</label>
       <p className="p-hint">Excludes itineraries with unpriced flights after applying ticket bundles, manual fares, and pricing rules. Saved flight schedules are retained; other transport and transfer fares may still be unknown.</p>
       {!transitConfigured && draft.modes.some(m => ["rail", "bus", "coach", "subway", "tram"].includes(m)) && <p className="p-notice">Scheduled transit is currently disabled. Configure the Transitous contact URL and coordinate routing use to enable it.</p>}
+      <PositioningSettings draft={draft} edit={edit} report={setError} />
       <AdvancedSettings draft={draft} edit={edit} places={places} report={setError} />
       <div className="p-actions p-search-actions"><NumberField label="Provider requests per batch" value={budget} min={1} max={500} step={1} onChange={n => setBudget(n ?? 100)} /><Button type="button" variant="secondary" disabled={busy || !draft.home || !draft.visits.length} onClick={() => void act(async () => { const changed = dirtyRef.current; const record = await saveSpec(); if (!changed) acceptResult(await api<Result>(`/trips/${record.id}/optimize`, "POST"), record.id); })}><Save size={15} />Save & recalculate</Button><Button type="button" disabled={busy || active || !draft.home || !draft.visits.length} onClick={() => void search()}>{busy ? <LoaderCircle size={15} className="spin" /> : <Play size={15} />}Discover transport</Button></div>
     </section>

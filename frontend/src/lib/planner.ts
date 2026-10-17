@@ -5,12 +5,16 @@ export type AirportConnectionRequirement = { from_airport: string; to_airport: s
 export const modes: Mode[] = ["flight", "rail", "bus", "coach", "subway", "tram", "car", "taxi"];
 export type Place = { id: string; name: string; latitude: number; longitude: number; timezone: string; country_code: string; airport_codes: string[]; flight_code: string | null };
 export type Visit = { place: Place; min_stay_hours: number };
+export type PositioningPolicy = { direction: "outbound" | "return"; gateway_id: string; mode: Mode; search_more: boolean; available: boolean };
+export type PositioningService = { id: string; direction: "outbound" | "return"; gateway_id: string; mode: Mode; departure: string; arrival: string; fare_amount: number | null; currency: string; label: string };
 export type TripSpec = {
   name: string; home: Place; departures: Place[]; arrivals: Place[]; visits: Visit[];
   start_date: string; end_date: string; date_mode: "fixed" | "flexible";
   adults: number; budget_myr: number | null; modes: Mode[]; max_transfers: number | null; allow_overnight: boolean;
   departure_start: string; departure_end: string;
   exclude_unpriced_flights?: boolean;
+  home_departure_earliest?: string | null; home_arrival_latest?: string | null;
+  positioning_policies?: PositioningPolicy[]; positioning_services?: PositioningService[];
   commitments: { place_id: string; start: string; end: string }[];
   timing: { connection_minutes: number; flight_before_minutes: number; flight_after_minutes: number; transit_before_minutes: number; transit_after_minutes: number; airport_transfer_fallback_minutes: number | null };
   cars: { own_enabled: boolean; own_capacity: number; own_cost_per_km: number; rental_enabled: boolean; rental_capacity: number; rental_pickups: string[]; rental_dropoffs: string[]; rental_daily_myr: number | null; rental_pickup_myr: number; rental_one_way_myr: number | null; rental_cost_per_km: number | null; taxi_capacity: number };

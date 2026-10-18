@@ -93,7 +93,13 @@ def _install_price_tolerant_parser() -> None:
             parsed = flight_parser.parse_js(sanitized_js)
             unique = []
             seen = set()
-            for result, absent in zip(parsed, missing):
+            for result, absent, raw_row in zip(parsed, missing, rows):
+                try:
+                    result.outbound_selection = tuple(
+                        (f[3], "-".join(f"{n:02d}" if i else str(n) for i, n in enumerate(f[20])),
+                         f[6], f[22][0], f[22][1]) for f in raw_row[0][2])
+                except (IndexError, TypeError, ValueError):
+                    result.outbound_selection = None
                 if absent:
                     result.price = None
                 # Ignore group/booking metadata when comparing identical

@@ -118,10 +118,10 @@ export function MissingFaresTable(props: Props) {
   const componentCount = props.groups.reduce((sum, group) => sum+group.components.length, 0);
   return <section className="p-panel" aria-labelledby="missing-fares-title">
     <div className="p-panel-heading"><div><span className="p-step">03</span><h2 id="missing-fares-title">Refine important missing fares</h2></div><span className="p-tag">{props.groups.length} groups · {componentCount} components</span></div>
-    <p>Enter a party fare per transfer and save each row. Saved estimates stay in this browser until you apply them together; saving a row does not rerun optimization.</p>
+    <p>Enter a party fare per transfer or journey and save each row. Saved estimates stay in this browser until you apply them together; saving a row does not rerun optimization.</p>
     <div className="p-actions"><Button type="button" disabled={busy || !active.length} onClick={() => void apply()}>{busy ? "Applying estimates…" : `Apply saved estimates (${active.length})`}</Button>{active.length > 0 && <Button type="button" variant="ghost" disabled={busy} onClick={() => setPending({})}>Discard saved estimates</Button>}<span className="p-hint">Applies each amount per component and recalculates once.</span></div>
     {error && <p className="p-error" role="alert">{error}</p>}
-    <p className="p-hint">Estimates apply to the listed components in this snapshot. Expand a row for individual fares. Priced components remain editable in itinerary details; future searches may add new unpriced components.</p>
+    <p className="p-hint">Departures from the same flexible connection share one row. Estimates apply to each listed component in this snapshot. Expand a row for individual fares. Priced components remain editable in itinerary details; future searches may add new unpriced components.</p>
     <div className="p-fares-table-wrap" inert={busy}><table className="p-fares-table"><caption className="sr-only">Missing fares grouped by matching transfer; each amount is a party fare per component.</caption>
       <thead><tr><th scope="col">Transfer / journey</th><th scope="col">Type</th><th scope="col">Alternatives</th><th scope="col">Party fare / range</th><th scope="col">Currency</th><th scope="col">Save</th></tr></thead>
       <tbody>{props.groups.slice(currentPage*25, (currentPage+1)*25).map(group => <FareRow key={group.key} {...props} group={group} staged={pending[group.key]} onStage={fare => stage(group.key, fare)} offerFor={stagedOffer} onSave={stageIndividual} onRemove={removeIndividual} />)}</tbody>

@@ -201,6 +201,29 @@ class OptimizerTests(unittest.TestCase):
         self.assertTrue(preliminary["bundle_candidates"])
         self.assertTrue(preliminary["refinement_routes"])
 
+    def test_priced_round_trip_replaces_unknown_one_way_bounds(self):
+        ms = [movement("out", HOME, A, dt(10), dt(10, 10)),
+              movement("back", A, HOME, dt(12, 17), dt(12, 18))]
+        offers = [fare("bundle", 4906, ["out", "back"], kind="round-trip")]
+        price = price_path(ms, offers, trip(), [])
+        self.assertEqual((price["cost_low_myr"], price["cost_high_myr"], price["total_cost_myr"]),
+                         (4906, 4906, 4906))
+        self.assertEqual(price["missing"], [])
+        self.assertEqual([o["id"] for o in price["purchases"]], ["fare:bundle"])
+
+    def test_bounds_follow_selected_cover_when_other_quotes_are_ranges(self):
+        ms = [movement("out", HOME, A, dt(10), dt(10, 10)),
+              movement("back", A, HOME, dt(12, 17), dt(12, 18))]
+        offers = [FareOffer(id="range", movement_ids=["out"], low=10, high=1000),
+                  fare("back", 50), fare("bundle", 200, ["out", "back"], kind="round-trip")]
+        price = price_path(ms, offers, trip(), [])
+        self.assertEqual((price["cost_low_myr"], price["cost_high_myr"]), (200, 200))
+        offers[-1] = FareOffer(id="bundle-range", movement_ids=["out", "back"], low=150, high=250, kind="round-trip")
+        price = price_path(ms, offers, trip(), [])
+        self.assertEqual((price["cost_low_myr"], price["cost_high_myr"]), (150, 250))
+        self.assertIsNone(price["total_cost_myr"])
+        self.assertEqual([o["id"] for o in price["purchases"]], ["bundle-range"])
+
     def test_exact_cover_does_not_overlap_tickets(self):
         ms = [movement("one", HOME, A, dt(10), dt(10, 10)), movement("two", A, B, dt(11), dt(11, 10)), movement("three", B, HOME, dt(12), dt(12, 10))]
         offers = [fare(m.id, 100) for m in ms]+[fare("ab", 50, ["one", "two"], kind="multi-city"), fare("bc", 40, ["two", "three"], kind="multi-city")]

@@ -27,3 +27,15 @@ test("duplicate diagnostics and duplicate route references do not inflate counts
  assert.equal(groups[0].components.length,1);assert.equal(groups[0].affected_itineraries,1);
 });
 
+
+test("flexible connection departures share one estimate and count distinct alternatives", () => {
+ const rail = id => ({...movement(id), mode:"rail", template_id:"assumed:rail"});
+ const groups = groupMissingFares([fare("a",{label:"rail"}),fare("b",{label:"rail"}),fare("c",{label:"rail"})], [
+  route("r1",[rail("a"),rail("b")]), route("r2",[rail("b")]),
+  route("r3",[{...rail("c"),template_id:"assumed:other"}])
+ ]);
+ assert.equal(groups.length,2);
+ const shared = groups.find(g => g.components.length === 2);
+ assert.equal(shared.affected_itineraries,2);
+ assert.deepEqual(shared.components.map(c => c.component_id),["a","b"]);
+});

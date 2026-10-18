@@ -146,7 +146,7 @@ function BundleEntry({ route, placeName, save, report }: { route: Route; placeNa
   </details>;
 }
 
-function AssumedConnection({ places, add, report }: { places: Place[]; add: (m: Movement) => Promise<void>; report: (s: string) => void }) {
+function AssumedConnection({ places, gaps, add, report }: { gaps: { from_id: string; to_id: string }[]; places: Place[]; add: (m: Movement) => Promise<void>; report: (s: string) => void }) {
   const [form, setForm] = useState({ from: "", to: "", mode: "bus", hours: "", distance: "", departure: "", arrival: "" });
   const [busy, setBusy] = useState(false);
   async function submit() {
@@ -157,12 +157,12 @@ function AssumedConnection({ places, add, report }: { places: Place[]; add: (m: 
     } catch (err) { report(err instanceof Error ? err.message : "Connection could not be saved."); }
     finally { setBusy(false); }
   }
-  return <details className="p-details"><summary>Add a connection missing from the providers</summary><p>This explicitly assumes that the connection exists. Flexible connections use the duration; scheduled connections need both timestamps (shown in your browser timezone).</p><div className="p-grid">
+  return <><div aria-live="polite">{gaps.length > 0 && <><h3>Missing city connections</h3><p>No direct connection was collected in either direction for these cities. If your route needs one, enter a verified schedule or an assumed duration below. Connecting routes or enabled road transport may still provide alternatives.</p>{gaps.map(gap => <Button key={`${gap.from_id}:${gap.to_id}`} type="button" variant="secondary" onClick={() => { setForm(f => ({ ...f, from: gap.from_id, to: gap.to_id })); const panel = document.getElementById("assumed-city-connection") as HTMLDetailsElement | null; if (panel) { panel.open = true; panel.scrollIntoView({ block: "center" }); } }}>Add {places.find(p => p.id === gap.from_id)?.name} → {places.find(p => p.id === gap.to_id)?.name}</Button>)}</>}</div><details id="assumed-city-connection" className="p-details"><summary>Add a connection missing from the providers</summary><p>This explicitly assumes that the connection exists. Flexible connections use the duration; scheduled connections need both timestamps (shown in your browser timezone).</p><div className="p-grid">
     {(["from", "to"] as const).map(key => <Field key={key} label={`Assumed connection ${key}`}><select value={form[key]} onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}><option value="">Choose place</option>{places.map(p => <option value={p.id} key={p.id}>{p.name}</option>)}</select></Field>)}
     <Field label="Assumed mode"><select value={form.mode} onChange={e => setForm(f => ({ ...f, mode: e.target.value }))}>{modes.map(m => <option key={m}>{m}</option>)}</select></Field>
     <Field label="Assumed duration · hours"><input type="number" min="0.01" step="any" value={form.hours} onChange={e => setForm(f => ({ ...f, hours: e.target.value }))} /></Field><Field label="Assumed distance · km (optional)"><input type="number" min="0" value={form.distance} onChange={e => setForm(f => ({ ...f, distance: e.target.value }))} /></Field>
     <Field label="Optional departure · browser local"><input type="datetime-local" value={form.departure} onChange={e => setForm(f => ({ ...f, departure: e.target.value }))} /></Field><Field label="Optional arrival · browser local"><input type="datetime-local" value={form.arrival} onChange={e => setForm(f => ({ ...f, arrival: e.target.value }))} /></Field><Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => void submit()}>Add assumed connection</Button>
-  </div></details>;
+  </div></details></>;
 }
 
 export default function Planner() {
@@ -357,6 +357,16 @@ export default function Planner() {
   const active = !!job && ["running", "queued"].includes(job.status);
   const allOffers = [...(saved?.snapshot?.offers ?? []), ...(saved?.offers ?? [])];
   const offerFor = (id: string) => [...allOffers].reverse().find(o => o.movement_ids.length === 1 && o.movement_ids[0] === id);
+  async function removeAssumedConnection(movementId: string) {
+    if (!saved) return;
+    const tripId = saved.id;
+    await act(async () => {
+      const updated = await api<Result>(`/trips/${tripId}/movements/${encodeURIComponent(movementId)}?expected_revision=${saved.revision}`, "DELETE");
+      accept(await api<SavedTrip>(`/trips/${tripId}`));
+      acceptResult(updated, tripId);
+      setSaveStatus("Assumed connection removed · frontier recalculated");
+    });
+  }
   const coverage = result?.coverage;
   const unresolvedAccess = (coverage?.unresolved_movements ?? []).map(movement => ({
     ...movement,
@@ -401,7 +411,7 @@ export default function Planner() {
 
     {job && <section className="p-panel p-job" aria-live="polite"><div><span className="p-step">02</span><h2>Transport discovery</h2><strong>{active && <LoaderCircle size={15} className="spin" />}{job.status}</strong></div><p>{job.processed} queries processed · {job.requests} provider requests · {job.cache_hits} cache hits{job.manual_quote_queries ? ` · ${job.manual_quote_queries} manual quotes (no request)` : ""} · {job.pending} pending</p><div className="p-actions">{active ? <Button type="button" size="sm" variant="secondary" onClick={() => void act(async () => { setJob(await api<Job>(`/searches/${job.id}/cancel`, "POST")); })}><Square size={13} />Cancel discovery</Button> : job.status !== "superseded" && (job.pending > 0 || job.failed_queries > 0 || result?.optimization_complete === false) && <Button type="button" size="sm" disabled={busy} onClick={() => void search(true)}><RefreshCw size={13} />{job.pending > 0 ? "Continue searching" : job.failed_queries > 0 ? "Retry failed searches" : "Continue optimizing"}</Button>}<span className="p-hint">Collected data and fare edits are retained.</span></div>{job.messages.length > 0 && <details><summary>Provider status and coverage</summary>{job.messages.map((m, i) => <p key={i}>{m}</p>)}</details>}</section>}
 
-    <section id="pricing" className="p-panel"><RulesEditor rules={rules} places={places} changed={rulesChanged} report={setError} />{saved && <AssumedConnection places={places} report={setError} add={async m => { const record = await saveSpec(); const next = await api<Result>(`/trips/${record.id}/movements`, "POST", m); accept(await api<SavedTrip>(`/trips/${record.id}`)); acceptResult(next, record.id); }} />}</section>
+    <section id="pricing" className="p-panel">{saved && (saved.assumed_connections?.length ?? 0) > 0 && <div><h3>Saved assumed connections</h3>{saved.assumed_connections!.map(m => <div className="p-actions" key={m.id}><span>{placeName(m.from_id)} → {placeName(m.to_id)} · {m.mode} · {m.duration_minutes} min{m.departure ? ` · ${localTime(m.departure, places.find(p => p.id === m.from_id)?.timezone ?? "UTC")}` : " · Flexible departure"}</span><Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => void removeAssumedConnection(m.id)}>Remove</Button></div>)}</div>}<RulesEditor rules={rules} places={places} changed={rulesChanged} report={setError} />{saved && <AssumedConnection gaps={saved.city_connection_gaps ?? []} places={places} report={setError} add={async m => { const record = await saveSpec(); const next = await api<Result>(`/trips/${record.id}/movements`, "POST", m); accept(await api<SavedTrip>(`/trips/${record.id}`)); acceptResult(next, record.id); }} />}</section>
 
     {result && <>
       {(result.discovery_required || dirty) && <div className="p-notice">{dirty ? "Trip changes are being saved; displayed results belong to the previous revision." : "Transport discovery is needed for these trip inputs. Saved fare edits remain available."}</div>}

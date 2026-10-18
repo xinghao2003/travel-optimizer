@@ -88,6 +88,18 @@ async def read_trip(id: str, include_graph: bool = False, compact: bool = False)
             raise HTTPException(404, "Trip not found.")
         trip["airport_transfer_rows"] = airport_transfer_rows(TripSpec.model_validate(trip["spec"]), (trip.get("snapshot") or {}).get("movements", []))
         trip["airport_connections_required"] = required_airport_connections((trip.get("snapshot") or {}).get("movements", []))
+        trip["assumed_connections"] = [m for m in (trip.get("snapshot") or {}).get("movements", [])
+                                       if m.get("source") == "User-defined connection"]
+        visits = trip["spec"]["visits"]
+        movements = (trip.get("snapshot") or {}).get("movements", [])
+        pairs = {(m["from_id"], m["to_id"]) for m in movements}
+        # These are direct-data gaps, not proof that an entire route is impossible.
+        trip["city_connection_gaps"] = [
+            {"from_id": a["place"]["id"], "to_id": b["place"]["id"]}
+            for i, a in enumerate(visits) for b in visits[i+1:]
+            if (a["place"]["id"], b["place"]["id"]) not in pairs
+            and (b["place"]["id"], a["place"]["id"]) not in pairs
+        ] if trip.get("snapshot") else []
         if not include_graph and trip.get("snapshot"):
             trip["snapshot"] = {k: v for k, v in trip["snapshot"].items() if k not in {"movements", "roads"}} | {"movements": []}
         # Stored data is already JSON-compatible. Avoid FastAPI's expensive
@@ -264,6 +276,23 @@ async def update_airport_connections(id: str, request: UpdateAirportConnections)
     payload = [item.model_dump(mode="json") for item in connections]
     store.update("trips", id, lambda trip: {**trip, "airport_connections": payload,
                                              "revision": trip["revision"]+1})
+    return await recalculate(id)
+
+
+@router.delete("/trips/{id}/movements/{movement_id}")
+async def remove_assumed_movement(id: str, movement_id: str, expected_revision: int):
+    trip = get_trip(id)
+    if trip["revision"] != expected_revision:
+        raise HTTPException(409, "Trip changed. Reload before removing a connection.")
+    snapshot = trip.get("snapshot") or {}
+    movement = next((m for m in snapshot.get("movements", []) if m["id"] == movement_id), None)
+    if movement is None or movement.get("source") != "User-defined connection":
+        raise HTTPException(404, "Assumed connection not found.")
+    snapshot["movements"] = [m for m in snapshot["movements"] if m["id"] != movement_id]
+    snapshot["revision"] += 1
+    trip["revision"] += 1
+    store.put("trips", id, trip)
+    store.put("graphs", TripSpec.model_validate(trip["spec"]).discovery_key(), snapshot)
     return await recalculate(id)
 
 

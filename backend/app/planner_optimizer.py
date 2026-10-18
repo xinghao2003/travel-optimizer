@@ -159,8 +159,10 @@ def price_path(path: list[Movement], offers: list[FareOffer], spec: TripSpec,
                 continue
             lower, upper, selected = cover(mask | covered)
             candidates.append((lo+lower, hi+upper, (offer.id, *selected)))
-        best = min(candidates, key=lambda x: (x[1], x[0], x[2]))
-        return min(x[0] for x in candidates), best[1], best[2]
+        # Both bounds must describe the same selected non-overlapping ticket
+        # cover. An unpriced alternative must not reduce a priced bundle's
+        # lower bound to zero or create a range the purchases do not support.
+        return min(candidates, key=lambda x: (x[1], x[0], x[2]))
 
     lower, upper, selected = cover(0)
     chosen = [o for _, o, _, _ in choices if o.id in selected]

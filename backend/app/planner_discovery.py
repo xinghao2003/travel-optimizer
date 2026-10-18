@@ -750,7 +750,7 @@ class DiscoveryManager:
                             search_modes(spec, task.get("from_id"), task.get("to_id")))
         if task["kind"] in {"flight", "bundle"}:
             # Older cached results omitted Google's first flight result group.
-            key = "flight-groups-v2:" + key
+            key = ("round-trip-selection-v3:" if task.get("ticket_kind") == "round-trip" else "flight-groups-v2:") + key
         lock = self.query_locks.setdefault(key, asyncio.Lock())
         async with lock:
             cached = self.store.cached(key)

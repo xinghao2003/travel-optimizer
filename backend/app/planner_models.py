@@ -110,6 +110,13 @@ class PositioningService(Contract):
         return self
 
 
+class RailFallbackSettings(Contract):
+    enabled: bool = False
+    reference_date: date | None = None
+    max_shift_days: int = Field(default=180, ge=7, le=365)
+    station_radius_km: float = Field(default=25, ge=1, le=50)
+
+
 class TripSpec(Contract):
     name: str = Field(default="My trip", min_length=1, max_length=120)
     home: Place
@@ -125,6 +132,7 @@ class TripSpec(Contract):
     max_transfers: int | None = Field(default=None, ge=0, le=10)
     allow_overnight: bool = True
     exclude_unpriced_flights: bool = False
+    rail_fallback: RailFallbackSettings = Field(default_factory=RailFallbackSettings)
     home_departure_earliest: time | None = None
     home_arrival_latest: time | None = None
     positioning_policies: list[PositioningPolicy] = Field(default_factory=list, max_length=48)
@@ -181,6 +189,8 @@ class TripSpec(Contract):
         parts = ("independent-round-trips-v2", self.home, self.departures, self.arrivals,
                  [v.place for v in self.visits], self.start_date, self.end_date,
                  self.adults, sorted(self.modes), self.departure_start, self.departure_end)
+        if self.rail_fallback.enabled:
+            parts = (*parts, "rail-fallback-v1", self.rail_fallback)
         if self.home_departure_earliest is None and self.home_arrival_latest is None and not self.positioning_policies:
             return stable_id(*parts)
         return stable_id(*parts, self.home_departure_earliest, self.home_arrival_latest, self.positioning_policies)
@@ -240,6 +250,8 @@ class AirportConnection(Contract):
 
 
 class Movement(Contract):
+    schedule_estimated: bool = False
+    schedule_reference_date: date | None = None
     id: str
     template_id: str | None = None
     usable: bool = True

@@ -19,6 +19,7 @@ from .planner_models import AirportConnection, Charge, FareOffer, Movement, Plac
 from .planner_optimizer import bounds, optimize
 from .planner_providers import fetch_flights, flight_query
 from .planner_store import PlannerStore, store
+from .planner_rail import RAIL_FALLBACK_SOURCE, fallback_task, prepare_rail_payload
 from .planner_positioning import search_modes
 from .transitous import transitous
 
@@ -544,6 +545,9 @@ def transit_movements(payload, origin, dest, spec, day):
                                         departure=timestamp(leg.get("startTime") or leg["scheduledStartTime"]),
                                         arrival=timestamp(leg.get("endTime") or leg["scheduledEndTime"]),
                                         operator=leg.get("agencyName"), service=leg.get("displayName") or leg.get("routeShortName"), source=leg.get("source"),
+                                        from_timezone=leg.get("from", {}).get("tz") or origin.timezone,
+                                        to_timezone=leg.get("to", {}).get("tz") or dest.timezone,
+                                        assumed=bool(leg.get("loopedCalendarSince")),
                                         interline_with_previous=bool(leg.get("interlineWithPreviousLeg"))))
             id = "transit:"+stable_id(origin.id, dest.id, [s.model_dump(mode="json") for s in segments])
             dep -= timedelta(minutes=spec.timing.transit_before_minutes)
@@ -551,8 +555,12 @@ def transit_movements(payload, origin, dest, spec, day):
             mode = "rail" if "rail" in modes else modes[0]
             movement = Movement(id=id, from_id=origin.id, to_id=dest.id, mode=mode, departure=dep, arrival=arr,
                                 duration_minutes=(arr-dep).total_seconds()/60, transfers=sum(not l.get("interlineWithPreviousLeg") for l in riding[1:]), segments=segments, source="Transitous / MOTIS")
+            looped = sorted({str(l["loopedCalendarSince"]) for l in riding if l.get("loopedCalendarSince")})
+            if looped:
+                movement.schedule_estimated = True
+                movement.assumptions.append("Estimated timetable: provider repeated service beyond feed validity (since " + ", ".join(looped) + "). Verify the travel date; holidays and timetable changes may differ.")
             movements.append(movement)
-            fare = transit_fare(itinerary, spec.adults)
+            fare = None if looped else transit_fare(itinerary, spec.adults)
             if fare:
                 offers.append(FareOffer(id="provider:"+id, movement_ids=[id], low=fare[0], high=fare[0], currency=fare[1], label="GTFS fare products for party"))
         except (KeyError, TypeError, ValueError):
@@ -624,6 +632,8 @@ class DiscoveryManager:
             normalized = []
             for raw in old_movements:
                 movement = Movement.model_validate(raw)
+                if movement.source == RAIL_FALLBACK_SOURCE and not spec.rail_fallback.enabled:
+                    continue
                 if movement.from_id not in spec.places() or movement.to_id not in spec.places():
                     normalized.append(raw)
                     continue
@@ -641,7 +651,7 @@ class DiscoveryManager:
                         elif charge.kind == "Airport egress":
                             charge.id = movement.id+":egress"
                     movement = updated
-                elif movement.source == "Transitous / MOTIS" and movement.segments:
+                elif movement.source in {"Transitous / MOTIS", RAIL_FALLBACK_SOURCE} and movement.segments:
                     movement = movement.model_copy(update={"departure": movement.segments[0].departure-timedelta(minutes=spec.timing.transit_before_minutes),
                                                            "arrival": movement.segments[-1].arrival+timedelta(minutes=spec.timing.transit_after_minutes)})
                     movement.duration_minutes = (movement.arrival-movement.departure).total_seconds()/60
@@ -706,6 +716,12 @@ class DiscoveryManager:
                 job["queue"].extend(t for t in tasks_for(spec) if t["kind"] == "transit" and t["key"] not in known)
         else:
             snapshot = self.store.get("graphs", spec.discovery_key()) or trip.get("snapshot") or {"revision": 0, "movements": [], "offers": [], "roads": {}, "coverage": {}}
+            # A fresh discovery must refresh generated assumptions, including when
+            # settings or the reference week changed. User connections remain.
+            retained = [m for m in snapshot["movements"] if m.get("source") != RAIL_FALLBACK_SOURCE]
+            if len(retained) != len(snapshot["movements"]):
+                snapshot["movements"] = retained
+                snapshot["revision"] += 1
             snapshot["discovery_key"] = spec.discovery_key()
             job = {"id": uuid.uuid4().hex, "trip_id": trip_id, "discovery_key": spec.discovery_key(), "status": "queued", "queue": tasks_for(spec),
                    "cursor": 0, "snapshot": snapshot, "requests": 0, "cache_hits": 0, "outcomes": {}, "messages": [], "bundle_links": [], "created": clock.time()}
@@ -744,10 +760,16 @@ class DiscoveryManager:
             coords = ";".join(f"{points[id].longitude},{points[id].latitude}" for id in ordered)
             key = "road:"+stable_id(coords)
         else:
-            key = stable_id({k: v for k, v in task.items() if k not in {"key", "outcome"}}, spec.adults, spec.departure_start, spec.departure_end,
+            cache_task = {k: v for k, v in task.items() if k not in {"key", "outcome", "rail_reference_dates", "rail_sample_index", "rail_reference_date"}}
+            if task.get("rail_reference_date"):
+                cache_task["date"] = task["rail_reference_date"]
+            key = stable_id(cache_task, spec.adults, spec.departure_start, spec.departure_end,
                             [(p.id, p.latitude, p.longitude, p.flight_code, p.airport_codes) for p in places.values()], sorted(spec.modes),
                             spec.timing.connection_minutes if task["kind"] == "transit" else None,
                             search_modes(spec, task.get("from_id"), task.get("to_id")))
+        if task["kind"] == "transit":
+            key = "transit-rail-v1:" + stable_id(key, transitous.base_url,
+                spec.rail_fallback.station_radius_km if task.get("rail_radius") else None)
         if task["kind"] in {"flight", "bundle"}:
             # Older cached results omitted Google's first flight result group.
             key = ("round-trip-selection-v3:" if task.get("ticket_kind") == "round-trip" else "flight-groups-v2:") + key
@@ -779,12 +801,14 @@ class DiscoveryManager:
                     return {"status": "unsupported", "message": "Transitous is disabled until its contact URL is configured and routing use coordinated."}, False
                 origin, dest = places[task["from_id"]], places[task["to_id"]]
                 zone = ZoneInfo(origin.timezone)
-                start = datetime.combine(date.fromisoformat(task["date"]), spec.departure_start, zone)
+                start = datetime.combine(date.fromisoformat(task.get("rail_reference_date") or task["date"]), spec.departure_start, zone)
                 params = {"fromPlace": f"{origin.latitude},{origin.longitude}", "toPlace": f"{dest.latitude},{dest.longitude}",
                           "time": start.isoformat(timespec="seconds"), "arriveBy": "false", "transitModes": ",".join(TRANSIT_MODES[m] for m in search_modes(spec, task["from_id"], task["to_id"]) if m in TRANSIT_MODES),
                           "searchWindow": str(int((datetime.combine(start.date(), spec.departure_end)-datetime.combine(start.date(), spec.departure_start)).total_seconds())),
                           "timetableView": "true", "numItineraries": "10", "joinInterlinedLegs": "false"}
                 params["minTransferTime"] = str(spec.timing.connection_minutes)
+                if task.get("rail_radius"):
+                    params.update(transitModes=TRANSIT_MODES["rail"], radius=str(spec.rail_fallback.station_radius_km*1000), directModes="")
                 if task.get("cursor"):
                     params["pageCursor"] = task["cursor"]
                 async with transitous._route_semaphore:
@@ -841,7 +865,32 @@ class DiscoveryManager:
                                                label="Google Flights party fare", search_url=outcome.get("search_url")))
         elif task["kind"] == "transit" and outcome.get("payload"):
             pair_spec = spec.model_copy(update={"modes": search_modes(spec, task["from_id"], task["to_id"])})
-            new_movements, new_offers = transit_movements(outcome["payload"], places[task["from_id"]], places[task["to_id"]], pair_spec, task["date"])
+            payload = prepare_rail_payload(outcome["payload"], task, places[task["from_id"]])
+            if task.get("rail_radius"):
+                pair_spec = pair_spec.model_copy(update={"modes": ["rail"]})
+            new_movements, new_offers = transit_movements(payload, places[task["from_id"]], places[task["to_id"]], pair_spec, task["date"])
+            for movement in new_movements:
+                if not task.get("rail_radius"):
+                    continue
+                movement.source = RAIL_FALLBACK_SOURCE
+                movement.assumptions.append(f"Station search within {spec.rail_fallback.station_radius_km:g} km; station access/egress uses provider walking times. Verify local access.")
+                if task.get("rail_reference_date"):
+                    movement.schedule_estimated = True
+                    movement.schedule_reference_date = date.fromisoformat(task["rail_reference_date"])
+                    movement.assumptions.append(f"Estimated timetable based on {task['rail_reference_date']} (same weekday), copied to {task['date']}. Travel-date coverage is unconfirmed; holidays, seasonal services and timetable changes are not checked. Fare and seat availability are unverified.")
+                    for segment in movement.segments:
+                        segment.assumed = True
+                        segment.source = "Estimated timetable from " + task["rail_reference_date"]
+        def service_day(raw):
+            rail = next((s for s in raw.get("segments", []) if s.get("mode", "").upper() in RAIL_MODES), None)
+            departure = rail["departure"] if rail else raw.get("departure")
+            return timestamp(departure).astimezone(ZoneInfo(places[raw["from_id"]].timezone)).date().isoformat()
+
+        if task.get("rail_reference_date") and any(
+                m["from_id"] == task["from_id"] and m["to_id"] == task["to_id"]
+                and m["mode"] == "rail" and not m.get("schedule_estimated")
+                and m.get("departure") and service_day(m) == task["date"] for m in movements.values()):
+            new_movements, new_offers = [], []
         for m in new_movements:
             movements[m.id] = m.model_dump(mode="json")
         for o in new_offers:
@@ -849,7 +898,17 @@ class DiscoveryManager:
             o.retrieved_at = timestamp(outcome.get("retrieved_at", datetime.now(UTC).isoformat()))
             o.expires_at = o.retrieved_at+timedelta(seconds=900 if task["kind"] in {"flight", "bundle"} else transitous.route_ttl)
             offers[o.id] = o.model_dump(mode="json")
+        # Actual-date data replaces previous local timetable projections for the pair/day.
+        if task.get("kind") == "transit" and any(m.mode == "rail" and not m.schedule_estimated for m in new_movements) and not task.get("rail_reference_date"):
+            stale = {id for id, m in movements.items() if m.get("source") == RAIL_FALLBACK_SOURCE
+                     and m.get("schedule_reference_date") and m["from_id"] == task["from_id"]
+                     and m["to_id"] == task["to_id"]
+                     and service_day(m) == task["date"]}
+            for id in stale:
+                movements.pop(id)
+            offers = {id: o for id, o in offers.items() if not stale.intersection(o["movement_ids"])}
         snapshot.update(movements=list(movements.values()), offers=list(offers.values()), revision=snapshot["revision"]+1)
+        return new_movements
 
     async def publish(self, job, spec):
         started = clock.monotonic()
@@ -1026,15 +1085,22 @@ class DiscoveryManager:
                     link = {"kind": task["ticket_kind"], "status": status, "url": outcome["search_url"], "legs": task["legs"]}
                     if link not in job["bundle_links"]:
                         job["bundle_links"].append(link)
-                self.ingest(task, outcome, spec, job["snapshot"])
+                collected = self.ingest(task, outcome, spec, job["snapshot"])
+                if task["kind"] == "transit" and status in {"empty", "success"} and not collected:
+                    probe = fallback_task(task, spec, datetime.now(ZoneInfo(spec.places()[task["from_id"]].timezone)).date())
+                    if probe and probe["key"] not in {t["key"] for t in job["queue"]}:
+                        job["queue"].insert(job["cursor"], probe)
+                        message = "Opt-in rail fallback searches nearby stations and samples matching weekdays when no usable actual-date journey was collected. An empty response does not establish timetable coverage; copied services are estimates with unverified holidays, fares and availability."
+                        if message not in job["messages"]:
+                            job["messages"].append(message)
                 if task["kind"] == "transit":
                     cursor = outcome.get("payload", {}).get("nextPageCursor")
                     itineraries = outcome.get("payload", {}).get("itineraries", [])
                     origin = spec.places().get(task.get("from_id"))
                     latest = max((timestamp(i["startTime"]) for i in itineraries if i.get("startTime")), default=None)
-                    limit = datetime.combine(date.fromisoformat(task["date"]), spec.departure_end, ZoneInfo(origin.timezone)) if origin else None
+                    limit = datetime.combine(date.fromisoformat(task.get("rail_reference_date") or task["date"]), spec.departure_end, ZoneInfo(origin.timezone)) if origin else None
                     if cursor and latest and limit and latest <= limit:
-                        more = {**task, "cursor": cursor, "key": stable_id(task["from_id"], task["to_id"], task["date"], cursor)}
+                        more = {**task, "cursor": cursor, "key": stable_id(task["from_id"], task["to_id"], task["date"], task.get("rail_reference_date"), task.get("rail_radius"), cursor)}
                         if more["key"] not in {t["key"] for t in job["queue"]}:
                             job["queue"].insert(job["cursor"], more)
                 if job["id"] in self.cancelled_jobs:

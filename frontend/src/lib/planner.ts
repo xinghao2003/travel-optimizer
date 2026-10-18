@@ -15,6 +15,7 @@ export type TripSpec = {
   adults: number; budget_myr: number | null; modes: Mode[]; max_transfers: number | null; allow_overnight: boolean;
   departure_start: string; departure_end: string;
   exclude_unpriced_flights?: boolean;
+  rail_fallback?: { enabled: boolean; reference_date: string | null; max_shift_days: number; station_radius_km: number };
   home_departure_earliest?: string | null; home_arrival_latest?: string | null;
   positioning_policies?: PositioningPolicy[]; positioning_services?: PositioningService[];
   commitments: { place_id: string; start: string; end: string }[];
@@ -25,7 +26,7 @@ export type TripSpec = {
 export type TripDraft = Omit<TripSpec, "home"> & { home: Place | null };
 export type Segment = { from_timezone?: string | null; to_timezone?: string | null; mode: string; from_name: string; to_name: string; departure: string | null; arrival: string | null; operator: string | null; service: string | null; source: string | null; duration_minutes: number | null; assumed: boolean };
 export type Charge = { id: string; kind: string; mode: string; distance_km: number | null; low: number | null; high: number | null; currency: string; source: string };
-export type Movement = { id: string; from_id: string; to_id: string; mode: Mode; departure: string | null; arrival: string | null; duration_minutes: number; distance_km: number | null; transfers: number; vehicle_kind: "own" | "rental" | null; segments: Segment[]; charges: Charge[]; source: string; search_url: string | null; assumptions: string[] };
+export type Movement = { schedule_estimated?: boolean; schedule_reference_date?: string | null; id: string; from_id: string; to_id: string; mode: Mode; departure: string | null; arrival: string | null; duration_minutes: number; distance_km: number | null; transfers: number; vehicle_kind: "own" | "rental" | null; segments: Segment[]; charges: Charge[]; source: string; search_url: string | null; assumptions: string[] };
 export type Offer = { id: string; movement_ids: string[]; kind: "one-way" | "round-trip" | "multi-city" | "charge"; low: number | null; high: number | null; currency: string; source: "provider" | "user" | "rule" | "unknown"; estimated: boolean; label: string; search_url?: string | null; validated: boolean };
 export type PricingRule = { id: string; name: string; mode: string; from_id: string | null; to_id: string | null; service: string | null; country_code: string | null; kind: "fixed" | "per-km"; low: number; high: number | null; unit: "party" | "person" | "vehicle"; capacity: number; currency: string; priority: number };
 export type Route = { id: string; departure_gateway: string; arrival_gateway: string; movements: Movement[]; stays: { place_id: string; arrival: string; departure: string; hours: number }[]; stay_hours: number; travel_hours: number; total_cost_myr: number | null; cost_low_myr: number; cost_high_myr: number | null; estimated: boolean; purchases: Offer[]; extra_charges: Charge[]; budget_status: string; provisional: boolean; cost_per_stay_hour_myr: number | null };

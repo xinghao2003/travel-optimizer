@@ -6,6 +6,14 @@
     <meta name="theme-color" content="#f5f7f8" />
     <meta name="description" content="Find multimodal city trips that balance total cost and city-stay hours, with flexible endpoints and transparent fare assumptions." />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <script>
+      try {
+        const theme = localStorage.getItem("wayfinder:theme");
+        const dark = theme === "dark" || (theme !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.classList.toggle("dark", dark);
+        document.documentElement.style.colorScheme = dark ? "dark" : "light";
+      } catch {}
+    </script>
     <title>Wayfinder Routes · Multimodal Trip Optimizer</title>
   </head>
   <body>

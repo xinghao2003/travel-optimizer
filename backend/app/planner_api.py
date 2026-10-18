@@ -5,8 +5,8 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from .planner_discovery import manager, required_airport_connections
-from .planner_models import AirportConnection, FareOffer, Movement, PricingRule, TripSpec
+from .planner_discovery import manager, required_airport_connections, airport_transfer_rows
+from .planner_models import AirportConnection, AirportTransferEstimate, FareOffer, Movement, PricingRule, TripSpec
 from .planner_places import search_places
 from .planner_store import store
 from .planner_results import compact_trip, compact_result
@@ -31,6 +31,11 @@ class OptimizationRequest(BaseModel):
 
 class UpdateAirportConnections(BaseModel):
     connections: list[AirportConnection] = Field(default_factory=list, max_length=120)
+
+
+class UpdateAirportTransfers(BaseModel):
+    estimates: list[AirportTransferEstimate] = Field(default_factory=list, max_length=240)
+    expected_revision: int
 
 
 class SharedFareValues(BaseModel):
@@ -70,7 +75,9 @@ async def list_trips():
 
 @router.post("/trips", status_code=201)
 async def create_trip(spec: TripSpec):
-    return store.new_trip(spec.model_dump(mode="json"))
+    trip = store.new_trip(spec.model_dump(mode="json"))
+    trip["airport_transfer_rows"] = airport_transfer_rows(spec)
+    return trip
 
 
 @router.get("/trips/{id}")
@@ -79,6 +86,7 @@ async def read_trip(id: str, include_graph: bool = False, compact: bool = False)
         trip = store.get("trips", id, expand=not compact)
         if trip is None:
             raise HTTPException(404, "Trip not found.")
+        trip["airport_transfer_rows"] = airport_transfer_rows(TripSpec.model_validate(trip["spec"]), (trip.get("snapshot") or {}).get("movements", []))
         trip["airport_connections_required"] = required_airport_connections((trip.get("snapshot") or {}).get("movements", []))
         if not include_graph and trip.get("snapshot"):
             trip["snapshot"] = {k: v for k, v in trip["snapshot"].items() if k not in {"movements", "roads"}} | {"movements": []}
@@ -104,7 +112,9 @@ async def update_trip(id: str, request: UpdateTrip):
         trip.pop("result", None)
         return trip
     get_trip(id)
-    return store.update("trips", id, update)
+    updated = store.update("trips", id, update)
+    updated["airport_transfer_rows"] = airport_transfer_rows(request.spec, (updated.get("snapshot") or {}).get("movements", []))
+    return updated
 
 
 @router.delete("/trips/{id}")
@@ -296,3 +306,24 @@ async def delete_rule(id: str):
     for trip in store.list("trips"):
         store.update("trips", trip["id"], lambda t: {**t, "revision": t["revision"]+1})
     return {"deleted": True}
+
+
+@router.put("/trips/{id}/airport-transfer-estimates")
+async def update_airport_transfer_estimates(id: str, request: UpdateAirportTransfers):
+    get_trip(id)
+    def update(trip):
+        if request.expected_revision != trip["revision"]:
+            raise HTTPException(409, "This trip changed. Reload it before saving.")
+        spec = TripSpec.model_validate(trip["spec"])
+        allowed = {(row["from_id"], row["to_id"]) for row in airport_transfer_rows(spec, (trip.get("snapshot") or {}).get("movements", []))}
+        keys = [(item.from_id, item.to_id, item.adults, item.mode) for item in request.estimates]
+        if len(keys) != len(set(keys)) or any((a, b) not in allowed for a, b, _, _ in keys):
+            raise HTTPException(422, "Enter each method once per airport/city direction and party size, using airports in this trip.")
+        trip["airport_transfer_estimates"] = [item.model_dump(mode="json") for item in request.estimates]
+        trip["revision"] += 1
+        trip.pop("result", None)
+        return trip
+    updated = store.update("trips", id, update)
+    if updated.get("snapshot"):
+        await manager.recalculate(id)
+    return await read_trip(id, compact=True)

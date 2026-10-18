@@ -405,15 +405,48 @@ class PersistenceAndJobsTests(unittest.IsolatedAsyncioTestCase):
                 {"date": "2027-02-12", "from_code": "SIN", "to_code": "PEN"}]
         task = {"kind": "bundle", "ticket_kind": "multi-city", "key": "manual", "legs": legs}
         manager = DiscoveryManager(self.db)
+        manager.fetch = AsyncMock(wraps=manager.fetch)
+        manager.publish = AsyncMock(wraps=manager.publish)
         with patch("app.planner_discovery.tasks_for", return_value=[task]), patch("fast_flights.get_flights") as request:
             job = manager.start(record["id"], budget=1)
+            self.assertEqual((job["processed"], job["pending"], job["manual_quote_queries"]), (0, 0, 1))
             await manager.running[job["id"]]
         saved = self.db.get("jobs", job["id"])
         self.assertEqual((saved["requests"], saved["cache_hits"], saved["manual_quote_queries"]), (0, 0, 1))
         self.assertEqual(saved["status"], "complete")
+        self.assertEqual((saved["cursor"], len(saved["queue"])), (0, 0))
+        self.assertEqual(manager.publish.await_count, 1)
+        manager.fetch.assert_not_awaited()
+        self.assertFalse(saved["snapshot"]["coverage"]["discovery_complete"])
         self.assertEqual(saved["bundle_links"][0]["status"], "requires_manual_quote")
         self.assertTrue(saved["bundle_links"][0]["url"].startswith("https://www.google.com/travel/flights"))
         request.assert_not_called()
+
+    async def test_resuming_legacy_queue_separates_manual_tasks_and_preserves_history(self):
+        spec = trip()
+        record = self.db.new_trip(spec.model_dump(mode="json"))
+        legs = [{"date": "2027-02-10", "from_code": "KUL", "to_code": "SIN"},
+                {"date": "2027-02-12", "from_code": "SIN", "to_code": "KUL"}]
+        past = {"kind": "flight", "key": "past", "outcome": "success"}
+        manual = {"kind": "bundle", "ticket_kind": "multi-city", "key": "manual", "legs": legs}
+        automatic = {"kind": "bundle", "ticket_kind": "round-trip", "key": "round", "legs": legs}
+        job = {"id": "legacy", "trip_id": record["id"], "discovery_key": spec.discovery_key(), "status": "paused",
+               "snapshot": {"revision": 1, "movements": [], "offers": [], "roads": {}, "coverage": {}},
+               "queue": [past, manual, copy.deepcopy(manual), automatic], "cursor": 1,
+               "requests": 1, "cache_hits": 0, "outcomes": {"success": 1}, "messages": [], "bundle_links": []}
+        self.db.put("jobs", job["id"], job)
+        manager = DiscoveryManager(self.db)
+        manager.fetch = AsyncMock(return_value=({"status": "empty", "options": []}, True))
+        started = manager.start(record["id"], 1, job["id"])
+        self.assertEqual((started["processed"], started["pending"], started["manual_quote_queries"]), (1, 1, 1))
+        await manager.running[job["id"]]
+        saved = self.db.get("jobs", job["id"])
+        self.assertEqual(saved["queue"], [past, {**automatic, "outcome": "empty"}])
+        self.assertEqual((saved["cursor"], saved["requests"], saved["cache_hits"]), (2, 2, 0))
+        self.assertEqual(manager.fetch.await_count, 1)
+        self.assertEqual(manager.fetch.await_args.args[0]["ticket_kind"], "round-trip")
+        self.assertEqual(len(saved["bundle_links"]), 1)
+        self.assertEqual(saved["status"], "complete")
 
     async def test_overlapping_optimization_reuses_matching_finished_result(self):
         import app.planner_discovery as discovery
@@ -471,9 +504,16 @@ class PersistenceAndJobsTests(unittest.IsolatedAsyncioTestCase):
         with patch("app.planner_discovery.iata_metros", return_value={}), patch("app.planner_discovery.make_leg", wraps=make_leg) as build:
             await manager.publish(job, spec)
             self.assertEqual(build.call_count, 2)
-        self.assertEqual(len(job["queue"]), 2)
-        self.assertEqual({t["ticket_kind"] for t in job["queue"]}, {"multi-city", "round-trip"})
-        self.assertEqual(len({t["key"] for t in job["queue"]}), 2)
+        self.assertEqual(len(job["queue"]), 1)
+        self.assertEqual({t["ticket_kind"] for t in job["queue"]}, {"round-trip"})
+        self.assertEqual(job["manual_quote_queries"], 1)
+        self.assertEqual(len(job["bundle_links"]), 1)
+        self.assertEqual(manager.public(job)["pending"], 1)
+        manager.recalculate.return_value = {"bundle_candidates": [[out, back]]}
+        await manager.publish(job, spec)
+        self.assertEqual(len(job["queue"]), 1)
+        self.assertEqual(len(job["bundle_links"]), 1)
+        self.assertEqual(job["manual_quote_queries"], 1)
 
     async def test_publish_reuses_unchanged_graph_but_recalculates_new_fares(self):
         spec = trip(modes=["rail"])

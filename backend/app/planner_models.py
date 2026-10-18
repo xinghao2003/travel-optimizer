@@ -323,3 +323,25 @@ class PricingRule(Contract):
             raise ValueError("Rule maximum must not be below its minimum.")
         self.currency = self.currency.upper()
         return self
+
+
+class AirportTransferEstimate(Contract):
+    mode: AirportTransferMode = "taxi"
+    duration_minutes: float | None = Field(default=None, gt=0)
+    from_id: str
+    to_id: str
+    adults: int = Field(ge=1, le=9)
+    low: float | None = Field(default=None, ge=0)
+    high: float | None = Field(default=None, ge=0)
+    currency: str = Field(default="MYR", pattern=r"^[A-Za-z]{3}$")
+
+    @model_validator(mode="after")
+    def interval(self):
+        if self.mode != "taxi" and self.duration_minutes is None:
+            raise ValueError("Enter a travel time for each alternative transfer method.")
+        if self.low is None and self.high is not None:
+            raise ValueError("A maximum also needs a minimum.")
+        if self.high is not None and self.high < self.low:
+            raise ValueError("Maximum must not be below minimum.")
+        self.currency = self.currency.upper()
+        return self

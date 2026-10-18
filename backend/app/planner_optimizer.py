@@ -133,7 +133,10 @@ def price_path(path: list[Movement], offers: list[FareOffer], spec: TripSpec,
                                 "from_id": movement.from_id, "to_id": movement.to_id,
                                 "currency": direct[0].currency,
                                 "reason": "exchange_rate" if direct[0].low is not None and direct[0].currency not in spec.exchange_rates else "missing_fare"})
+    aliases = {m.template_id: m.id for m in path if m.template_id}
     for offer in bundle_offers:
+        if any(id in aliases for id in offer.movement_ids):
+            offer = offer.model_copy(update={"movement_ids": [aliases.get(id, id) for id in offer.movement_ids]})
         if not set(offer.movement_ids).issubset(indexes):
             continue
         mask = sum(1 << indexes[id] for id in offer.movement_ids)
@@ -305,7 +308,7 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
         quote(label)
         if "flight" not in spec.modes and not bundle_ids and spec.budget_myr is not None and label.price["low_cents"] > cents(spec.budget_myr):
             return
-        bundle_history = tuple((m.from_id, m.to_id, next((s.departure for s in m.segments if s.mode == "flight" and s.departure), m.departure).astimezone(ZoneInfo(places[m.from_id].timezone)).date().isoformat(), m.id if m.id in bundle_ids else None)
+        bundle_history = tuple((m.from_id, m.to_id, next((s.departure for s in m.segments if s.mode == "flight" and s.departure), m.departure).astimezone(ZoneInfo(places[m.from_id].timezone)).date().isoformat(), (m.template_id or m.id) if (m.template_id or m.id) in bundle_ids else None)
                                for m in label.path if m.mode == "flight")
         # Rental timing is part of future eligibility, not just a display field.
         key = (label.city, label.phase, label.mask, label.reward, label.own_location, label.own_used,

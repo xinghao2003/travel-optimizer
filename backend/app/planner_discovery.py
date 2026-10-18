@@ -17,7 +17,7 @@ import httpx
 
 from .planner_models import AirportConnection, Charge, FareOffer, Movement, Place, PricingRule, Segment, TripSpec, stable_id
 from .planner_optimizer import bounds, optimize
-from .planner_providers import fetch_flights
+from .planner_providers import fetch_flights, flight_query
 from .planner_store import PlannerStore, store
 from .planner_positioning import search_modes
 from .transitous import transitous
@@ -69,6 +69,97 @@ def airport_places(spec):
             airport = airports.get(code)
             if airport:
                 result["airport:"+code] = Place(id="airport:"+code, name=airport["name"], latitude=airport["lat"], longitude=airport["lon"], timezone=airport["tz"])
+    return result
+
+
+def airport_transfer_rows(spec, movements=()):
+    """Finite configured airport/city pairs, supplemented by retrieved charges."""
+    rows = {}
+    metros = iata_metros()
+    airports = iata_airports()
+    places = spec.places()
+    for city in places.values():
+        codes = set(city.airport_codes) | set(metros.get(city.flight_code, {}).get("airports", {}))
+        if city.flight_code in airports:
+            codes.add(city.flight_code)
+        for code in sorted(codes):
+            for origin, dest in ((city.id, "airport:"+code), ("airport:"+code, city.id)):
+                rows[(origin, dest)] = {"from_id": origin, "to_id": dest,
+                    "label": f"{city.name} → {code} airport" if origin == city.id else f"{code} airport → {city.name}"}
+    for movement in movements:
+        for charge in movement.get("charges", []):
+            origin, dest = charge.get("from_id"), charge.get("to_id")
+            if charge.get("kind") not in {"Airport access", "Airport egress"} or not origin or not dest:
+                continue
+            city_id = dest if origin.startswith("airport:") else origin
+            airport_id = origin if origin.startswith("airport:") else dest
+            if city_id not in places or not airport_id.startswith("airport:"):
+                continue
+            name = places[city_id].name
+            code = airport_id.removeprefix("airport:")
+            rows[(origin, dest)] = {"from_id": origin, "to_id": dest,
+                "label": f"{code} airport → {name}" if origin == airport_id else f"{name} → {code} airport"}
+    return sorted(rows.values(), key=lambda row: row["label"])
+
+
+def airport_transfer_rules(trip, spec):
+    rules = []
+    for item in trip.get("airport_transfer_estimates", []):
+        if item["adults"] != spec.adults or item.get("low") is None:
+            continue
+        origin, dest = item["from_id"], item["to_id"]
+        rules.append(PricingRule(id="airport-transfer:"+stable_id(origin, dest, spec.adults, item.get("mode", "taxi")),
+            name="Trip airport transfer estimate", from_id=origin, to_id=dest, mode=item.get("mode", "taxi"),
+            service="Airport egress" if origin.startswith("airport:") else "Airport access",
+            low=item["low"], high=item.get("high"), currency=item["currency"], unit="party", priority=1000000))
+    return rules
+
+
+def airport_transfer_variants(raw_movements, trip, spec, roads, connections):
+    """Expand access/egress choices for the solver only; shared schedules stay clean."""
+    choices = {}
+    for item in trip.get("airport_transfer_estimates", []):
+        if item["adults"] == spec.adults:
+            choices.setdefault((item["from_id"], item["to_id"]), []).append(item)
+    result = []
+    for raw in raw_movements:
+        movement = Movement.model_validate(raw)
+        flights = [segment.model_dump(mode="json") for segment in movement.segments if segment.mode == "flight"]
+        if movement.source != "Google Flights / fast-flights" or not flights or movement.from_id not in spec.places() or movement.to_id not in spec.places():
+            result.append(movement)
+            continue
+        access = (movement.from_id, "airport:"+flights[0]["from_id"])
+        egress = ("airport:"+flights[-1]["to_id"], movement.to_id)
+        options = []
+        for pair in (access, egress):
+            entries = choices.get(pair, [])
+            # The existing routed taxi remains available unless explicitly edited.
+            options.append(entries if any(e.get("mode", "taxi") == "taxi" for e in entries) else [None, *entries])
+        for selected in itertools.product(*options):
+            if not any(selected):
+                result.append(movement)
+                continue
+            local_roads = dict(roads)
+            for pair, entry in zip((access, egress), selected):
+                if entry and entry.get("duration_minutes") is not None:
+                    local_roads[pair[0]+"->"+pair[1]] = {"duration_minutes": entry["duration_minutes"], "distance_km": None}
+            variant = flight_movement(spec.places()[movement.from_id], spec.places()[movement.to_id], flights, spec, local_roads, connections)
+            variant.id = movement.id+":transfer:"+stable_id(selected)
+            variant.template_id = movement.id
+            variant.search_url = movement.search_url
+            for kind, entry in zip(("access", "egress"), selected):
+                charge = next((c for c in variant.charges if c.kind == "Airport "+kind), None)
+                mode = entry.get("mode", "taxi") if entry else "taxi"
+                if charge:
+                    charge.id = movement.id+":"+kind+(":"+mode if mode != "taxi" else "")
+                    charge.mode = mode
+                if entry:
+                    segment = next((s for s in variant.segments if s.source == "Airport "+kind), None)
+                    if segment:
+                        segment.mode = mode
+                        segment.source = "User-estimated airport "+kind
+                        segment.assumed = True
+            result.append(variant)
     return result
 
 
@@ -484,6 +575,28 @@ class DiscoveryManager:
     def rules(self):
         return [PricingRule.model_validate(r) for r in self.store.list("rules")]
 
+    def register_manual_quote(self, job, legs, spec):
+        key = stable_id("multi-city", legs)
+        links = job.setdefault("bundle_links", [])
+        if any(link["kind"] == "multi-city" and stable_id("multi-city", link["legs"]) == key for link in links):
+            return False
+        query = flight_query(legs, spec.adults, "multi-city", spec.departure_start, spec.departure_end)
+        links.append({"kind": "multi-city", "status": "requires_manual_quote", "url": query.url(),
+                      "legs": legs, "manual_only": True})
+        job["manual_quote_queries"] = sum(link["kind"] == "multi-city" for link in links)
+        return True
+
+    def separate_manual_quotes(self, job, spec):
+        """Keep historical counters intact; migrate only unprocessed legacy tasks."""
+        future = []
+        for task in job["queue"][job["cursor"]:]:
+            if task.get("ticket_kind") == "multi-city":
+                self.register_manual_quote(job, task["legs"], spec)
+            else:
+                future.append(task)
+        job["queue"] = job["queue"][:job["cursor"]]+future
+        job["manual_quote_queries"] = sum(link["kind"] == "multi-city" for link in job.get("bundle_links", []))
+
     async def recalculate(self, trip_id, snapshot=None, expand=False, job_id=None, include_dominated=False):
         started = clock.monotonic()
         logger.debug("planner recalculate.wait trip=%s job=%s", trip_id, job_id)
@@ -554,8 +667,8 @@ class DiscoveryManager:
 
             cancelled = check_cancelled if job_id else None
             logger.debug("planner optimize.dispatch trip=%s elapsed=%.2fs movements=%d offers=%d label_limit=%d", trip_id, clock.monotonic()-started, len(snapshot["movements"]), len(offers), snapshot["label_limit"])
-            result = await asyncio.to_thread(optimize, spec, [Movement.model_validate(m) for m in snapshot["movements"]], offers,
-                                             self.rules(), snapshot["revision"], trip["revision"], cancelled, snapshot["label_limit"], include_dominated=include_dominated)
+            result = await asyncio.to_thread(optimize, spec, airport_transfer_variants(snapshot["movements"], trip, spec, snapshot.get("roads", {}), airport_connections), offers,
+                                             [*self.rules(), *airport_transfer_rules(trip, spec)], snapshot["revision"], trip["revision"], cancelled, snapshot["label_limit"], include_dominated=include_dominated)
             logger.debug("planner optimize.return trip=%s elapsed=%.2fs expanded=%d completed=%d routes=%d bundles=%d", trip_id, clock.monotonic()-started, result["expanded_labels"], result["feasible_count"], len(result["routes"]), len(result.get("bundle_candidates", [])))
             result["coverage"] = snapshot.get("coverage", {})
             result["coverage"]["unresolved_movements"] = [{"id": m["id"], "from_id": m["from_id"], "to_id": m["to_id"], "assumptions": m["assumptions"]} for m in snapshot["movements"] if not m.get("usable", True)]
@@ -596,6 +709,7 @@ class DiscoveryManager:
             snapshot["discovery_key"] = spec.discovery_key()
             job = {"id": uuid.uuid4().hex, "trip_id": trip_id, "discovery_key": spec.discovery_key(), "status": "queued", "queue": tasks_for(spec),
                    "cursor": 0, "snapshot": snapshot, "requests": 0, "cache_hits": 0, "outcomes": {}, "messages": [], "bundle_links": [], "created": clock.time()}
+        self.separate_manual_quotes(job, spec)
         job.update(status="queued", batch_budget=budget, batch_requests=0)
         job["transit_configured"] = bool(transitous.contact_url)
         if any(m in TRANSIT_MODES for m in spec.modes) and not transitous.contact_url:
@@ -739,6 +853,7 @@ class DiscoveryManager:
 
     async def publish(self, job, spec):
         started = clock.monotonic()
+        self.separate_manual_quotes(job, spec)
         logger.debug("planner publish.start job=%s cursor=%d queue=%d", job["id"], job["cursor"], len(job["queue"]))
         snapshot = job["snapshot"]
         trip = self.store.get("trips", job["trip_id"])
@@ -753,10 +868,13 @@ class DiscoveryManager:
         snapshot["movements"] = list(merged.values())
         latest_outcomes = [t.get("outcome") for t in {t["key"]: t for t in job["queue"][:job["cursor"]]}.values()]
         source_gaps = ["Transitous disabled"] if any(m in TRANSIT_MODES for m in spec.modes) and not transitous.contact_url else []
-        discovery_complete = not source_gaps and job["cursor"] == len(job["queue"]) and not any(s in {"failed", "unsupported", "requires_manual_quote"} for s in latest_outcomes)
+        discovery_complete = (not source_gaps and job["cursor"] == len(job["queue"])
+                              and not any(s in {"failed", "unsupported", "requires_manual_quote"} for s in latest_outcomes)
+                              and not any(link["status"] == "requires_manual_quote" for link in job["bundle_links"]))
         snapshot["coverage"] = {"processed": job["cursor"], "pending": len(job["queue"])-job["cursor"], "requests": job["requests"],
                                 "cache_hits": job["cache_hits"], "outcomes": job["outcomes"], "discovery_complete": discovery_complete,
-                                "messages": job["messages"][-12:], "bundle_links": job["bundle_links"]}
+                                "messages": job["messages"][-12:], "bundle_links": job["bundle_links"],
+                                "manual_quote_queries": job.get("manual_quote_queries", 0)}
         snapshot["coverage"]["source_gaps"] = source_gaps
         snapshot["coverage"]["unresolved_movements"] = [{"id": m["id"], "from_id": m["from_id"], "to_id": m["to_id"], "assumptions": m["assumptions"]} for m in snapshot["movements"] if not m.get("usable", True)]
         logger.debug("planner graph.persist job=%s elapsed=%.2fs movements=%d", job["id"], clock.monotonic()-started, len(snapshot["movements"]))
@@ -799,7 +917,7 @@ class DiscoveryManager:
             result = await self.recalculate(trip["id"], snapshot, job_id=job["id"])
             self.optimization_cadence[job["id"]] = {"cursor": job["cursor"], "seconds": clock.monotonic()-solve_started,
                                                      "controls": controls}
-        known = {t["key"] for t in job["queue"]}
+        known = {t["key"] for t in job["queue"]} | {stable_id(link["kind"], link["legs"]) for link in job["bundle_links"]}
         # Include dominated complete histories too: an undiscovered bundle can
         # make them cheaper than the current one-way frontier.
         logger.debug("planner bundles.enqueue.start job=%s candidates=%d elapsed=%.2fs", job["id"], len(result.get("bundle_candidates", [])), clock.monotonic()-started)
@@ -808,6 +926,7 @@ class DiscoveryManager:
         leg_cache = {}
         seen_tickets = set()
         added = 0
+        manual_added = 0
         for candidate_index, flights in enumerate(result.pop("bundle_candidates", [])):
             if candidate_index % 32 == 0:
                 await asyncio.sleep(0)
@@ -837,19 +956,24 @@ class DiscoveryManager:
                 key = stable_id(kind, legs)
                 if key not in known:
                     known.add(key)
+                    if kind == "multi-city":
+                        manual_added += int(self.register_manual_quote(job, legs, spec))
+                        continue
                     # Put a discovered ticket opportunity next, keeping progress
                     # deterministic and the provider request budget authoritative.
                     job["queue"].insert(job["cursor"], {"kind": "bundle", "ticket_kind": kind, "key": key, "legs": legs})
                     added += 1
-        logger.debug("planner bundles.enqueue.done job=%s unique_tickets=%d unique_legs=%d added=%d elapsed=%.3fs", job["id"], len(seen_tickets), len(leg_cache), added, clock.monotonic()-bundle_started)
+        logger.debug("planner bundles.enqueue.done job=%s unique_tickets=%d unique_legs=%d added=%d manual_added=%d elapsed=%.3fs", job["id"], len(seen_tickets), len(leg_cache), added, manual_added, clock.monotonic()-bundle_started)
         snapshot["coverage"]["pending"] = len(job["queue"])-job["cursor"]
-        snapshot["coverage"]["discovery_complete"] = discovery_complete and job["cursor"] == len(job["queue"])
+        snapshot["coverage"]["manual_quote_queries"] = job.get("manual_quote_queries", 0)
+        snapshot["coverage"]["discovery_complete"] = (discovery_complete and job["cursor"] == len(job["queue"])
+                                                        and not any(link["status"] == "requires_manual_quote" for link in job["bundle_links"]))
         logger.debug("planner graph.persist job=%s elapsed=%.2fs movements=%d", job["id"], clock.monotonic()-started, len(snapshot["movements"]))
         self.store.put("graphs", job["discovery_key"], shareable_snapshot(snapshot, spec))
         latest = self.store.get("trips", trip["id"])
         if TripSpec.model_validate(latest["spec"]).discovery_key() == job["discovery_key"]:
             trip_snapshot = latest.get("snapshot") or copy.deepcopy(snapshot)
-            for key in ("processed", "pending", "requests", "cache_hits", "outcomes", "discovery_complete", "messages", "bundle_links", "source_gaps"):
+            for key in ("processed", "pending", "requests", "cache_hits", "manual_quote_queries", "outcomes", "discovery_complete", "messages", "bundle_links", "source_gaps"):
                 if key in snapshot.get("coverage", {}):
                     trip_snapshot.setdefault("coverage", {})[key] = snapshot["coverage"][key]
             latest["snapshot"] = trip_snapshot
@@ -865,6 +989,7 @@ class DiscoveryManager:
             self.running.pop(job["id"], None)
             self.live_jobs.pop(job["id"], None)
             return
+        self.separate_manual_quotes(job, spec)
         job["status"] = "running"
         self.store.put("jobs", job["id"], job)
         try:

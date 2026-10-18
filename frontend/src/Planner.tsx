@@ -1,3 +1,4 @@
+import { AirportTransferTable } from "./components/AirportTransferTable";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Compass, LoaderCircle, Play, Plus, Save, Square, ArrowRight, RefreshCw } from "lucide-react";
 import { Button } from "./components/ui/button";
@@ -386,6 +387,14 @@ export default function Planner() {
       <AdvancedSettings draft={draft} edit={edit} places={places} report={setError} />
       <div className="p-actions p-search-actions"><NumberField label="Provider requests per batch" value={budget} min={1} max={500} step={1} onChange={n => setBudget(n ?? 100)} /><Button type="button" variant="secondary" disabled={busy || !draft.home || !draft.visits.length} onClick={() => void act(async () => { const changed = dirtyRef.current; const record = await saveSpec(); if (!changed) acceptResult(await api<Result>(`/trips/${record.id}/optimize`, "POST"), record.id); })}><Save size={15} />Save & recalculate</Button><Button type="button" disabled={busy || active || !draft.home || !draft.visits.length} onClick={() => void search()}>{busy ? <LoaderCircle size={15} className="spin" /> : <Play size={15} />}Discover transport</Button></div>
     </section>
+
+    {saved && <AirportTransferTable key={saved.id} trip={saved} save={async estimates => {
+      const record = await saveSpec();
+      const updated = await api<SavedTrip>(`/trips/${record.id}/airport-transfer-estimates`, "PUT", { estimates, expected_revision: record.revision });
+      accept(updated);
+      if (updated.result) acceptResult(updated.result, updated.id);
+      setSaveStatus("Airport transfer estimates saved");
+    }} report={setError} />}
 
     {job && <section className="p-panel p-job" aria-live="polite"><div><span className="p-step">02</span><h2>Transport discovery</h2><strong>{active && <LoaderCircle size={15} className="spin" />}{job.status}</strong></div><p>{job.processed} queries processed · {job.requests} provider requests · {job.cache_hits} cache hits{job.manual_quote_queries ? ` · ${job.manual_quote_queries} manual quotes (no request)` : ""} · {job.pending} pending</p><div className="p-actions">{active ? <Button type="button" size="sm" variant="secondary" onClick={() => void act(async () => { setJob(await api<Job>(`/searches/${job.id}/cancel`, "POST")); })}><Square size={13} />Cancel discovery</Button> : job.status !== "superseded" && (job.pending > 0 || job.failed_queries > 0 || result?.optimization_complete === false) && <Button type="button" size="sm" disabled={busy} onClick={() => void search(true)}><RefreshCw size={13} />{job.pending > 0 ? "Continue searching" : job.failed_queries > 0 ? "Retry failed searches" : "Continue optimizing"}</Button>}<span className="p-hint">Collected data and fare edits are retained.</span></div>{job.messages.length > 0 && <details><summary>Provider status and coverage</summary>{job.messages.map((m, i) => <p key={i}>{m}</p>)}</details>}</section>}
 

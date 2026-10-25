@@ -9,7 +9,7 @@ from .planner_discovery import manager, required_airport_connections, airport_tr
 from .planner_models import AirportConnection, AirportTransferEstimate, FareOffer, Movement, PricingRule, TripSpec
 from .planner_places import search_places
 from .planner_store import store
-from .planner_results import compact_trip, compact_result
+from .planner_results import compact_trip, compact_result, fare_component_ids
 
 router = APIRouter(prefix="/api/v2")
 
@@ -104,8 +104,14 @@ async def read_trip(id: str, include_graph: bool = False, compact: bool = False)
         trip["airport_connections_required"] = required_airport_connections((trip.get("snapshot") or {}).get("movements", []))
         trip["assumed_connections"] = [m for m in (trip.get("snapshot") or {}).get("movements", [])
                                        if m.get("source") == "User-defined connection"]
-        visits = trip["spec"]["visits"]
         movements = (trip.get("snapshot") or {}).get("movements", [])
+        component_ids = {m["id"] for m in movements}
+        component_ids.update(c["id"] for m in movements for c in m.get("charges", []))
+        component_ids.update(fare_component_ids(trip.get("result")))
+        # The compact trip response omits its movement graph. Keep enough fare
+        # component metadata for clients to edit saved shared estimates in bulk.
+        trip["fare_component_ids"] = sorted(component_ids)
+        visits = trip["spec"]["visits"]
         pairs = {(m["from_id"], m["to_id"]) for m in movements}
         # These are direct-data gaps, not proof that an entire route is impossible.
         trip["city_connection_gaps"] = [

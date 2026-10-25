@@ -5,12 +5,56 @@ import type { Offer } from "../lib/planner";
 import type { MissingFareGroup } from "../lib/missingFares";
 
 export type SharedFare = { component_ids: string[]; low: number; high: number | null; currency: string; label: string };
+export type AppliedSharedFareGroup = { key: string; component_ids: string[]; low: number | null; high: number | null; currency: string; mixed_amounts: boolean; mixed_currency: boolean; label: string };
 type Props = {
-  storageKey: string; groups: MissingFareGroup[]; placeName: (id: string) => string;
+  storageKey: string; groups: MissingFareGroup[]; appliedGroups: AppliedSharedFareGroup[]; placeName: (id: string) => string;
   offerFor: (id: string) => Offer | undefined;
   onApply: (fares: SharedFare[]) => Promise<void>;
   onSave: (offer: Offer) => Promise<void>; onRemove: (id: string) => Promise<void>;
 };
+
+function AppliedSharedFareRow({ group, staged, onStage }: {
+  group: AppliedSharedFareGroup; staged?: SharedFare; onStage: (fare: SharedFare) => void;
+}) {
+  const [low, setLow] = useState(staged ? staged.low.toString() : group.mixed_amounts || group.low === null ? "" : group.low.toString());
+  const [high, setHigh] = useState(staged ? staged.high?.toString() ?? "" : group.mixed_amounts ? "" : group.high?.toString() ?? "");
+  const [range, setRange] = useState(staged ? staged.high !== staged.low : !group.mixed_amounts && group.high !== group.low);
+  const [currency, setCurrency] = useState(staged?.currency ?? (group.mixed_currency ? "" : group.currency));
+  const [error, setError] = useState("");
+  useEffect(() => {
+    const lowValue = staged ? staged.low.toString() : group.mixed_amounts || group.low === null ? "" : group.low.toString();
+    const highValue = staged ? staged.high?.toString() ?? "" : group.mixed_amounts ? "" : group.high?.toString() ?? "";
+    const fare = staged ? staged.high !== staged.low : !group.mixed_amounts && group.high !== group.low;
+    setLow(lowValue);
+    setHigh(highValue);
+    setRange(fare);
+    setCurrency(staged?.currency ?? (group.mixed_currency ? "" : group.currency));
+  }, [group.key, group.low, group.high, group.currency, group.mixed_amounts, group.mixed_currency, staged?.low, staged?.high, staged?.currency]);
+
+  function save() {
+    setError("");
+    try {
+      if (low.trim() === "" || !Number.isFinite(Number(low)) || Number(low) < 0) throw new Error("Enter a non-negative fare.");
+      const upper = range ? high.trim() === "" ? null : Number(high) : Number(low);
+      if (upper !== null && (!Number.isFinite(upper) || upper < Number(low))) throw new Error("Maximum must be at least the minimum.");
+      if (!/^[A-Z]{3}$/.test(currency)) throw new Error("Enter a three-letter currency code.");
+      onStage({ component_ids: group.component_ids, low: Number(low), high: upper, currency,
+        label: group.label });
+    } catch (err) { setError(err instanceof Error ? err.message : "Shared fare could not be saved."); }
+  }
+
+  return <tr>
+    <th scope="row"><strong>{group.label.replace(/^Shared estimate:\s*/, "")}</strong><small>{group.component_ids.length} components in this group</small>{(group.mixed_amounts || group.mixed_currency) && <small>Current values differ; applying will set one value for all.</small>}</th>
+    <td>Applied shared estimate</td>
+    <td><div className="p-shared-amounts">
+      <input aria-label={`${group.label} · ${range ? "minimum" : "fare"}`} type="number" min="0" step="0.01" placeholder={group.mixed_amounts ? "Mixed" : undefined} value={low} onChange={e => setLow(e.target.value)} />
+      {range && <><span>–</span><input aria-label={`${group.label} · maximum`} type="number" min={low || 0} step="0.01" placeholder="Unbounded" value={high} onChange={e => setHigh(e.target.value)} /></>}
+      <label className="p-check"><input type="checkbox" checked={range} onChange={e => setRange(e.target.checked)} />Range</label>
+    </div>{error && <span className="p-error" role="alert">{error}</span>}</td>
+    <td><input aria-label={`${group.label} · currency`} className="p-currency" maxLength={3} placeholder={group.mixed_currency ? "Mixed" : undefined} value={currency} onChange={e => setCurrency(e.target.value.toUpperCase())} /></td>
+    <td><Button type="button" size="sm" onClick={save}>Save estimate</Button>{staged && <small>Saved for apply</small>}</td>
+  </tr>;
+}
 
 function FareRow({ group, staged, placeName, offerFor, onStage, onSave, onRemove }: Omit<Props, "groups" | "onApply" | "storageKey"> & { group: MissingFareGroup; staged?: SharedFare; onStage: (fare: SharedFare) => void }) {
   const first = staged ?? offerFor(group.components[0].component_id);
@@ -70,9 +114,12 @@ export function MissingFaresTable(props: Props) {
   useEffect(() => {
     try { localStorage.setItem(props.storageKey, JSON.stringify(pending)); } catch { /* Keep drafts in memory if storage is unavailable. */ }
   }, [pending, props.storageKey]);
-  const missingIds = new Set(props.groups.flatMap(group => group.components.map(c => c.component_id)));
+  const editableIds = new Set([
+    ...props.groups.flatMap(group => group.components.map(c => c.component_id)),
+    ...props.appliedGroups.flatMap(group => group.component_ids),
+  ]);
   const active = Object.values(pending).flatMap(staged => {
-    const component_ids = staged.component_ids.filter(id => missingIds.has(id));
+    const component_ids = staged.component_ids.filter(id => editableIds.has(id));
     return component_ids.length ? [{ ...staged, component_ids }] : [];
   });
   function stage(key: string, fare: SharedFare) {
@@ -116,16 +163,26 @@ export function MissingFaresTable(props: Props) {
   }
   const currentPage = Math.min(page, Math.max(0, Math.ceil(props.groups.length / 25)-1));
   const componentCount = props.groups.reduce((sum, group) => sum+group.components.length, 0);
+  if (!props.groups.length && !props.appliedGroups.length) return null;
   return <section className="p-panel" aria-labelledby="missing-fares-title">
-    <div className="p-panel-heading"><div><span className="p-step">03</span><h2 id="missing-fares-title">Refine important missing fares</h2></div><span className="p-tag">{props.groups.length} groups · {componentCount} components</span></div>
-    <p>Enter a party fare per transfer or journey and save each row. Saved estimates stay in this browser until you apply them together; saving a row does not rerun optimization.</p>
+    <div className="p-panel-heading"><div><span className="p-step">03</span><h2 id="missing-fares-title">{props.groups.length ? "Refine important missing fares" : "Applied shared estimates"}</h2></div><span className="p-tag">{props.groups.length} missing groups · {componentCount} components · {props.appliedGroups.length} applied groups</span></div>
+    {props.groups.length > 0 && <p>Enter a party fare per transfer or journey and save each row. Saved estimates stay in this browser until you apply them together; saving a row does not rerun optimization.</p>}
     <div className="p-actions"><Button type="button" disabled={busy || !active.length} onClick={() => void apply()}>{busy ? "Applying estimates…" : `Apply saved estimates (${active.length})`}</Button>{active.length > 0 && <Button type="button" variant="ghost" disabled={busy} onClick={() => setPending({})}>Discard saved estimates</Button>}<span className="p-hint">Applies each amount per component and recalculates once.</span></div>
     {error && <p className="p-error" role="alert">{error}</p>}
-    <p className="p-hint">Repeated journeys with the same endpoints, fare type, mode, currency, and missing-fare reason share one row, even across dates. Expand a row to inspect its components; estimates apply separately to every listed component. Priced components remain editable in itinerary details; future searches may add new unpriced components.</p>
-    <div className="p-fares-table-wrap" inert={busy}><table className="p-fares-table"><caption className="sr-only">Missing fares grouped by matching transfer; each amount is a party fare per component.</caption>
-      <thead><tr><th scope="col">Transfer / journey</th><th scope="col">Type</th><th scope="col">Alternatives</th><th scope="col">Party fare / range</th><th scope="col">Currency</th><th scope="col">Save</th></tr></thead>
-      <tbody>{props.groups.slice(currentPage*25, (currentPage+1)*25).map(group => <FareRow key={group.key} {...props} group={group} staged={pending[group.key]} onStage={fare => stage(group.key, fare)} offerFor={stagedOffer} onSave={stageIndividual} onRemove={removeIndividual} />)}</tbody>
-    </table></div>
+    {props.groups.length > 0 && <><p className="p-hint">Repeated journeys with the same endpoints, fare type, mode, currency, and missing-fare reason share one row, even across dates. Expand a row to inspect its components; estimates apply separately to every listed component. Future searches may add new unpriced components.</p>
+      <div className="p-fares-table-wrap" inert={busy}><table className="p-fares-table"><caption className="sr-only">Missing fares grouped by matching transfer; each amount is a party fare per component.</caption>
+        <thead><tr><th scope="col">Transfer / journey</th><th scope="col">Type</th><th scope="col">Alternatives</th><th scope="col">Party fare / range</th><th scope="col">Currency</th><th scope="col">Save</th></tr></thead>
+        <tbody>{props.groups.slice(currentPage*25, (currentPage+1)*25).map(group => <FareRow key={group.key} {...props} group={group} staged={pending[group.key]} onStage={fare => stage(group.key, fare)} offerFor={stagedOffer} onSave={stageIndividual} onRemove={removeIndividual} />)}</tbody>
+      </table></div>
+    </>}
+    {props.appliedGroups.length > 0 && <>
+      <h3>Applied shared estimates</h3>
+      <p className="p-hint">Each shared estimate appears once. If its components currently have different values, enter a fare and apply it to set the whole group to one value.</p>
+      <div className="p-fares-table-wrap" inert={busy}><table className="p-fares-table"><caption className="sr-only">Applied shared fares; each amount applies to every component in its group.</caption>
+        <thead><tr><th scope="col">Transfer / journey</th><th scope="col">Type</th><th scope="col">Party fare / range</th><th scope="col">Currency</th><th scope="col">Save</th></tr></thead>
+        <tbody>{props.appliedGroups.map(group => <AppliedSharedFareRow key={group.key} group={group} staged={pending[group.key]} onStage={fare => stage(group.key, fare)} />)}</tbody>
+      </table></div>
+    </>}
     {props.groups.length > 25 && <div className="p-actions"><Button type="button" size="sm" variant="secondary" disabled={currentPage === 0} onClick={() => setPage(currentPage-1)}>Previous groups</Button><span>Page {currentPage+1} / {Math.ceil(props.groups.length/25)}</span><Button type="button" size="sm" variant="secondary" disabled={(currentPage+1)*25 >= props.groups.length} onClick={() => setPage(currentPage+1)}>Next groups</Button></div>}
   </section>;
 }

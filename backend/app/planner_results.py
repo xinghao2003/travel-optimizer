@@ -59,6 +59,26 @@ def expand_result(result):
     return expanded
 
 
+def fare_component_ids(result):
+    """Return route movement and charge IDs without expanding compact results."""
+    if not isinstance(result, dict):
+        return set()
+    compact = MARKER in result
+    pools = result.get(MARKER, {})
+    ids = set()
+    for group in GROUPS:
+        for route in result.get(group, []):
+            movements = ([pools["movements"][index] for index in route.get("movements", [])]
+                         if compact else route.get("movements", []))
+            extras = ([pools["extra_charges"][index] for index in route.get("extra_charges", [])]
+                      if compact else route.get("extra_charges", []))
+            for movement in movements:
+                ids.add(movement["id"])
+                ids.update(charge["id"] for charge in movement.get("charges", []))
+            ids.update(charge["id"] for charge in extras)
+    return ids
+
+
 def compact_trip(trip):
     return {**trip, "result": compact_result(trip["result"])} if trip.get("result") is not None else trip
 

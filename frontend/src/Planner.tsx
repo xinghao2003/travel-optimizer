@@ -5,7 +5,7 @@ import { Compass, LoaderCircle, Play, Plus, Save, Square, ArrowRight, RefreshCw,
 import { Button } from "./components/ui/button";
 import { AdvancedSettings, FareEditor, Field, NumberField, PlaceChips, PlacePicker, RulesEditor } from "./components/PlannerForms";
 import { PositioningSettings } from "./components/PositioningSettings";
-import { MissingFaresTable, type SharedFare } from "./components/MissingFaresTable";
+import { MissingFaresTable, type AppliedSharedFareGroup, type SharedFare } from "./components/MissingFaresTable";
 import { groupMissingFares } from "./lib/missingFares";
 import { api, blankTrip, cityHourCost, localTime, modes, money, routeCost, type AirportConnection, type AirportConnectionRequirement, type AirportTransferMode, type Job, type Movement, type Offer, type Place, type PricingRule, type Result, type Route, type SavedSummary, type SavedTrip, type TripDraft, type TripSpec } from "./lib/planner";
 import "./planner.css";
@@ -377,6 +377,40 @@ export default function Planner() {
   const active = !!job && ["running", "queued"].includes(job.status);
   const allOffers = [...(saved?.snapshot?.offers ?? []), ...(saved?.offers ?? [])];
   const offerFor = (id: string) => [...allOffers].reverse().find(o => o.movement_ids.length === 1 && o.movement_ids[0] === id);
+  const appliedSharedGroups = useMemo(() => {
+    const offers = new Map<string, Offer>(allOffers.map(offer => [offer.id, offer] as const));
+    const grouped = new Map<string, Offer[]>();
+    const resultRoutes = [...(result?.routes ?? []), ...(result?.dominated_routes ?? []), ...(result?.refinement_routes ?? [])];
+    const knownComponents = new Set(saved?.fare_component_ids ?? [
+      ...(saved?.snapshot?.movements ?? []).flatMap(movement => [movement.id, ...movement.charges.map(charge => charge.id)]),
+      ...resultRoutes.flatMap(route => [
+        ...route.movements.flatMap(movement => [movement.id, ...movement.charges.map(charge => charge.id)]),
+        ...route.extra_charges.map(charge => charge.id),
+      ]),
+    ]);
+    for (const offer of offers.values()) {
+      if (offer.source !== "user" || !offer.label.startsWith("Shared estimate:") || offer.movement_ids.length !== 1 || !knownComponents.has(offer.movement_ids[0]) || offer.low === null) continue;
+      const entries = grouped.get(offer.label) ?? [];
+      entries.push(offer);
+      grouped.set(offer.label, entries);
+    }
+    return [...grouped].map(([label, entries]): AppliedSharedFareGroup => {
+      const amounts = new Set(entries.map(offer => JSON.stringify([offer.low, offer.high])));
+      const currencies = new Set(entries.map(offer => offer.currency));
+      const first = entries[0];
+      const mixed_amounts = amounts.size > 1;
+      return {
+        key: label,
+        component_ids: [...new Set(entries.flatMap(offer => offer.movement_ids))],
+        low: mixed_amounts ? null : first.low,
+        high: mixed_amounts ? null : first.high,
+        currency: first.currency,
+        mixed_amounts,
+        mixed_currency: currencies.size > 1,
+        label,
+      };
+    }).sort((a, b) => a.label.localeCompare(b.label));
+  }, [saved?.fare_component_ids, saved?.snapshot?.offers, saved?.offers, saved?.snapshot?.movements, result?.routes, result?.dominated_routes, result?.refinement_routes]);
   async function removeAssumedConnection(movementId: string) {
     if (!saved) return;
     const tripId = saved.id;
@@ -439,7 +473,7 @@ export default function Planner() {
       {(result.discovery_required || dirty) && <div className="p-notice">{dirty ? "Trip changes are being saved; displayed results belong to the previous revision." : "Transport discovery is needed for these trip inputs. Saved fare edits remain available."}</div>}
 
       {saved && <AirportConnectionsTable key={`airport-connections:${saved.id}`} tripId={saved.id} requirements={saved.airport_connections_required ?? coverage?.airport_connections_required ?? noAirportConnectionRequirements} connections={saved.airport_connections ?? noAirportConnections} report={setError} onSaved={(record, updated) => { accept(record); acceptResult(updated, record.id); setSaveStatus("Airport connections saved · frontier recalculated"); }} />}
-      {missingFareGroups.length > 0 && <MissingFaresTable key={`missing-fares:${saved?.id}`} storageKey={`wayfinder:pending-estimates:${saved?.id}`} groups={missingFareGroups} placeName={placeName} offerFor={offerFor} onApply={applySharedFares} onSave={updatePrice} onRemove={removePrice} />}
+      {(missingFareGroups.length > 0 || appliedSharedGroups.length > 0) && <MissingFaresTable key={`missing-fares:${saved?.id}`} storageKey={`wayfinder:pending-estimates:${saved?.id}`} groups={missingFareGroups} appliedGroups={appliedSharedGroups} placeName={placeName} offerFor={offerFor} onApply={applySharedFares} onSave={updatePrice} onRemove={removePrice} />}
       {!!unresolvedAccess.length && <details className="p-panel"><summary>{unresolvedAccess.length} retrieved journeys need airport access timing</summary>{unresolvedAccess.map(m => <p key={m.id}>{placeName(m.from_id)} → {placeName(m.to_id)}: {m.assumptions.join(" · ")}</p>)}</details>}
       <section className="p-panel" aria-labelledby="frontier-title"><div className="p-panel-heading"><div><span className="p-step">04</span><h2 id="frontier-title">Your cost–time frontier</h2></div><span className="p-tag">{result.routes.length} frontier alternatives{showDominated && result.dominated_routes ? ` + ${result.dominated_routes.length} dominated` : ""}</span></div><p>{coverage?.discovery_complete ? "Discovery queue exhausted" : "Preliminary discovery"} · {result.optimization_complete ? "Optimization complete for this snapshot" : "Optimization incomplete"} · snapshot {result.snapshot_revision}</p><p className="p-hint">Circles: priced offers. Diamonds: estimates. Horizontal bands: fare ranges; their selection marker is the midpoint, not an expected price. Unknown totals stay in the list below. Optimality covers retrieved options and stated assumptions.</p>
         <p className="p-hint">{result.feasible_count.toLocaleString()} completed histories evaluated. The frontier keeps cost/city-time tradeoffs under your fare and budget settings. Other histories are hidden by default; source schedules and fares remain saved.</p>

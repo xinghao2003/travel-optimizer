@@ -50,7 +50,7 @@ function FareRow({ group, staged, placeName, offerFor, onStage, onSave, onRemove
     {expanded && <tr className="p-fare-components"><td colSpan={6}>
       <p className="p-hint">Individual fare saves are staged too. Use Apply saved estimates above to recalculate.</p>
       {group.components.map((component, index) => <div key={component.component_id}>
-        <small>Component {index+1}{component.departure ? ` · Journey departs ${new Intl.DateTimeFormat("en-MY", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }).format(new Date(component.departure))} (UTC)` : ""} · {component.affected_itineraries} alternatives</small>
+        <small>Component {index+1}{component.departure ? ` · Journey departs ${new Intl.DateTimeFormat("en-MY", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }).format(new Date(component.departure))} (UTC)` : ""}{component.service ? ` · ${component.service}` : ""} · {component.affected_itineraries} alternatives</small>
         <FareEditor componentId={component.component_id} label={`${name} · ${group.label}`} offer={offerFor(component.component_id)} onSave={onSave} onRemove={onRemove} />
       </div>)}
     </td></tr>}
@@ -121,7 +121,7 @@ export function MissingFaresTable(props: Props) {
     <p>Enter a party fare per transfer or journey and save each row. Saved estimates stay in this browser until you apply them together; saving a row does not rerun optimization.</p>
     <div className="p-actions"><Button type="button" disabled={busy || !active.length} onClick={() => void apply()}>{busy ? "Applying estimates…" : `Apply saved estimates (${active.length})`}</Button>{active.length > 0 && <Button type="button" variant="ghost" disabled={busy} onClick={() => setPending({})}>Discard saved estimates</Button>}<span className="p-hint">Applies each amount per component and recalculates once.</span></div>
     {error && <p className="p-error" role="alert">{error}</p>}
-    <p className="p-hint">Departures from the same flexible connection share one row. Estimates apply to each listed component in this snapshot. Expand a row for individual fares. Priced components remain editable in itinerary details; future searches may add new unpriced components.</p>
+    <p className="p-hint">Repeated journeys with the same endpoints, fare type, mode, currency, and missing-fare reason share one row, even across dates. Expand a row to inspect its components; estimates apply separately to every listed component. Priced components remain editable in itinerary details; future searches may add new unpriced components.</p>
     <div className="p-fares-table-wrap" inert={busy}><table className="p-fares-table"><caption className="sr-only">Missing fares grouped by matching transfer; each amount is a party fare per component.</caption>
       <thead><tr><th scope="col">Transfer / journey</th><th scope="col">Type</th><th scope="col">Alternatives</th><th scope="col">Party fare / range</th><th scope="col">Currency</th><th scope="col">Save</th></tr></thead>
       <tbody>{props.groups.slice(currentPage*25, (currentPage+1)*25).map(group => <FareRow key={group.key} {...props} group={group} staged={pending[group.key]} onStage={fare => stage(group.key, fare)} offerFor={stagedOffer} onSave={stageIndividual} onRemove={removeIndividual} />)}</tbody>

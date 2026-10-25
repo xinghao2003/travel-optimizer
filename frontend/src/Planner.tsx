@@ -1,7 +1,7 @@
 import { ThemeToggle } from "./components/theme-provider";
 import { AirportTransferTable } from "./components/AirportTransferTable";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { Compass, LoaderCircle, Play, Plus, Save, Square, ArrowRight, RefreshCw } from "lucide-react";
+import { Compass, LoaderCircle, Play, Plus, Save, Square, ArrowRight, RefreshCw, Copy } from "lucide-react";
 import { Button } from "./components/ui/button";
 import { AdvancedSettings, FareEditor, Field, NumberField, PlaceChips, PlacePicker, RulesEditor } from "./components/PlannerForms";
 import { PositioningSettings } from "./components/PositioningSettings";
@@ -231,6 +231,26 @@ export default function Planner() {
     if (record.snapshot && (!record.result || record.result.trip_revision !== record.revision || record.result.snapshot_revision !== record.snapshot.revision)) { const r = await api<Result>(`/trips/${id}/optimize`, "POST"); if (token === session.current) acceptResult(r, id); }
     } finally { if (token === session.current) setLoadingTrip(false); }
   }
+  async function duplicateTrip() {
+    if (pendingSave.current) await pendingSave.current;
+    if (dirtyRef.current) {
+      if (!draftRef.current.home || !draftRef.current.visits.length) throw new Error("Finish the current trip setup before copying it.");
+      await saveSpec();
+    }
+    const source = savedRef.current;
+    if (!source) throw new Error("Choose a saved trip to copy.");
+    const token = ++session.current;
+    version.current++;
+    setLoadingTrip(true);
+    setResult(null); setJob(null); setSelectedId(null); setComparisonId(null);
+    try {
+      const record = await api<SavedTrip>(`/trips/${source.id}/duplicate`, "POST");
+      if (token !== session.current) return;
+      accept(record, true);
+      setResult(null); setJob(null); setSaveStatus("Copied trip settings · ready to edit");
+      await refreshList();
+    } finally { if (token === session.current) setLoadingTrip(false); }
+  }
   useEffect(() => {
     let active = true;
     void Promise.all([api<{ trips: SavedSummary[] }>("/trips"), api<{ rules: PricingRule[] }>("/pricing-rules"), fetch("/api/data").then(r => r.json())]).then(async ([trips, data, config]) => {
@@ -377,7 +397,7 @@ export default function Planner() {
   if (loadingTrip) return <main className="optimizer app-shell" aria-busy="true"><div className="p-empty" role="status">Loading your saved trip…</div></main>;
 
   return <main className="optimizer app-shell">
-    <header className="p-topbar"><div className="brand-lockup"><div className="brand-icon"><Compass size={22} /></div><div><div className="brand-title">Wayfinder <span>Routes</span></div><div className="brand-caption">Trip planning workspace</div></div></div><div className="p-saved-controls"><ThemeToggle /><label className="sr-only" htmlFor="saved-trip">Saved trip</label><select id="saved-trip" value={saved?.id ?? ""} onChange={e => { if (e.target.value) void act(() => openTrip(e.target.value)); }}><option value="">Saved trips</option>{summaries.map(t => <option key={t.id} value={t.id}>{t.name} · {t.start_date}</option>)}</select><Button type="button" variant="secondary" size="sm" onClick={() => { void act(async () => { if (pendingSave.current) await pendingSave.current; if (dirtyRef.current && draftRef.current.home && draftRef.current.visits.length) await saveSpec(); session.current++; const next = blankTrip(); draftRef.current = next; savedRef.current = null; setDraft(next); setSaved(null); setResult(null); setJob(null); setDirty(false); dirtyRef.current = false; setSaveStatus("New trip"); localStorage.removeItem("wayfinder:last-trip"); }); }}><Plus size={14} />New</Button></div></header>
+    <header className="p-topbar"><div className="brand-lockup"><div className="brand-icon"><Compass size={22} /></div><div><div className="brand-title">Wayfinder <span>Routes</span></div><div className="brand-caption">Trip planning workspace</div></div></div><div className="p-saved-controls"><ThemeToggle /><label className="sr-only" htmlFor="saved-trip">Saved trip</label><select id="saved-trip" value={saved?.id ?? ""} onChange={e => { if (e.target.value) void act(() => openTrip(e.target.value)); }}><option value="">Saved trips</option>{summaries.map(t => <option key={t.id} value={t.id}>{t.name} · {t.start_date}</option>)}</select><Button type="button" variant="secondary" size="sm" disabled={busy || !saved} title="Copy the selected trip settings into a new trip" onClick={() => void act(duplicateTrip)}><Copy size={14} />New from existing</Button><Button type="button" variant="secondary" size="sm" disabled={busy} onClick={() => { void act(async () => { if (pendingSave.current) await pendingSave.current; if (dirtyRef.current && draftRef.current.home && draftRef.current.visits.length) await saveSpec(); session.current++; const next = blankTrip(); draftRef.current = next; savedRef.current = null; setDraft(next); setSaved(null); setResult(null); setJob(null); setDirty(false); dirtyRef.current = false; setSaveStatus("New trip"); localStorage.removeItem("wayfinder:last-trip"); }); }}><Plus size={14} />New</Button></div></header>
     <a href="#setup-title" className="p-skip-link">Skip to trip setup</a>
     <nav className="p-workspace-nav" aria-label="Workspace sections"><a href="#setup-title">Trip setup</a><a href="#pricing">Pricing rules</a>{result && <><a href="#frontier-title">Alternatives</a><a href="#details-title">Itinerary</a></>}</nav>
     <section className="p-intro"><div><h1>Trip planner</h1><p>Compare transport costs and time in each city. Build a trip that fits your budget.</p></div><span className="p-workspace-label">Multi-city · Round trip</span></section>

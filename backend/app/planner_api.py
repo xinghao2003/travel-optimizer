@@ -80,6 +80,20 @@ async def create_trip(spec: TripSpec):
     return trip
 
 
+@router.post("/trips/{id}/duplicate", status_code=201)
+async def duplicate_trip(id: str):
+    source = get_trip(id)
+    spec = TripSpec.model_validate(source["spec"])
+    suffix = " (copy)"
+    spec.name = spec.name[:120-len(suffix)].rstrip()+suffix
+    trip = store.new_trip(spec.model_dump(mode="json"))
+    trip["airport_connections"] = source.get("airport_connections", [])
+    trip["airport_transfer_estimates"] = source.get("airport_transfer_estimates", [])
+    trip = store.put("trips", trip["id"], trip)
+    trip["airport_transfer_rows"] = airport_transfer_rows(spec)
+    return trip
+
+
 @router.get("/trips/{id}")
 async def read_trip(id: str, include_graph: bool = False, compact: bool = False):
     def response():

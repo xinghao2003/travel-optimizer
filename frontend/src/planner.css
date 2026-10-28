@@ -96,6 +96,21 @@
 .p-airport-table td select, .p-airport-table td input { min-width: 88px !important; height: 34px !important; padding: 5px 7px !important; }
 .p-airport-table td:nth-child(3) select { min-width: 110px !important; }
 .p-airport-table td:nth-child(6) input { min-width: 64px !important; width: 64px !important; text-transform: uppercase; }
+.p-transport-toolbar { align-items: end; }
+.p-transport-toolbar .p-field { flex: 0 1 240px; }
+.p-transport-table { min-width: 620px; table-layout: fixed; }
+.p-transport-table th:first-child { width: 32%; }
+.p-transport-table th:nth-child(2) { width: 34%; }
+.p-transport-table th:nth-child(3) { width: 17%; }
+.p-transport-table td:nth-child(2) { text-align: left; }
+.p-transport-table td small { display: block; margin: 4px 0; }
+.p-transport-table .p-transport-expanded > td { padding: 20px 12px; }
+.p-transport-option { border: 0; border-bottom: 1px solid var(--border); padding: 0 0 18px; margin: 0 0 20px; min-width: 0; }
+.p-transport-option legend { font-size: 13px; font-weight: 600; padding: 0; }
+.p-transport-option .p-grid { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+.p-transport-option .p-field { text-align: left; }
+.p-transport-option select, .p-transport-option input { width: 100%; }
+.p-transport-table tbody .p-transport-expanded:hover { background: transparent; }
 .p-airport-clear { border: 0; border-radius: 6px; background: transparent; color: var(--muted-foreground); font-size: 18px; padding: 4px 8px; }
 .p-airport-clear:hover { background: var(--border); color: var(--destructive); }
 .pareto-chart { height: 380px; width: 100%; min-width: 0; }

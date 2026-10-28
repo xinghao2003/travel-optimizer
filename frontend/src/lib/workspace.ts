@@ -3,7 +3,7 @@ import type { TripDraft } from "./planner";
 export type Workspace = "setup" | "compare" | "pricing";
 export function workspaceFromHash(value: string): Workspace {
   const hash = value.replace(/^#/, "");
-  return ["pricing", "missing-fares-title", "airport-connections-title"].includes(hash) ? "pricing" : ["compare", "frontier-title", "details-title"].includes(hash) ? "compare" : "setup";
+  return ["pricing", "missing-fares-title", "airport-connections-title", "transport-details-title"].includes(hash) ? "pricing" : ["compare", "frontier-title", "details-title"].includes(hash) ? "compare" : "setup";
 }
 
 export function tripSetupIssues(draft: TripDraft): string[] {

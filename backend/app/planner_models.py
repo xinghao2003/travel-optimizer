@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-Mode = Literal["flight", "rail", "bus", "coach", "subway", "tram", "car", "taxi"]
+Mode = Literal["flight", "rail", "bus", "coach", "subway", "tram", "car", "taxi", "ferry"]
 
 
 def stable_id(*parts: object) -> str:
@@ -135,7 +135,7 @@ class TripSpec(Contract):
     rail_fallback: RailFallbackSettings = Field(default_factory=RailFallbackSettings)
     home_departure_earliest: time | None = None
     home_arrival_latest: time | None = None
-    positioning_policies: list[PositioningPolicy] = Field(default_factory=list, max_length=48)
+    positioning_policies: list[PositioningPolicy] = Field(default_factory=list, max_length=54)
     positioning_services: list[PositioningService] = Field(default_factory=list, max_length=120)
     departure_start: time = time(9)
     departure_end: time = time(17)
@@ -228,7 +228,7 @@ class Charge(Contract):
     country_code: str | None = None
 
 
-AirportTransferMode = Literal["rail", "bus", "coach", "subway", "tram", "car", "taxi"]
+AirportTransferMode = Literal["rail", "bus", "coach", "subway", "tram", "car", "taxi", "ferry"]
 
 
 class AirportConnection(Contract):
@@ -250,6 +250,7 @@ class AirportConnection(Contract):
 
 
 class Movement(Contract):
+    positioning_direction: Literal["outbound", "return"] | None = None
     schedule_estimated: bool = False
     schedule_reference_date: date | None = None
     id: str
@@ -355,5 +356,43 @@ class AirportTransferEstimate(Contract):
             raise ValueError("A maximum also needs a minimum.")
         if self.high is not None and self.high < self.low:
             raise ValueError("Maximum must not be below minimum.")
+        self.currency = self.currency.upper()
+        return self
+
+
+class TransportOption(Contract):
+    positioning_direction: Literal["outbound", "return"] | None = None
+    id: str = Field(min_length=1, max_length=200)
+    from_id: str
+    to_id: str
+    mode: Mode
+    adults: int = Field(ge=1, le=9)
+    availability: Literal["available", "unavailable", "unknown"] = "unknown"
+    duration_minutes: float | None = Field(default=None, gt=0)
+    before_minutes: float = Field(default=0, ge=0)
+    after_minutes: float = Field(default=0, ge=0)
+    departure: datetime | None = None
+    low: float | None = Field(default=None, ge=0)
+    high: float | None = Field(default=None, ge=0)
+    fare_kind: Literal["fixed", "range"] = "fixed"
+    currency: str = Field(default="MYR", pattern=r"^[A-Za-z]{3}$")
+    unit: Literal["party", "person", "vehicle"] = "party"
+    capacity: int = Field(default=4, ge=1, le=9)
+    label: str = Field(default="User-supplied transport", max_length=160)
+    vehicle_kind: Literal["own", "rental"] | None = None
+    distance_km: float | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_option(self):
+        if self.from_id == self.to_id:
+            raise ValueError("Choose different connection endpoints.")
+        if self.availability == "available" and self.duration_minutes is None:
+            raise ValueError("Available transport needs a positive travel duration.")
+        if self.departure is not None:
+            if self.departure.tzinfo is None:
+                raise ValueError("Departure needs an endpoint-local timezone.")
+            self.departure = self.departure.astimezone(timezone.utc)
+        if self.high is not None and (self.low is None or self.high < self.low):
+            raise ValueError("A maximum fare needs a minimum and cannot be below it.")
         self.currency = self.currency.upper()
         return self

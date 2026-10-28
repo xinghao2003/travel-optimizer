@@ -1,5 +1,5 @@
 import { ThemeToggle } from "./components/theme-provider";
-import { AirportTransferTable } from "./components/AirportTransferTable";
+import { TransportDetailsTable } from "./components/TransportDetailsTable";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Compass, LoaderCircle, Play, Plus, Save, Square, ArrowRight, RefreshCw, Copy, MapPin, CalendarDays, Users, Wallet, Check, SlidersHorizontal, Route as RouteIcon, CircleHelp, ChevronRight } from "lucide-react";
 import { Button } from "./components/ui/button";
@@ -7,7 +7,7 @@ import { AdvancedSettings, FareEditor, Field, NumberField, PlaceChips, PlacePick
 import { PositioningSettings } from "./components/PositioningSettings";
 import { MissingFaresTable, type AppliedSharedFareGroup, type SharedFare } from "./components/MissingFaresTable";
 import { groupMissingFares } from "./lib/missingFares";
-import { api, blankTrip, cityHourCost, localTime, modes, money, routeCost, type AirportConnection, type AirportConnectionRequirement, type AirportTransferMode, type Job, type Movement, type Offer, type Place, type PricingRule, type Result, type Route, type SavedSummary, type SavedTrip, type TripDraft, type TripSpec } from "./lib/planner";
+import { api, blankTrip, cityHourCost, localTime, modes, money, routeCost, type Job, type Offer, type Place, type PricingRule, type Result, type Route, type SavedSummary, type SavedTrip, type TripDraft, type TripSpec } from "./lib/planner";
 import { tripSetupIssues, workspaceFromHash, type Workspace } from "./lib/workspace";
 import "./planner.css";
 
@@ -18,108 +18,6 @@ function ParetoExplorer(props: { routes: Route[]; dominated?: Route[]; selected:
 }
 function PlannerMap(props: { places: Place[]; route: Route | null }) {
   return <Suspense fallback={<div className="p-empty">Loading the itinerary map…</div>}><LazyMap {...props} /></Suspense>;
-}
-
-type AirportConnectionDraft = {
-  from_airport: string;
-  to_airport: string;
-  from_name: string;
-  to_name: string;
-  journey_count: number;
-  unresolved_journey_count: number;
-  required: boolean;
-  mode: AirportTransferMode | "";
-  duration_minutes: number | null;
-  fare_amount: number | null;
-  currency: string;
-};
-
-const airportTransferModes: AirportTransferMode[] = modes.filter((mode): mode is AirportTransferMode => mode !== "flight");
-const noAirportConnectionRequirements: AirportConnectionRequirement[] = [];
-const noAirportConnections: AirportConnection[] = [];
-
-function airportConnectionRows(requirements: AirportConnectionRequirement[], connections: AirportConnection[]): AirportConnectionDraft[] {
-  const requiredByPair = new Map(requirements.map(item => [`${item.from_airport}>${item.to_airport}`, item]));
-  const connectionByPair = new Map(connections.map(item => [`${item.from_airport}>${item.to_airport}`, item]));
-  const keys = [...new Set([...requiredByPair.keys(), ...connectionByPair.keys()])].sort();
-  return keys.map(key => {
-    const requirement = requiredByPair.get(key);
-    const connection = connectionByPair.get(key);
-    const [from_airport, to_airport] = key.split(">");
-    return {
-      from_airport, to_airport,
-      from_name: requirement?.from_name ?? from_airport,
-      to_name: requirement?.to_name ?? to_airport,
-      journey_count: requirement?.journey_count ?? 0,
-      unresolved_journey_count: requirement?.unresolved_journey_count ?? 0,
-      required: !!requirement,
-      mode: connection?.mode ?? "",
-      duration_minutes: connection?.duration_minutes ?? null,
-      fare_amount: connection?.fare_amount ?? null,
-      currency: connection?.currency ?? "MYR",
-    };
-  });
-}
-
-function AirportConnectionsTable({ tripId, requirements, connections, onSaved, report }: {
-  tripId: string;
-  requirements: AirportConnectionRequirement[];
-  connections: AirportConnection[];
-  onSaved: (record: SavedTrip, result: Result) => void;
-  report: (message: string) => void;
-}) {
-  const requirementSignature = JSON.stringify(requirements);
-  const connectionSignature = JSON.stringify(connections);
-  const [rows, setRows] = useState<AirportConnectionDraft[]>(() => airportConnectionRows(requirements, connections));
-  const [busy, setBusy] = useState(false);
-  useEffect(() => setRows(airportConnectionRows(requirements, connections)), [tripId, requirementSignature, connectionSignature, requirements, connections]);
-
-  if (!rows.length) return null;
-  const requiredJourneys = requirements.reduce((sum, item) => sum + item.journey_count, 0);
-  const pairKey = (row: Pick<AirportConnectionDraft, "from_airport" | "to_airport">) => `${row.from_airport}>${row.to_airport}`;
-  function updateRow(key: string, change: Partial<AirportConnectionDraft>) {
-    setRows(current => current.map(row => pairKey(row) === key ? { ...row, ...change } : row));
-  }
-  function clearOrRemove(row: AirportConnectionDraft) {
-    if (row.required) updateRow(pairKey(row), { mode: "", duration_minutes: null, fare_amount: null, currency: "MYR" });
-    else setRows(current => current.filter(item => pairKey(item) !== pairKey(row)));
-  }
-  async function save() {
-    setBusy(true);
-    try {
-      const incomplete = rows.some(row => (row.mode || row.duration_minutes !== null || row.fare_amount !== null)
-        && (!row.mode || row.duration_minutes === null || !Number.isFinite(row.duration_minutes) || row.duration_minutes <= 0));
-      if (incomplete) throw new Error("Complete the mode and positive transfer time, or clear that row before saving.");
-      if (rows.some(row => row.fare_amount !== null && (!Number.isFinite(row.fare_amount) || row.fare_amount < 0))) throw new Error("Enter a nonnegative party fare or leave it blank.");
-      const configured = rows.filter(row => row.mode && row.duration_minutes !== null && row.duration_minutes > 0)
-        .map(({ from_airport, to_airport, mode, duration_minutes, fare_amount, currency }) => ({
-          from_airport, to_airport, mode, duration_minutes, fare_amount,
-          currency: fare_amount === null ? "MYR" : (currency || "MYR").toUpperCase(),
-        }));
-      if (configured.some(row => row.fare_amount !== null && !/^[A-Z]{3}$/.test(row.currency))) throw new Error("Use a three-letter currency code for each fare.");
-      const result = await api<Result>(`/trips/${tripId}/airport-connections`, "PUT", { connections: configured });
-      const record = await api<SavedTrip>(`/trips/${tripId}`);
-      onSaved(record, result);
-    } catch (err) { report(err instanceof Error ? err.message : "Airport connections could not be saved."); }
-    finally { setBusy(false); }
-  }
-
-  return <section className="p-panel" aria-labelledby="airport-connections-title">
-    <div className="p-panel-heading"><div><span className="p-step">↔</span><h2 id="airport-connections-title">Airport connections</h2></div><span className="p-tag">{requirements.length} unique pairs · {requiredJourneys} journeys</span></div>
-    <p>Enter a connection you have checked for each airport change. Its duration should include your transfer buffer and must fit the scheduled layover. One directed pair applies to every matching journey in this trip; the reverse direction is a separate row.</p>
-    <div className="p-airport-table-wrap"><table className="p-airport-table"><thead><tr><th scope="col">Airport change</th><th scope="col">Journeys</th><th scope="col">Mode</th><th scope="col">Transfer time · min</th><th scope="col">Party fare</th><th scope="col">Currency</th><th scope="col"><span className="sr-only">Clear or remove</span></th></tr></thead>
-      <tbody>{rows.map(row => <tr key={pairKey(row)}>
-        <th scope="row"><strong>{row.from_airport} → {row.to_airport}</strong><small>{row.from_name} → {row.to_name}{!row.required && " · saved"}</small></th>
-        <td>{row.required ? <>{row.journey_count}<small className={row.unresolved_journey_count > 0 ? "p-warning" : ""}>{row.unresolved_journey_count} unresolved</small></> : "—"}</td>
-        <td><select aria-label={`${row.from_airport} to ${row.to_airport} transfer mode`} value={row.mode} onChange={event => updateRow(pairKey(row), { mode: event.target.value as AirportTransferMode | "" })}><option value="">Choose mode</option>{airportTransferModes.map(mode => <option value={mode} key={mode}>{mode}</option>)}</select></td>
-        <td><input aria-label={`${row.from_airport} to ${row.to_airport} transfer time in minutes`} type="number" min="1" step="1" value={row.duration_minutes ?? ""} onChange={event => updateRow(pairKey(row), { duration_minutes: event.target.value === "" ? null : Number(event.target.value) })} /></td>
-        <td><input aria-label={`${row.from_airport} to ${row.to_airport} total party fare`} type="number" min="0" step="0.01" placeholder="Unknown" value={row.fare_amount ?? ""} onChange={event => updateRow(pairKey(row), { fare_amount: event.target.value === "" ? null : Number(event.target.value) })} /></td>
-        <td><input aria-label={`${row.from_airport} to ${row.to_airport} fare currency`} maxLength={3} value={row.currency} onChange={event => updateRow(pairKey(row), { currency: event.target.value.toUpperCase() })} /></td>
-        <td><button className="p-airport-clear" type="button" onClick={() => clearOrRemove(row)} aria-label={row.required ? `Clear ${row.from_airport} to ${row.to_airport}` : `Remove saved ${row.from_airport} to ${row.to_airport}`}>×</button></td>
-      </tr>)}</tbody>
-    </table></div>
-    <div className="p-actions"><Button type="button" size="sm" disabled={busy} onClick={() => void save()}>{busy ? "Saving…" : "Save connections"}</Button><span className="p-hint">Rows without both a mode and positive duration remain unresolved. Blank fare keeps transfer cost unknown.</span></div>
-  </section>;
 }
 
 function BundleEntry({ route, placeName, save, report }: { route: Route; placeName: (id: string) => string; save: (offer: Offer) => Promise<void>; report: (s: string) => void }) {
@@ -145,25 +43,6 @@ function BundleEntry({ route, placeName, save, report }: { route: Route; placeNa
     <div>{flights.map(m => <label className="p-check" key={m.id}><input type="checkbox" checked={selected.includes(m.id)} onChange={e => setSelected(ids => e.target.checked ? [...ids, m.id] : ids.filter(id => id !== m.id))} />{placeName(m.from_id)} → {placeName(m.to_id)} · {m.departure?.slice(0, 10)}</label>)}</div>
     <div className="p-inline"><Field label="Ticket type"><select value={kind} onChange={e => setKind(e.target.value as typeof kind)}><option value="multi-city">Multi-city / open-jaw</option><option value="round-trip">Round trip</option></select></Field><Field label="Combined party fare"><input type="number" min="0" step="0.01" value={low} onChange={e => setLow(e.target.value)} /></Field><Field label="Maximum (blank = fixed)"><input type="number" min={low || 0} step="0.01" value={high} onChange={e => setHigh(e.target.value)} /></Field><Field label="Bundle currency"><input maxLength={3} value={currency} onChange={e => setCurrency(e.target.value.toUpperCase())} /></Field><Button type="button" size="sm" disabled={busy} onClick={() => void submit()}>Save bundle</Button></div>
   </details>;
-}
-
-function AssumedConnection({ places, gaps, add, report }: { gaps: { from_id: string; to_id: string }[]; places: Place[]; add: (m: Movement) => Promise<void>; report: (s: string) => void }) {
-  const [form, setForm] = useState({ from: "", to: "", mode: "bus", hours: "", distance: "", departure: "", arrival: "" });
-  const [busy, setBusy] = useState(false);
-  async function submit() {
-    setBusy(true);
-    try {
-      if (!form.from || !form.to || form.from === form.to || Number(form.hours) <= 0) throw new Error("Choose different endpoints and a positive duration.");
-      await add({ id: `assumed:${crypto.randomUUID()}`, from_id: form.from, to_id: form.to, mode: form.mode as Movement["mode"], duration_minutes: Number(form.hours) * 60, distance_km: form.distance === "" ? null : Number(form.distance), departure: form.departure ? new Date(form.departure).toISOString() : null, arrival: form.arrival ? new Date(form.arrival).toISOString() : null, source: "User-defined connection", assumptions: ["User supplied connectivity and timing"], segments: [], charges: [], transfers: 0, vehicle_kind: form.mode === "car" ? "rental" : null, search_url: null });
-    } catch (err) { report(err instanceof Error ? err.message : "Connection could not be saved."); }
-    finally { setBusy(false); }
-  }
-  return <><div aria-live="polite">{gaps.length > 0 && <><h3>Missing city connections</h3><p>No direct connection was collected in either direction for these cities. If your route needs one, enter a verified schedule or an assumed duration below. Connecting routes or enabled road transport may still provide alternatives.</p>{gaps.map(gap => <Button key={`${gap.from_id}:${gap.to_id}`} type="button" variant="secondary" onClick={() => { setForm(f => ({ ...f, from: gap.from_id, to: gap.to_id })); const panel = document.getElementById("assumed-city-connection") as HTMLDetailsElement | null; if (panel) { panel.open = true; panel.scrollIntoView({ block: "center" }); } }}>Add {places.find(p => p.id === gap.from_id)?.name} → {places.find(p => p.id === gap.to_id)?.name}</Button>)}</>}</div><details id="assumed-city-connection" className="p-details"><summary>Add a connection missing from the providers</summary><p>This explicitly assumes that the connection exists. Flexible connections use the duration; scheduled connections need both timestamps (shown in your browser timezone).</p><div className="p-grid">
-    {(["from", "to"] as const).map(key => <Field key={key} label={`Assumed connection ${key}`}><select value={form[key]} onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}><option value="">Choose place</option>{places.map(p => <option value={p.id} key={p.id}>{p.name}</option>)}</select></Field>)}
-    <Field label="Assumed mode"><select value={form.mode} onChange={e => setForm(f => ({ ...f, mode: e.target.value }))}>{modes.map(m => <option key={m}>{m}</option>)}</select></Field>
-    <Field label="Assumed duration · hours"><input type="number" min="0.01" step="any" value={form.hours} onChange={e => setForm(f => ({ ...f, hours: e.target.value }))} /></Field><Field label="Assumed distance · km (optional)"><input type="number" min="0" value={form.distance} onChange={e => setForm(f => ({ ...f, distance: e.target.value }))} /></Field>
-    <Field label="Optional departure · browser local"><input type="datetime-local" value={form.departure} onChange={e => setForm(f => ({ ...f, departure: e.target.value }))} /></Field><Field label="Optional arrival · browser local"><input type="datetime-local" value={form.arrival} onChange={e => setForm(f => ({ ...f, arrival: e.target.value }))} /></Field><Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => void submit()}>Add assumed connection</Button>
-  </div></details></>;
 }
 
 export default function Planner() {
@@ -397,10 +276,11 @@ export default function Planner() {
   useEffect(() => {
     if (!busy && result?.dominated_routes === undefined) setShowDominated(false);
   }, [result, busy]);
-  const missingFareGroups = useMemo(() => groupMissingFares(
-    (result?.missing_fares ?? []).filter(fare => !fare.label.startsWith("Airport transfer ")),
+  const allMissingFareGroups = useMemo(() => groupMissingFares(
+    result?.missing_fares ?? [],
     [...(result?.routes ?? []), ...(result?.dominated_routes ?? []), ...(result?.refinement_routes ?? [])],
   ), [result]);
+  const missingFareGroups = allMissingFareGroups.filter(group => !group.label.startsWith("Airport transfer ") && !["Airport access", "Airport egress"].includes(group.label));
   useEffect(() => { setRoutePage(p => Math.min(p, Math.max(0, Math.ceil(routes.length / 40) - 1))); }, [routes.length]);
   const selected = routes.find(r => r.id === selectedId) ?? result?.refinement_routes?.find(r => r.id === selectedId) ?? routes[0] ?? null;
   const compare = routes.find(r => r.id === comparisonId) ?? null;
@@ -441,16 +321,7 @@ export default function Planner() {
       };
     }).sort((a, b) => a.label.localeCompare(b.label));
   }, [saved?.fare_component_ids, saved?.snapshot?.offers, saved?.offers, saved?.snapshot?.movements, result?.routes, result?.dominated_routes, result?.refinement_routes]);
-  async function removeAssumedConnection(movementId: string) {
-    if (!saved) return;
-    const tripId = saved.id;
-    await act(async () => {
-      const updated = await api<Result>(`/trips/${tripId}/movements/${encodeURIComponent(movementId)}?expected_revision=${saved.revision}`, "DELETE");
-      accept(await api<SavedTrip>(`/trips/${tripId}`));
-      acceptResult(updated, tripId);
-      setSaveStatus("Assumed connection removed · frontier recalculated");
-    });
-  }
+
   const coverage = result?.coverage;
   const unresolvedAccess = (coverage?.unresolved_movements ?? []).map(movement => ({
     ...movement,
@@ -461,14 +332,14 @@ export default function Planner() {
   const ready = setupNeeds.length === 0;
   const needsDiscovery = !result || result.discovery_required;
   const canContinue = !active && !needsDiscovery && !!job && !["superseded", "complete"].includes(job.status) && (job.pending > 0 || job.failed_queries > 0);
-  const needsFares = missingFareGroups.length > 0;
+  const needsFares = allMissingFareGroups.length > 0;
   const guidance = !ready ? { title: "Start with the essentials", text: setupNeeds.join(" · "), action: "Complete trip setup", run: () => navigateWorkspace("setup") }
     : dirty ? { title: saved ? saveStatus === "Changes not saved" ? "Your changes need attention" : "Saving your trip changes" : "Your trip is ready to save", text: saved ? saveStatus === "Changes not saved" ? "Check the error below, then save again from Trip setup." : "Results will update after your changes are saved." : "Save your plan, then search for transport options.", action: "Review setup", run: () => navigateWorkspace("setup") }
     : active ? { title: "Finding transport options", text: "You can compare results as they arrive. Collected work is saved.", action: "View live results", run: () => navigateWorkspace("compare") }
     : needsDiscovery ? { title: saved?.snapshot ? "Search needed for these trip settings" : "Ready to find your routes", text: "Search flights and ground transport, including the journey home.", action: "Search transport", run: () => void search() }
     : canContinue ? { title: "There are more options to search", text: `${job!.pending.toLocaleString()} queries remaining${job!.failed_queries ? ` · ${job!.failed_queries} failed queries can be retried` : ""}. Continue with another batch using saved results.`, action: "Continue search", run: () => void search(true) }
     : result?.optimization_complete === false && saved ? { title: "More route options may be available", text: "The calculation reached its current limit. Continue using saved transport data, or compare the routes already found.", action: "Continue calculating", run: () => void act(async () => { const record = await saveSpec(); acceptResult(await api<Result>(`/trips/${record.id}/optimize`, "POST", { expand: true }), record.id); }) }
-    : needsFares ? { title: "Some costs still need your input", text: `${missingFareGroups.length} fare groups are missing prices. Add estimates to make costs and budget checks more useful.`, action: "Review missing fares", run: () => navigateWorkspace("pricing", "missing-fares-title") }
+    : needsFares ? { title: "Some costs still need your input", text: `${allMissingFareGroups.length} fare groups are missing prices. Add estimates to make costs and budget checks more useful.`, action: "Review missing fares", run: () => navigateWorkspace("pricing", missingFareGroups.length ? "missing-fares-title" : "transport-details-title") }
     : !routes.length ? { title: "No matching route found yet", text: "Review your dates, minimum stays, and missing connections, or start a new search.", action: "Review trip setup", run: () => navigateWorkspace("setup") }
     : { title: "Your routes are ready to compare", text: "Choose an option to see its journey, city stays, and ticket costs.", action: "Compare routes", run: () => navigateWorkspace("compare") };
   const dateLabel = (value: string) => value ? new Intl.DateTimeFormat("en-MY", { day: "numeric", month: "short", year: "numeric" }).format(new Date(`${value}T12:00:00`)) : "Choose a date";
@@ -480,7 +351,7 @@ export default function Planner() {
     <a href={`#${workspace}`} className="p-skip-link" onClick={event => { event.preventDefault(); navigateWorkspace(workspace); }}>Skip to workspace</a>
     <section className="p-intro"><div><span className="p-eyebrow">YOUR NEXT JOURNEY</span><h1>{saved ? draft.name : "Where would you like to go?"}</h1><p>{saved ? "Find the right balance between your transport budget and time away." : "Choose your cities. We’ll connect the journey and compare your options."}</p></div><span className="p-save-indicator" aria-live="polite">{dirty ? <span className="p-unsaved-dot" /> : saved ? <Check size={14} /> : null}{saveStatus}</span></section>
     <div className="p-trip-facts" aria-label="Trip summary"><span><CalendarDays size={15} />{dateLabel(draft.start_date)} <ArrowRight size={12} /> {dateLabel(draft.end_date)}</span><span><Users size={15} />{draft.adults} {draft.adults === 1 ? "adult" : "adults"}</span><span><MapPin size={15} />{draft.visits.length} {draft.visits.length === 1 ? "city" : "cities"} to visit</span><span><Wallet size={15} />{draft.budget_myr === null ? "No budget limit" : `${money(draft.budget_myr)} party budget`}</span></div>
-    <nav className="p-workspace-nav" aria-label="Planning workspace">{([{ id: "setup", label: "Trip setup", icon: SlidersHorizontal }, { id: "compare", label: "Compare routes", icon: RouteIcon }, { id: "pricing", label: "Fares & connections", icon: Wallet }] as const).map(({ id, label, icon: Icon }) => <a key={id} href={`#${id}`} aria-current={workspace === id ? "page" : undefined} onClick={event => { event.preventDefault(); navigateWorkspace(id); }}><Icon size={16} />{label}{id === "compare" && !!routes.length && <span className="p-nav-count">{routes.length}</span>}{id === "pricing" && needsFares && <span className="p-nav-count p-warning">{missingFareGroups.length}</span>}</a>)}</nav>
+    <nav className="p-workspace-nav" aria-label="Planning workspace">{([{ id: "setup", label: "Trip setup", icon: SlidersHorizontal }, { id: "compare", label: "Compare routes", icon: RouteIcon }, { id: "pricing", label: "Transport & fares", icon: Wallet }] as const).map(({ id, label, icon: Icon }) => <a key={id} href={`#${id}`} aria-current={workspace === id ? "page" : undefined} onClick={event => { event.preventDefault(); navigateWorkspace(id); }}><Icon size={16} />{label}{id === "compare" && !!routes.length && <span className="p-nav-count">{routes.length}</span>}{id === "pricing" && needsFares && <span className="p-nav-count p-warning">{allMissingFareGroups.length}</span>}</a>)}</nav>
     <div className={`p-guidance ${active ? "is-searching" : ""}`}><div className="p-guidance-icon">{active ? <LoaderCircle size={20} className="spin" /> : !ready ? <Compass size={20} /> : needsFares && !needsDiscovery ? <CircleHelp size={20} /> : <ArrowRight size={20} />}</div><div><strong>{guidance.title}</strong><p>{guidance.text}</p></div><Button type="button" variant="secondary" size="sm" disabled={busy} onClick={guidance.run}>{guidance.action}<ArrowRight size={14} /></Button></div>
     {error && <div className="p-alert p-error" role="alert" tabIndex={-1} ref={errorAlert}>{error}<button type="button" aria-label="Dismiss error" onClick={() => setError("")}>×</button></div>}
     {job && <details className="p-panel p-job" open={active}><summary><div><span className="p-step"><Compass size={15} /></span><h2>Transport search</h2><span className="p-job-label">{active && <LoaderCircle size={15} className="spin" />}{job.status === "cancelled" ? "Stopped · progress saved" : job.status}</span></div><small>{job.processed.toLocaleString()} processed · {job.pending.toLocaleString()} pending<ChevronRight size={14} /></small></summary><p>{job.processed} queries processed · {job.requests} provider requests · {job.cache_hits} cache hits{job.manual_quote_queries ? ` · ${job.manual_quote_queries} manual quotes (no request)` : ""} · {job.pending} pending</p><div className="p-actions">{active ? <Button type="button" size="sm" variant="secondary" onClick={() => void act(async () => { setJob(await api<Job>(`/searches/${job.id}/cancel`, "POST")); })}><Square size={13} />Stop search</Button> : job.status !== "superseded" && (job.pending > 0 || job.failed_queries > 0 || result?.optimization_complete === false) && <Button type="button" size="sm" disabled={busy} onClick={() => void search(true)}><RefreshCw size={13} />{job.pending > 0 ? "Continue searching" : job.failed_queries > 0 ? "Retry failed searches" : "Continue optimizing"}</Button>}<span className="p-hint">Collected data and fare edits are retained.</span></div>{job.messages.length > 0 && <details><summary>Provider status and coverage</summary>{job.messages.map((m, i) => <p key={i}>{m}</p>)}</details>}</details>}
@@ -507,29 +378,28 @@ export default function Planner() {
       <p className="p-hint">Excludes itineraries with unpriced flights after applying ticket bundles, manual fares, and pricing rules. Saved flight schedules are retained; other transport and transfer fares may still be unknown.</p>
       </details>
       {!transitConfigured && draft.modes.some(m => ["rail", "bus", "coach", "subway", "tram"].includes(m)) && <p className="p-notice">Scheduled transit is currently disabled. Configure the Transitous contact URL and coordinate routing use to enable it.</p>}
-      <PositioningSettings draft={draft} edit={edit} report={setError} />
+      <PositioningSettings draft={draft} edit={edit} />
       <AdvancedSettings draft={draft} edit={edit} places={places} report={setError} />
       <div className="p-search-settings"><details className="p-details"><summary>Search batch size <span>{budget} requests</span></summary><NumberField label="Provider requests per batch" value={budget} min={1} max={500} step={1} onChange={n => setBudget(n ?? 100)} /><p className="p-hint">A batch limits new provider requests. You can continue later using collected data.</p></details></div>{!ready && <p className="p-hint" role="status">{setupNeeds.join(" · ")}</p>}<div className="p-actions p-search-actions"><span className="p-hint">{saved ? "Edits save automatically. Recalculate uses collected transport." : "Save your plan or search to save and find transport."}</span><Button type="button" variant="secondary" disabled={busy || !ready} onClick={() => void act(async () => { const changed = dirtyRef.current; const record = await saveSpec(); if (!changed) acceptResult(await api<Result>(`/trips/${record.id}/optimize`, "POST"), record.id); })}><Save size={15} />Save & recalculate</Button><Button type="button" disabled={busy || active || !ready} onClick={() => void search()}>{busy ? <LoaderCircle size={15} className="spin" /> : <Play size={15} />}{active ? "Searching…" : saved?.snapshot ? "Start new search" : "Search transport"}</Button></div>
     </section>
 
     </div>
     <div id="pricing" hidden={workspace !== "pricing"}>
-      <div className="p-view-heading"><h2>Fill the gaps in your trip</h2><p>Add missing fares and connections here. Each price is for your whole party.</p></div>
+      <div className="p-view-heading"><h2>Fill the gaps in your trip</h2><p>Confirm transport options and fill missing prices. Changes stay as drafts until you apply them.</p></div>
     {result && <>
-      {saved && <AirportConnectionsTable key={`airport-connections:${saved.id}`} tripId={saved.id} requirements={saved.airport_connections_required ?? coverage?.airport_connections_required ?? noAirportConnectionRequirements} connections={saved.airport_connections ?? noAirportConnections} report={setError} onSaved={(record, updated) => { accept(record); acceptResult(updated, record.id); setSaveStatus("Airport connections saved · frontier recalculated"); }} />}
-      {(missingFareGroups.length > 0 || appliedSharedGroups.length > 0) && <MissingFaresTable key={`missing-fares:${saved?.id}`} storageKey={`wayfinder:pending-estimates:${saved?.id}`} groups={missingFareGroups} appliedGroups={appliedSharedGroups} placeName={placeName} offerFor={offerFor} onApply={applySharedFares} onSave={updatePrice} onRemove={removePrice} />}
       {!!unresolvedAccess.length && <details className="p-panel"><summary>{unresolvedAccess.length} retrieved journeys need airport access timing</summary>{unresolvedAccess.map(m => <p key={m.id}>{placeName(m.from_id)} → {placeName(m.to_id)}: {m.assumptions.join(" · ")}</p>)}</details>}
     </>}
-    {saved && <details className="p-panel p-transfer-disclosure"><summary>Airport ↔ city transfers <span>Travel times and party fares</span></summary>{saved && <AirportTransferTable key={saved.id} trip={saved} save={async estimates => {
+    {saved && <TransportDetailsTable key={`transport:${saved.id}:${saved.spec.adults}`} trip={saved} save={async options => {
       const record = await saveSpec();
-      const updated = await api<SavedTrip>(`/trips/${record.id}/airport-transfer-estimates`, "PUT", { estimates, expected_revision: record.revision });
-      accept(updated);
-      if (updated.result) acceptResult(updated.result, updated.id);
-      setSaveStatus("Airport transfer estimates saved");
-    }} report={setError} />}
-
-    </details>}
-    <section className="p-panel p-pricing-tools"><h2>Pricing rules & custom connections</h2>{saved && (saved.assumed_connections?.length ?? 0) > 0 && <div><h3>Saved assumed connections</h3>{saved.assumed_connections!.map(m => <div className="p-actions" key={m.id}><span>{placeName(m.from_id)} → {placeName(m.to_id)} · {m.mode} · {m.duration_minutes} min{m.departure ? ` · ${localTime(m.departure, places.find(p => p.id === m.from_id)?.timezone ?? "UTC")}` : " · Flexible departure"}</span><Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => void removeAssumedConnection(m.id)}>Remove</Button></div>)}</div>}<RulesEditor rules={rules} places={places} changed={rulesChanged} report={setError} />{saved && <AssumedConnection gaps={saved.city_connection_gaps ?? []} places={places} report={setError} add={async m => { const record = await saveSpec(); const next = await api<Result>(`/trips/${record.id}/movements`, "POST", m); accept(await api<SavedTrip>(`/trips/${record.id}`)); acceptResult(next, record.id); }} />}</section>
+      const updated = await api<SavedTrip>(`/trips/${record.id}/transport-options`, "PUT", { options, expected_revision: record.revision });
+      if (savedRef.current?.id === record.id) {
+        accept(updated);
+        if (updated.result) acceptResult(updated.result, updated.id);
+        setSaveStatus("Transport details applied · routes recalculated");
+      }
+    }} />}
+      {(missingFareGroups.length > 0 || appliedSharedGroups.length > 0) && <MissingFaresTable key={`missing-fares:${saved?.id}`} storageKey={`wayfinder:pending-estimates:${saved?.id}`} groups={missingFareGroups} appliedGroups={appliedSharedGroups} placeName={placeName} offerFor={offerFor} onApply={applySharedFares} onSave={updatePrice} onRemove={removePrice} />}
+    <details className="p-panel p-pricing-tools"><summary>Reusable pricing rules</summary><RulesEditor rules={rules} places={places} changed={rulesChanged} report={setError} /></details>
 
     </div>
     <div id="compare" hidden={workspace !== "compare"}>

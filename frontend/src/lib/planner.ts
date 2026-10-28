@@ -1,10 +1,24 @@
 import { expandSharedResult } from "./sharedResults";
 
-export type Mode = "flight" | "rail" | "bus" | "coach" | "subway" | "tram" | "car" | "taxi";
+export type Mode = "flight" | "rail" | "bus" | "coach" | "subway" | "tram" | "car" | "taxi" | "ferry";
 export type AirportTransferMode = Exclude<Mode, "flight">;
 export type AirportConnection = { from_airport: string; to_airport: string; mode: AirportTransferMode; duration_minutes: number; fare_amount: number | null; currency: string };
 export type AirportConnectionRequirement = { from_airport: string; to_airport: string; from_name: string; to_name: string; journey_count: number; unresolved_journey_count: number };
-export const modes: Mode[] = ["flight", "rail", "bus", "coach", "subway", "tram", "car", "taxi"];
+export const modes: Mode[] = ["flight", "rail", "bus", "coach", "subway", "tram", "car", "taxi", "ferry"];
+
+export type TransportOption = {
+  positioning_direction?: "outbound" | "return" | null;
+  id: string; from_id: string; to_id: string; mode: Mode; adults: number;
+  availability: "available" | "unavailable" | "unknown";
+  duration_minutes: number | null; before_minutes: number; after_minutes: number;
+  departure: string | null; low: number | null; high: number | null; fare_kind: "fixed" | "range"; currency: string;
+  unit: "party" | "person" | "vehicle"; capacity: number; label: string;
+};
+export type TransportConnectionRow = {
+  from_id: string; to_id: string; label: string; kind: "airport-city" | "airport-airport" | "city-city" | "saved";
+  from_timezone: string; to_timezone: string; journey_count: number;
+  suggested_minutes: number | null; timing_source: string | null;
+};
 export type Place = { id: string; name: string; latitude: number; longitude: number; timezone: string; country_code: string; airport_codes: string[]; flight_code: string | null };
 export type Visit = { place: Place; min_stay_hours: number };
 export type PositioningPolicy = { direction: "outbound" | "return"; gateway_id: string; mode: Mode; search_more: boolean; available: boolean };
@@ -32,7 +46,7 @@ export type PricingRule = { id: string; name: string; mode: string; from_id: str
 export type Route = { id: string; departure_gateway: string; arrival_gateway: string; movements: Movement[]; stays: { place_id: string; arrival: string; departure: string; hours: number }[]; stay_hours: number; travel_hours: number; total_cost_myr: number | null; cost_low_myr: number; cost_high_myr: number | null; estimated: boolean; purchases: Offer[]; extra_charges: Charge[]; budget_status: string; provisional: boolean; cost_per_stay_hour_myr: number | null };
 export type Coverage = { unresolved_movements?: { id: string; from_id: string; to_id: string; assumptions: string[] }[]; airport_connections_required?: AirportConnectionRequirement[]; source_gaps?: string[]; processed?: number; pending?: number; requests?: number; cache_hits?: number; outcomes?: Record<string, number>; discovery_complete?: boolean; messages?: string[]; bundle_links?: { kind: string; status: string; url: string; legs: { from_id: string; to_id: string; date: string }[] }[] };
 export type Result = { routes: Route[]; dominated_routes?: Route[]; refinement_routes?: Route[]; missing_fares: { component_id: string; movement_id: string; label: string; from_id: string; to_id: string; affected_itineraries: number; break_even_myr: number | null; reason: string; currency: string }[]; expanded_labels: number; pruned_labels: number; feasible_count: number; optimization_complete: boolean; snapshot_revision: number; trip_revision: number; coverage: Coverage; discovery_required: boolean; optimality_scope: string };
-export type SavedTrip = { assumed_connections?: Movement[]; city_connection_gaps?: { from_id: string; to_id: string }[]; airport_transfer_estimates?: AirportTransferEstimate[]; airport_transfer_rows?: AirportTransferRow[]; fare_component_ids?: string[]; id: string; revision: number; spec: TripSpec; offers: Offer[]; airport_connections?: AirportConnection[]; airport_connections_required?: AirportConnectionRequirement[]; latest_job_id: string | null; result?: Result; snapshot: { revision: number; movements: Movement[]; offers: Offer[]; coverage: Coverage } | null };
+export type SavedTrip = { transport_options?: TransportOption[]; transport_connection_rows?: TransportConnectionRow[]; assumed_connections?: Movement[]; city_connection_gaps?: { from_id: string; to_id: string }[]; airport_transfer_estimates?: AirportTransferEstimate[]; airport_transfer_rows?: AirportTransferRow[]; fare_component_ids?: string[]; id: string; revision: number; spec: TripSpec; offers: Offer[]; airport_connections?: AirportConnection[]; airport_connections_required?: AirportConnectionRequirement[]; latest_job_id: string | null; result?: Result; snapshot: { revision: number; movements: Movement[]; offers: Offer[]; coverage: Coverage } | null };
 export type Job = { id: string; trip_id: string; status: "queued" | "running" | "paused" | "cancelled" | "complete" | "interrupted" | "failed" | "superseded"; processed: number; pending: number; requests: number; cache_hits: number; manual_quote_queries?: number; failed_queries: number; messages: string[]; bundle_links: Coverage["bundle_links"] };
 export type SavedSummary = { id: string; name: string; revision: number; start_date: string; end_date: string };
 

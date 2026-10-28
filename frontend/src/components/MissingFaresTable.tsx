@@ -52,7 +52,7 @@ function AppliedSharedFareRow({ group, staged, onStage }: {
       <label className="p-check"><input type="checkbox" checked={range} onChange={e => setRange(e.target.checked)} />Range</label>
     </div>{error && <span className="p-error" role="alert">{error}</span>}</td>
     <td><input aria-label={`${group.label} · currency`} className="p-currency" maxLength={3} placeholder={group.mixed_currency ? "Mixed" : undefined} value={currency} onChange={e => setCurrency(e.target.value.toUpperCase())} /></td>
-    <td><Button type="button" size="sm" onClick={save}>Save estimate</Button>{staged && <small>Saved for apply</small>}</td>
+    <td><Button type="button" size="sm" onClick={save}>Keep draft</Button>{staged && <small>Draft kept</small>}</td>
   </tr>;
 }
 
@@ -89,10 +89,10 @@ function FareRow({ group, staged, placeName, offerFor, onStage, onSave, onRemove
       </div>{group.reason === "exchange_rate" && <small>Add a {group.currency} exchange rate, or enter a converted fare.</small>}
       {error && <span className="p-error" role="alert">{error}</span>}</td>
       <td><input aria-label={`${name} · ${group.label} · currency`} className="p-currency" maxLength={3} value={currency} onChange={e => setCurrency(e.target.value.toUpperCase())} /></td>
-      <td><Button type="button" size="sm" onClick={save}>Save estimate</Button>{staged && <small>{stagedMatches ? "Saved for apply" : "Changes not saved"}</small>}</td>
+      <td><Button type="button" size="sm" onClick={save}>Keep draft</Button>{staged && <small>{stagedMatches ? "Draft kept" : "Changes not saved"}</small>}</td>
     </tr>
     {expanded && <tr className="p-fare-components"><td colSpan={6}>
-      <p className="p-hint">Individual fare saves are staged too. Use Apply saved estimates above to recalculate.</p>
+      <p className="p-hint">Individual fare saves are staged too. Use Apply fare details above to recalculate.</p>
       {group.components.map((component, index) => <div key={component.component_id}>
         <small>Component {index+1}{component.departure ? ` · Journey departs ${new Intl.DateTimeFormat("en-MY", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }).format(new Date(component.departure))} (UTC)` : ""}{component.service ? ` · ${component.service}` : ""} · {component.affected_itineraries} alternatives</small>
         <FareEditor componentId={component.component_id} label={`${name} · ${group.label}`} offer={offerFor(component.component_id)} onSave={onSave} onRemove={onRemove} />
@@ -165,9 +165,9 @@ export function MissingFaresTable(props: Props) {
   const componentCount = props.groups.reduce((sum, group) => sum+group.components.length, 0);
   if (!props.groups.length && !props.appliedGroups.length) return null;
   return <section className="p-panel" aria-labelledby="missing-fares-title">
-    <div className="p-panel-heading"><div><h2 id="missing-fares-title" tabIndex={-1}>{props.groups.length ? "Missing fares to review" : "Applied shared estimates"}</h2></div><span className="p-tag">{props.groups.length} missing groups · {componentCount} components · {props.appliedGroups.length} applied groups</span></div>
-    {props.groups.length > 0 && <p>Enter a party fare per transfer or journey and save each row. Saved estimates stay in this browser until you apply them together; saving a row does not rerun optimization.</p>}
-    <div className="p-actions"><Button type="button" disabled={busy || !active.length} onClick={() => void apply()}>{busy ? "Applying estimates…" : `Apply saved estimates (${active.length})`}</Button>{active.length > 0 && <Button type="button" variant="ghost" disabled={busy} onClick={() => setPending({})}>Discard saved estimates</Button>}<span className="p-hint">Applies each amount per component and recalculates once.</span></div>
+    <div className="p-panel-heading"><div><h2 id="missing-fares-title" tabIndex={-1}>Fares for collected journeys</h2></div><span className="p-tag">{props.groups.length} missing groups · {componentCount} components · {props.appliedGroups.length} applied groups</span></div>
+    {props.groups.length > 0 && <p>These journeys already have travel times. Enter a whole-party fare or range and keep each draft, then apply them together. Add new services and airport transfer prices in Transport details above.</p>}
+    <div className="p-actions"><Button type="button" disabled={busy || !active.length} onClick={() => void apply()}>{busy ? "Applying estimates…" : `Apply fare details (${active.length})`}</Button>{active.length > 0 && <Button type="button" variant="ghost" disabled={busy} onClick={() => setPending({})}>Discard drafts</Button>}<span className="p-hint">Applies each amount per component and recalculates once.</span></div>
     {error && <p className="p-error" role="alert">{error}</p>}
     {props.groups.length > 0 && <><p className="p-hint">Repeated journeys with the same endpoints, fare type, mode, currency, and missing-fare reason share one row, even across dates. Expand a row to inspect its components; estimates apply separately to every listed component. Future searches may add new unpriced components.</p>
       <div className="p-fares-table-wrap" inert={busy}><table className="p-fares-table"><caption className="sr-only">Missing fares grouped by matching transfer; each amount is a party fare per component.</caption>

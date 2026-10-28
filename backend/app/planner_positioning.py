@@ -19,6 +19,8 @@ def search_modes(spec: TripSpec, a: str, b: str):
 def positioning_allowed(spec: TripSpec, movement: Movement, phase: int):
     # Supplied positioning services cannot be reused as destination travel.
     direction = "outbound" if phase == 0 else "return" if phase == 3 else None
+    if movement.positioning_direction and movement.positioning_direction != direction:
+        return False
     if movement.source == SUPPLIED_SOURCE:
         service = next((s for s in spec.positioning_services if movement.id == "positioning:"+s.id), None)
         if service is None or service.direction != direction:
@@ -28,7 +30,7 @@ def positioning_allowed(spec: TripSpec, movement: Movement, phase: int):
     used_modes = {movement.mode} | {s.mode for s in movement.segments if s.mode not in {"walk", "foot", "wait", "transfer"}}
     for p in pair_policies(spec, movement.from_id, movement.to_id, direction):
         if p.mode in used_modes and (not p.available or
-                (not p.search_more and movement.source not in {SUPPLIED_SOURCE, "User-defined connection"})):
+                (not p.search_more and movement.source not in {SUPPLIED_SOURCE, "User-defined connection", "User-supplied transport"})):
             return False
     return True
 

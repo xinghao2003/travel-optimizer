@@ -21,6 +21,7 @@ from .planner_providers import fetch_flights, flight_query
 from .planner_store import PlannerStore, store
 from .planner_rail import RAIL_FALLBACK_SOURCE, fallback_task, prepare_rail_payload
 from .planner_positioning import search_modes
+from .planner_transport import city_options, transport_movements
 from .transitous import transitous
 
 logger = logging.getLogger("uvicorn.error")
@@ -668,6 +669,9 @@ class DiscoveryManager:
             base_limit = max(1000, int(os.environ.get("PLANNER_LABEL_BATCH", "25000")))
             snapshot["label_limit"] = snapshot.get("label_limit", base_limit)+(base_limit if expand else 0)
             offers = [FareOffer.model_validate(o) for o in [*snapshot.get("offers", []), *trip.get("offers", [])]]
+            _, supplied_fares = city_options(trip, spec) if trip.get("transport_options") else ([], [])
+            # Explicit individual fare edits continue to take precedence.
+            offers = supplied_fares + offers
             # Last write of an offer ID wins (manual replacement of a provider offer).
             offers = list({o.id: o for o in offers}.values())
             now = datetime.now(UTC)
@@ -677,12 +681,16 @@ class DiscoveryManager:
 
             cancelled = check_cancelled if job_id else None
             logger.debug("planner optimize.dispatch trip=%s elapsed=%.2fs movements=%d offers=%d label_limit=%d", trip_id, clock.monotonic()-started, len(snapshot["movements"]), len(offers), snapshot["label_limit"])
-            result = await asyncio.to_thread(optimize, spec, airport_transfer_variants(snapshot["movements"], trip, spec, snapshot.get("roads", {}), airport_connections), offers,
+            solver_movements = transport_movements(snapshot["movements"], trip, spec, snapshot.get("roads", {}), airport_connections)
+            replaced_positioning = {o["id"] for o in trip.get("transport_options", []) if o["adults"] == spec.adults}
+            solver_spec = spec.model_copy(update={"positioning_services": [s for s in spec.positioning_services if "positioning:"+s.id not in replaced_positioning]})
+            result = await asyncio.to_thread(optimize, solver_spec, solver_movements, offers,
                                              [*self.rules(), *airport_transfer_rules(trip, spec)], snapshot["revision"], trip["revision"], cancelled, snapshot["label_limit"], include_dominated=include_dominated)
             logger.debug("planner optimize.return trip=%s elapsed=%.2fs expanded=%d completed=%d routes=%d bundles=%d", trip_id, clock.monotonic()-started, result["expanded_labels"], result["feasible_count"], len(result["routes"]), len(result.get("bundle_candidates", [])))
             result["coverage"] = snapshot.get("coverage", {})
-            result["coverage"]["unresolved_movements"] = [{"id": m["id"], "from_id": m["from_id"], "to_id": m["to_id"], "assumptions": m["assumptions"]} for m in snapshot["movements"] if not m.get("usable", True)]
-            result["coverage"]["airport_connections_required"] = required_airport_connections(snapshot["movements"])
+            effective = [m.model_dump(mode="json") for m in solver_movements]
+            result["coverage"]["unresolved_movements"] = [{"id": m["id"], "from_id": m["from_id"], "to_id": m["to_id"], "assumptions": m["assumptions"]} for m in effective if not m.get("usable", True)]
+            result["coverage"]["airport_connections_required"] = required_airport_connections(effective)
             result["discovery_required"] = snapshot.get("discovery_key") != spec.discovery_key()
             latest = self.store.get("trips", trip_id)
             if latest["revision"] == trip["revision"] and (not latest.get("snapshot") or latest["snapshot"]["revision"] <= snapshot["revision"]):
@@ -950,7 +958,7 @@ class DiscoveryManager:
         pricing_rules = self.store.list("rules")
         now = datetime.now(UTC)
         inputs = stable_id(trip["revision"], trip["spec"], trip.get("offers", []),
-                           trip.get("airport_connections", []), pricing_rules,
+                           trip.get("airport_connections", []), trip.get("transport_options", []), pricing_rules,
                            snapshot["movements"], snapshot.get("offers", []),
                            snapshot.get("roads", {}), snapshot.get("label_limit"))
         cadence = self.optimization_cadence.get(job["id"])

@@ -114,7 +114,7 @@ def price_path(path: list[Movement], offers: list[FareOffer], spec: TripSpec,
             elif charge and charge.low is not None:
                 direct = [FareOffer(id="charge:"+id, movement_ids=[id], kind="charge", low=charge.low,
                                     high=charge.high, currency=charge.currency, source="rule", estimated=True, label=charge.kind)]
-            elif movement.mode == "car" and charge is None:
+            elif movement.mode == "car" and charge is None and movement.vehicle_kind is not None:
                 car = spec.cars
                 rate = car.own_cost_per_km if movement.vehicle_kind == "own" else car.rental_cost_per_km
                 count = 1 if movement.vehicle_kind == "own" else math.ceil(spec.adults/car.rental_capacity)
@@ -410,14 +410,26 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
                     times = {_window(ready, places[label.city], spec), _window(end-duration, places[label.city], spec, True)}
                     for event in events[target]:
                         times.add(_window(event-duration-timedelta(hours=required.get(target, (0, 0))[1]), places[label.city], spec, True))
-                    candidates = [template.model_copy(update={"id": template.id+"@"+stable_id(t), "template_id": template.id, "departure": t, "arrival": t+duration}) for t in sorted(times) if t >= ready]
+                    candidates = []
+                    for t in sorted(times):
+                        if t < ready:
+                            continue
+                        instance = template.model_copy(update={"id": template.id+"@"+stable_id(t), "template_id": template.id, "departure": t, "arrival": t+duration})
+                        if template.source == "User-supplied transport":
+                            cursor, segments = t, []
+                            for segment in template.segments:
+                                arrival = cursor+timedelta(minutes=segment.duration_minutes or 0)
+                                segments.append(segment.model_copy(update={"departure": cursor, "arrival": arrival}))
+                                cursor = arrival
+                            instance.segments = segments
+                        candidates.append(instance)
                 for movement in candidates:
                     dep, arr = movement.departure.astimezone(UTC), movement.arrival.astimezone(UTC)
                     if dep < ready or arr > end or dep < start or _overnight(movement, spec):
                         continue
                     service = next((s.departure for s in movement.segments if s.mode not in {"transfer", "walk", "foot", "wait"} and s.departure), dep)
                     local = service.astimezone(ZoneInfo(places[movement.from_id].timezone)).time().replace(tzinfo=None)
-                    if movement.source != SUPPLIED_SOURCE and not spec.departure_start <= local <= spec.departure_end:
+                    if movement.source not in {SUPPLIED_SOURCE, "User-supplied transport"} and not spec.departure_start <= local <= spec.departure_end:
                         continue
                     if not label.path and spec.date_mode == "fixed" and dep.astimezone(ZoneInfo(spec.home.timezone)).date() != spec.start_date:
                         continue

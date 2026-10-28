@@ -6,7 +6,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from .planner_discovery import manager, required_airport_connections, airport_transfer_rows
-from .planner_models import AirportConnection, AirportTransferEstimate, FareOffer, Movement, PricingRule, TripSpec
+from .planner_models import AirportConnection, AirportTransferEstimate, FareOffer, Movement, PricingRule, TripSpec, TransportOption
+from .planner_transport import transport_options, transport_rows
 from .planner_places import search_places
 from .planner_store import store
 from .planner_results import compact_trip, compact_result, fare_component_ids
@@ -35,6 +36,11 @@ class UpdateAirportConnections(BaseModel):
 
 class UpdateAirportTransfers(BaseModel):
     estimates: list[AirportTransferEstimate] = Field(default_factory=list, max_length=240)
+    expected_revision: int
+
+
+class UpdateTransportOptions(BaseModel):
+    options: list[TransportOption] = Field(default_factory=list, max_length=500)
     expected_revision: int
 
 
@@ -77,6 +83,8 @@ async def list_trips():
 async def create_trip(spec: TripSpec):
     trip = store.new_trip(spec.model_dump(mode="json"))
     trip["airport_transfer_rows"] = airport_transfer_rows(spec)
+    trip["transport_connection_rows"] = transport_rows(trip, spec)
+    trip["transport_options"] = []
     return trip
 
 
@@ -89,8 +97,12 @@ async def duplicate_trip(id: str):
     trip = store.new_trip(spec.model_dump(mode="json"))
     trip["airport_connections"] = source.get("airport_connections", [])
     trip["airport_transfer_estimates"] = source.get("airport_transfer_estimates", [])
+    # Exact departures and intercity services belong to the original dates.
+    trip["transport_options"] = [o for o in source.get("transport_options", []) if not o.get("departure") and (o["from_id"].startswith("airport:") or o["to_id"].startswith("airport:"))]
     trip = store.put("trips", trip["id"], trip)
     trip["airport_transfer_rows"] = airport_transfer_rows(spec)
+    trip["transport_connection_rows"] = transport_rows(trip, spec)
+    trip["transport_options"] = [o.model_dump(mode="json") for o in transport_options(trip, spec)]
     return trip
 
 
@@ -100,6 +112,9 @@ async def read_trip(id: str, include_graph: bool = False, compact: bool = False)
         trip = store.get("trips", id, expand=not compact)
         if trip is None:
             raise HTTPException(404, "Trip not found.")
+        spec = TripSpec.model_validate(trip["spec"])
+        trip["transport_connection_rows"] = transport_rows(trip, spec)
+        trip["transport_options"] = [o.model_dump(mode="json") for o in transport_options(trip, spec)]
         trip["airport_transfer_rows"] = airport_transfer_rows(TripSpec.model_validate(trip["spec"]), (trip.get("snapshot") or {}).get("movements", []))
         trip["airport_connections_required"] = required_airport_connections((trip.get("snapshot") or {}).get("movements", []))
         trip["assumed_connections"] = [m for m in (trip.get("snapshot") or {}).get("movements", [])
@@ -146,6 +161,8 @@ async def update_trip(id: str, request: UpdateTrip):
     get_trip(id)
     updated = store.update("trips", id, update)
     updated["airport_transfer_rows"] = airport_transfer_rows(request.spec, (updated.get("snapshot") or {}).get("movements", []))
+    updated["transport_connection_rows"] = transport_rows(updated, request.spec)
+    updated["transport_options"] = [o.model_dump(mode="json") for o in transport_options(updated, request.spec)]
     return updated
 
 
@@ -297,6 +314,28 @@ async def update_airport_connections(id: str, request: UpdateAirportConnections)
     store.update("trips", id, lambda trip: {**trip, "airport_connections": payload,
                                              "revision": trip["revision"]+1})
     return await recalculate(id)
+
+
+@router.put("/trips/{id}/transport-options")
+async def update_transport_options(id: str, request: UpdateTransportOptions):
+    get_trip(id)
+    def update(trip):
+        if request.expected_revision != trip["revision"]:
+            raise HTTPException(409, "This trip changed. Reload it before applying transport details.")
+        spec = TripSpec.model_validate(trip["spec"])
+        allowed = {(r["from_id"], r["to_id"]) for r in transport_rows(trip, spec)}
+        ids = [o.id for o in request.options]
+        if len(ids) != len(set(ids)) or any((o.from_id, o.to_id) not in allowed for o in request.options):
+            raise HTTPException(422, "Use unique option IDs and connections listed for this trip.")
+        if any(o.mode == "flight" and (o.from_id.startswith("airport:") or o.to_id.startswith("airport:")) for o in request.options):
+            raise HTTPException(422, "Airport transfers need a ground or ferry mode.")
+        trip["transport_options"] = [o.model_dump(mode="json") for o in request.options]
+        trip["revision"] += 1
+        trip.pop("result", None)
+        return trip
+    store.update("trips", id, update)
+    await manager.recalculate(id)
+    return await read_trip(id, compact=True)
 
 
 @router.delete("/trips/{id}/movements/{movement_id}")

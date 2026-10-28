@@ -69,13 +69,14 @@ export function ParetoExplorer({ routes, dominated = [], selected, onSelect }: {
     }, { notMerge: changed, replaceMerge: ["series"] });
   }, [routes, dominated, selected, useLogCost, useLogHours, fit, resolved]);
   return <div>
-    <div className="p-inline p-chart-controls" role="group" aria-label="Chart scales">
-      <label className="p-check"><input type="checkbox" checked={useLogCost} disabled={!canLogCost} onChange={e => setLogCost(e.target.checked)} />Log cost</label>
-      <label className="p-check"><input type="checkbox" checked={useLogHours} disabled={!canLogHours} onChange={e => setLogHours(e.target.checked)} />Log city hours</label>
+    <details className="p-chart-scale-details"><summary>Chart settings</summary><div className="p-inline p-chart-controls" role="group" aria-label="Chart scales">
+      <label className="p-check"><input type="checkbox" checked={useLogCost} disabled={!canLogCost} onChange={e => setLogCost(e.target.checked)} />Logarithmic cost</label>
+      <label className="p-check"><input type="checkbox" checked={useLogHours} disabled={!canLogHours} onChange={e => setLogHours(e.target.checked)} />Logarithmic city hours</label>
       <label className="p-check"><input type="checkbox" checked={fit} onChange={e => setFit(e.target.checked)} />Fit axes to data</label>
       <button type="button" className="p-text-button" onClick={() => chart.current?.dispatchAction({ type: "dataZoom", start: 0, end: 100 })}>Reset zoom</button>
     </div>
     <p className="p-hint">Fitted axes highlight small differences and may not start at zero. Log scales compare proportional changes and require positive values.</p>
+    </details>
     {!plottable.length && <p className="p-notice">No complete fare totals or bounded fare ranges to plot. Resolve missing fares to show these alternatives here.</p>}
     <div ref={element} className="pareto-chart" role="img" aria-label={`Pareto frontier with ${plottable.length} plotted alternatives: ${useLogCost ? "logarithmic" : "linear"} cost versus ${useLogHours ? "logarithmic" : "linear"} city-stay hours`} />
   </div>;

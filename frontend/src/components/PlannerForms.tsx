@@ -5,14 +5,14 @@ import { api, localInputToISO, money, type Offer, type Place, type PricingRule, 
 export function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) {
   const generated = useId();
   const id = isValidElement<{ id?: string }>(children) ? children.props.id ?? generated : generated;
-  return <div className="p-field"><label htmlFor={id}>{label}</label>{isValidElement<{ id?: string }>(children) ? cloneElement(children, { id }) : children}{hint && <small>{hint}</small>}</div>;
+  return <div className="p-field"><label htmlFor={id}>{label}</label>{isValidElement<{ id?: string; "aria-describedby"?: string }>(children) ? cloneElement(children, { id, "aria-describedby": [children.props["aria-describedby"], hint ? `${id}-hint` : undefined].filter(Boolean).join(" ") || undefined }) : children}{hint && <small id={`${id}-hint`}>{hint}</small>}</div>;
 }
 
-export function NumberField({ label, value, onChange, min = 0, max, step = "any", optional = false }: { label: string; value: number | null; onChange: (n: number | null) => void; min?: number; max?: number; step?: string | number; optional?: boolean }) {
-  return <Field label={label}><input type="number" min={min} max={max} step={step} value={value ?? ""} placeholder={optional ? "Unknown / not set" : undefined} onChange={e => onChange(e.target.value === "" && optional ? null : Number(e.target.value))} /></Field>;
+export function NumberField({ label, value, onChange, min = 0, max, step = "any", optional = false, hint, placeholder }: { label: string; value: number | null; onChange: (n: number | null) => void; min?: number; max?: number; step?: string | number; optional?: boolean; hint?: string; placeholder?: string }) {
+  return <Field label={label} hint={hint}><input type="number" min={min} max={max} step={step} value={value ?? ""} placeholder={placeholder ?? (optional ? "Not set" : undefined)} onChange={e => onChange(e.target.value === "" && optional ? null : Number(e.target.value))} /></Field>;
 }
 
-export function PlacePicker({ label, onSelect, disabledIds = [] }: { label: string; onSelect: (p: Place) => void; disabledIds?: string[] }) {
+export function PlacePicker({ label, onSelect, disabledIds = [], disabled = false }: { label: string; onSelect: (p: Place) => void; disabledIds?: string[]; disabled?: boolean }) {
   const id = useId();
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<Place[]>([]);
@@ -46,7 +46,7 @@ export function PlacePicker({ label, onSelect, disabledIds = [] }: { label: stri
       setManual(false);
     } catch (err) { setError(err instanceof Error ? err.message : "Invalid place."); }
   }
-  return <div className="p-place-picker">
+  return <fieldset className="p-place-picker" disabled={disabled}>
     <Field label={label}><input role="combobox" aria-autocomplete="list" aria-expanded={items.length > 0} aria-controls={`${id}-list`} aria-activedescendant={items.length ? `${id}-${active}` : undefined} placeholder="City name or airport code" value={query}
       onChange={e => setQuery(e.target.value)} onKeyDown={e => { if (e.key === "ArrowDown") { e.preventDefault(); setActive(i => Math.min(items.length - 1, i + 1)); } if (e.key === "ArrowUp") { e.preventDefault(); setActive(i => Math.max(0, i - 1)); } if (e.key === "Enter" && items[active]) { e.preventDefault(); choose(items[active]); } if (e.key === "Escape") setItems([]); }} /></Field>
     {items.length > 0 && <div className="p-suggestions" role="listbox" id={`${id}-list`}>{items.map((p, i) => <button key={p.id} type="button" role="option" id={`${id}-${i}`} aria-selected={i === active} onClick={() => choose(p)}><strong>{p.name}</strong><small>{p.country_code} · {p.airport_codes.length ? p.airport_codes.join(", ") : "No airport required"}</small></button>)}</div>}
@@ -57,7 +57,7 @@ export function PlacePicker({ label, onSelect, disabledIds = [] }: { label: stri
       <Button type="button" size="sm" variant="secondary" onClick={addCustom}>Use this place</Button>
     </div>}
     {error && <p className="p-error" role="alert">{error}</p>}
-  </div>;
+  </fieldset>;
 }
 
 export function PlaceChips({ places, remove }: { places: Place[]; remove: (id: string) => void }) {

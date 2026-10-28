@@ -165,7 +165,7 @@ export function MissingFaresTable(props: Props) {
   const componentCount = props.groups.reduce((sum, group) => sum+group.components.length, 0);
   if (!props.groups.length && !props.appliedGroups.length) return null;
   return <section className="p-panel" aria-labelledby="missing-fares-title">
-    <div className="p-panel-heading"><div><span className="p-step">03</span><h2 id="missing-fares-title">{props.groups.length ? "Refine important missing fares" : "Applied shared estimates"}</h2></div><span className="p-tag">{props.groups.length} missing groups · {componentCount} components · {props.appliedGroups.length} applied groups</span></div>
+    <div className="p-panel-heading"><div><h2 id="missing-fares-title" tabIndex={-1}>{props.groups.length ? "Missing fares to review" : "Applied shared estimates"}</h2></div><span className="p-tag">{props.groups.length} missing groups · {componentCount} components · {props.appliedGroups.length} applied groups</span></div>
     {props.groups.length > 0 && <p>Enter a party fare per transfer or journey and save each row. Saved estimates stay in this browser until you apply them together; saving a row does not rerun optimization.</p>}
     <div className="p-actions"><Button type="button" disabled={busy || !active.length} onClick={() => void apply()}>{busy ? "Applying estimates…" : `Apply saved estimates (${active.length})`}</Button>{active.length > 0 && <Button type="button" variant="ghost" disabled={busy} onClick={() => setPending({})}>Discard saved estimates</Button>}<span className="p-hint">Applies each amount per component and recalculates once.</span></div>
     {error && <p className="p-error" role="alert">{error}</p>}

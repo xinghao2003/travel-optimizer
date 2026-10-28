@@ -4,6 +4,8 @@ A local multimodal trip optimizer that compares total party transportation cost 
 
 ## Trip setup and results
 
+Use **Trip setup** for dates, cities, and transport preferences; **Compare routes** for route cards, the optional cost–time chart, and the selected itinerary; and **Fares & connections** for missing prices and transfer details. Saved trips with collected transport open on their comparison view. The guidance banner identifies the next step, including unfinished setup, paused searches, and incomplete calculations. Switching views preserves unfinished fare and connection entries; use their save/apply controls to persist changes.
+
 - Choose a home/base, up to three departure candidates, up to three arrival candidates, and one to four required cities. The optimizer chooses one departure and one arrival candidate and the visit order.
 - Use **New from existing** to start a separate trip with the selected trip's settings, airport connections, and airport transfer estimates. Schedules and trip-specific fares start fresh.
 - Fixed dates are the default: leave home on the start date and arrive back on the end date. Flexible dates permit the entire journey anywhere inside those bounds. Boundaries use the home timezone.

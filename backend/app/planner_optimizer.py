@@ -415,7 +415,10 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
                     dep, arr = movement.departure.astimezone(UTC), movement.arrival.astimezone(UTC)
                     if dep < ready or arr > end or dep < start or _overnight(movement, spec):
                         continue
-                    service = next((s.departure for s in movement.segments if s.mode not in {"transfer", "walk", "foot", "wait"} and s.departure), dep)
+                    # Airport access is not the service departure, even when a trip
+                    # transfer estimate relabels its segment with the chosen mode.
+                    service = next((s.departure for s in movement.segments if s.mode not in {"transfer", "walk", "foot", "wait"}
+                                    and not (s.source or "").startswith("User-estimated airport") and s.departure), dep)
                     local = service.astimezone(ZoneInfo(places[movement.from_id].timezone)).time().replace(tzinfo=None)
                     if movement.source != SUPPLIED_SOURCE and not spec.departure_start <= local <= spec.departure_end:
                         continue

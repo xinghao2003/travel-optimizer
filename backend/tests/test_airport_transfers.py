@@ -5,7 +5,7 @@ from pathlib import Path
 from datetime import date, datetime, timezone
 from app.planner_models import Place, Visit, TripSpec, Segment, FareOffer, AirportTransferEstimate
 from app.planner_discovery import flight_movement, airport_transfer_variants, airport_transfer_rules, airport_transfer_rows
-from app.planner_optimizer import price_path
+from app.planner_optimizer import optimize, price_path
 from app.planner_store import PlannerStore
 
 class AirportTransferTests(unittest.TestCase):
@@ -40,6 +40,14 @@ class AirportTransferTests(unittest.TestCase):
         other = self.flight.model_copy(deep=True, update={'id': 'other', 'charges': []})
         bundle = FareOffer(id='return-ticket', movement_ids=[self.flight.id, 'other'], kind='round-trip', low=90, high=90)
         self.assertEqual(price_path([rail, other], [bundle], self.spec, airport_transfer_rules(trip, self.spec))['cost_high_myr'], 120)
+
+    def test_transfer_estimate_keeps_flight_departure_window(self):
+        # The 09:00-17:00 window applies to the 10:00 flight, not the earlier taxi to the airport.
+        back = Segment(mode="flight", from_id="ICN", to_id="KUL", from_name="ICN", to_name="KUL", departure=datetime(2027, 2, 12, 10, tzinfo=timezone.utc), arrival=datetime(2027, 2, 12, 16, tzinfo=timezone.utc))
+        home = flight_movement(self.city, self.home, [back.model_dump(mode="json")], self.spec, self.roads)
+        trip = {'airport_transfer_estimates': [dict(from_id="kul", to_id="airport:KUL", mode="taxi", adults=1, duration_minutes=None, low=10, high=None, currency="MYR")]}
+        variants = airport_transfer_variants([m.model_dump(mode='json') for m in (self.flight, home)], trip, self.spec, self.roads, {})
+        self.assertTrue(optimize(self.spec, variants, [], airport_transfer_rules(trip, self.spec))['routes'])
 
     def test_restart_future_movements_party_and_direction(self):
         with tempfile.TemporaryDirectory() as folder:

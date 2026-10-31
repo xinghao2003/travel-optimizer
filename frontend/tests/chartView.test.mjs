@@ -1,14 +1,8 @@
 import assert from "node:assert/strict";
-import {readFileSync} from "node:fs";
 import {test} from "node:test";
-import ts from "../node_modules/typescript/lib/typescript.js";
-async function load(path) {
- const source=readFileSync(new URL(path,import.meta.url),"utf8");
- const js=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022}}).outputText;
- return import("data:text/javascript;base64,"+Buffer.from(js).toString("base64"));
-}
-const {axisBounds}=await load("../src/lib/chartView.ts");
-const {cityHourCost}=await load("../src/lib/planner.ts");
+import {loadTs} from "./loadTs.mjs";
+const {axisBounds}=await loadTs("../src/lib/chartView.ts");
+const {cityHourCost}=await loadTs("../src/lib/planner.ts");
 test("fitted axes enclose the observed frontier without starting at zero",()=>{
  const values=[2848,3727,3757,4205,4581,5029];
  const b=axisBounds(values,false,true);

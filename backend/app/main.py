@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import mimetypes
 from contextlib import asynccontextmanager
 from datetime import date, time
 from pathlib import Path
@@ -130,4 +131,7 @@ async def legacy_optimize(request: OptimizeRequest) -> dict:
 
 frontend_dist = PROJECT_ROOT / "frontend" / "dist"
 if frontend_dist.exists():
+    # Windows can map .js to text/plain in the registry; browsers then refuse
+    # to execute the module bundle and the app renders blank.
+    mimetypes.add_type("text/javascript", ".js")
     app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")

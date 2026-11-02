@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { loadTs } from "./loadTs.mjs";
 const {
-  airportChangeRows, assumedConnections, assumptionNotes, buildNextSteps, bundleStatusLabel, cityGaps, compareText, dateRange, formatDuration,
+  airportChangeRows, appError, assumedConnections, assumptionNotes, buildNextSteps, bundleStatusLabel, cityGaps, compareText, dateRange, formatDuration,
   formatLocal, matchingQuoteLinks, modeLabel, moneyShort, needsInputCount, perCityHourText, priceEstimated, priceText, routeChain, routeSignature,
-  searchState, settingsSummaries, sortRoutes, sourceLabel, splitGroups, stepLabel, transferDirections, tripSummary, unpricedSummary,
+  searchDetails, searchState, settingsSummaries, sortRoutes, sourceLabel, splitGroups, stepLabel, transferDirections, tripSummary, unpricedSummary,
   unresolvedAccessJourneys, validateDraft,
 } = await loadTs("../src/lib/present.ts");
 const { blankTrip } = await loadTs("../src/lib/planner.ts");
@@ -233,6 +233,52 @@ test("the status strip shows the first matching state and routes Check more comb
   assert.equal(checkMore({ job: job("running", { pending: 3 }) }), undefined);
   assert.equal(checkMore({ invalid: true }), undefined);
   assert.equal(strip({ result: incomplete }).secondary.text, "Not all combinations were checked. Better options may exist.");
+});
+
+test("status strip details list the counters, the data version and each provider message once", () => {
+  const job = { id: "j", trip_id: "t", status: "paused", processed: 96, pending: 41, failed_queries: 11, requests: 84, cache_hits: 12, manual_quote_queries: 2, outcomes: { success: 85, empty: 0, failed: 11 }, messages: ["No rows for KUL → PUS.", "Batch limit reached."], bundle_links: [] };
+  const result = { snapshot_revision: 2, feasible_count: 1234, expanded_labels: 1, coverage: { messages: ["Batch limit reached."], source_gaps: ["Transitous disabled"] } };
+  const saved = { snapshot: { coverage: {} } };
+  assert.deepEqual(searchDetails({ saved, job, result }), {
+    lines: [
+      "Searches: 96 done · 41 left · 11 failed",
+      "Requests to data providers: 84 · answered from saved results: 12",
+      "Results: 85 found · 11 failed",
+      "Combined tickets to check: 2",
+      "Data version 2 · 1,234 complete itineraries checked · 1 combination explored",
+      "Scope: best among the schedules and prices collected, not every ticket on sale.",
+    ],
+    messages: ["No rows for KUL → PUS.", "Batch limit reached.", "Transit search is not set up on this server."],
+  });
+  // The batch line needs both fields; zero counts and a missing job leave their lines out.
+  const batch = searchDetails({ saved, job: { ...job, batch_requests: 40, batch_budget: 100, outcomes: {}, manual_quote_queries: 0 }, result: null });
+  assert.deepEqual(batch.lines, ["Searches: 96 done · 41 left · 11 failed", "This batch: 40 of 100 requests", "Requests to data providers: 84 · answered from saved results: 12"]);
+  assert.deepEqual(searchDetails({ saved, job: null, result }).lines.map(line => line.split(" ")[0]), ["Data", "Scope:"]);
+  // Nothing before the first search, although the server returns a result for the saved trip.
+  assert.deepEqual(searchDetails({ saved: { snapshot: null }, job: null, result }), { lines: [], messages: [] });
+  // Without a result (while openTrip recalculates a stale one), the messages come from the snapshot coverage.
+  assert.deepEqual(searchDetails({ saved: { snapshot: { coverage: { messages: ["m"], source_gaps: ["Transitous disabled"] } } }, job: null, result: null }),
+    { lines: [], messages: ["m", "Transit search is not set up on this server."] });
+  // Counts use thousands separators, like the rest of the strip.
+  assert.equal(searchDetails({ saved, job: { ...job, processed: 1234, outcomes: {}, manual_quote_queries: 0 }, result: null }).lines[0], "Searches: 1,234 done · 41 left · 11 failed");
+});
+
+test("errors map to the banner text and the action that removes their cause", () => {
+  const apiError = (message, status, path) => Object.assign(new Error(message), { status, path });
+  const conflict = "This trip changed elsewhere, for example in another tab or after a price rule change. Reload it to continue.";
+  const unreachable = "Can't reach the planner server. Check that it is running, then try again.";
+  assert.deepEqual(appError(apiError("This trip changed. Reload it before saving.", 409, "/trips/t1")), { text: conflict, action: "reload" });
+  assert.deepEqual(appError(apiError("Trip changed. Reload before removing a connection.", 409, "/trips/t1/movements/m?expected_revision=3")), { text: conflict, action: "reload" });
+  // A conflict also wins over Retry save: the save can't succeed before the trip is reloaded.
+  assert.deepEqual(appError(apiError("This trip changed. Reload it before saving.", 409, "/trips/t1"), true), { text: conflict, action: "reload" });
+  assert.deepEqual(appError(apiError("Start a new search after changing discovery inputs.", 409, "/searches/j/continue")), { text: "Start a new search after changing discovery inputs.", action: "search-again" });
+  assert.deepEqual(appError(apiError("This trip already has an active discovery job.", 409, "/trips/t1/searches")), { text: "This trip already has an active discovery job.", action: null });
+  assert.deepEqual(appError(apiError("An in-flight request is finishing. Continue after it stops.", 409, "/searches/j/continue")), { text: "An in-flight request is finishing. Continue after it stops.", action: null });
+  assert.deepEqual(appError(Object.assign(new Error(unreachable), { path: "/trips" })), { text: unreachable, action: null });
+  assert.deepEqual(appError(apiError("Input should be a valid date", 422, "/trips/t1"), true), { text: "Changes not saved: Input should be a valid date", action: "retry-save" });
+  assert.deepEqual(appError(Object.assign(new Error(unreachable), { path: "/trips/t1" }), true), { text: `Changes not saved: ${unreachable}`, action: "retry-save" });
+  assert.deepEqual(appError(new Error("Finish the current trip setup before copying it.")), { text: "Finish the current trip setup before copying it.", action: null });
+  assert.deepEqual(appError("unexpected"), { text: "Something went wrong. Try again.", action: null });
 });
 
 test("journey steps read as plain sentences", () => {

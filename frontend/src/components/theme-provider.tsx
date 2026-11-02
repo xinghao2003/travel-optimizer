@@ -1,5 +1,4 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useState, type ReactNode } from "react";
-import { Monitor, Moon, Sun } from "lucide-react";
 
 type Theme = "light" | "dark" | "system";
 const ThemeContext = createContext<{ theme: Theme; resolved: "light" | "dark"; setTheme: (theme: Theme) => void }>({ theme: "system", resolved: "light", setTheme: () => {} });
@@ -23,7 +22,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   return <ThemeContext.Provider value={{ theme, resolved, setTheme }}>{children}</ThemeContext.Provider>;
 }
 export const useTheme = () => useContext(ThemeContext);
-export function ThemeToggle() {
+const themes = [["system", "System"], ["light", "Light"], ["dark", "Dark"]] as const;
+/** The theme radios of the header menu (C11). */
+export function ThemeChoice() {
   const { theme, setTheme } = useTheme();
-  return <div className="p-theme-toggle" role="group" aria-label="Appearance">{([{ value: "light", icon: Sun, label: "Light" }, { value: "dark", icon: Moon, label: "Dark" }, { value: "system", icon: Monitor, label: "System" }] as const).map(({ value, icon: Icon, label }) => <button key={value} type="button" title={`${label} theme`} aria-label={`${label} theme`} aria-pressed={theme === value} onClick={() => setTheme(value)}><Icon size={15} /></button>)}</div>;
+  return <fieldset className="p-theme-choice"><legend>Theme</legend>{themes.map(([value, label]) => <label className="p-check" key={value}><input type="radio" name="wayfinder-theme" value={value} checked={theme === value} onChange={() => setTheme(value)} />{label}</label>)}</fieldset>;
 }

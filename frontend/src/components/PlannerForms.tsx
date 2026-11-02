@@ -12,7 +12,7 @@ export function NumberField({ label, value, onChange, min = 0, max, step = "any"
   return <Field label={label}><input type="number" min={min} max={max} step={step} value={value ?? ""} placeholder={optional ? "Unknown / not set" : undefined} onChange={e => onChange(e.target.value === "" && optional ? null : Number(e.target.value))} /></Field>;
 }
 
-export function PlacePicker({ label, onSelect, disabledIds = [] }: { label: string; onSelect: (p: Place) => void; disabledIds?: string[] }) {
+export function PlacePicker({ label, onSelect, disabledIds = [], inputId }: { label: string; onSelect: (p: Place) => void; disabledIds?: string[]; inputId?: string }) {
   const id = useId();
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<Place[]>([]);
@@ -47,7 +47,7 @@ export function PlacePicker({ label, onSelect, disabledIds = [] }: { label: stri
     } catch (err) { setError(err instanceof Error ? err.message : "Invalid place."); }
   }
   return <div className="p-place-picker">
-    <Field label={label}><input role="combobox" aria-autocomplete="list" aria-expanded={items.length > 0} aria-controls={`${id}-list`} aria-activedescendant={items.length ? `${id}-${active}` : undefined} placeholder="City name or airport code" value={query}
+    <Field label={label}><input id={inputId} role="combobox" aria-autocomplete="list" aria-expanded={items.length > 0} aria-controls={`${id}-list`} aria-activedescendant={items.length ? `${id}-${active}` : undefined} placeholder="City name or airport code" value={query}
       onChange={e => setQuery(e.target.value)} onKeyDown={e => { if (e.key === "ArrowDown") { e.preventDefault(); setActive(i => Math.min(items.length - 1, i + 1)); } if (e.key === "ArrowUp") { e.preventDefault(); setActive(i => Math.max(0, i - 1)); } if (e.key === "Enter" && items[active]) { e.preventDefault(); choose(items[active]); } if (e.key === "Escape") setItems([]); }} /></Field>
     {items.length > 0 && <div className="p-suggestions" role="listbox" id={`${id}-list`}>{items.map((p, i) => <button key={p.id} type="button" role="option" id={`${id}-${i}`} aria-selected={i === active} onClick={() => choose(p)}><strong>{p.name}</strong><small>{p.country_code} · {p.airport_codes.length ? p.airport_codes.join(", ") : "No airport required"}</small></button>)}</div>}
     {loading && <small role="status">Searching the local city catalog…</small>}

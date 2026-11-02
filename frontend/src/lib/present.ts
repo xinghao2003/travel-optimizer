@@ -1,4 +1,4 @@
-import { blankTrip, defaultBatchSize, modes, type AirportConnectionRequirement, type AirportTransferMode, type AirportTransferRow, type Charge, type Coverage, type Job, type Movement, type Offer, type Result, type Route, type SavedTrip, type Segment, type TripDraft } from "./planner";
+import { blankTrip, defaultBatchSize, modes, type AirportConnectionRequirement, type AirportTransferMode, type AirportTransferRow, type ApiError, type Charge, type Coverage, type Job, type Movement, type Offer, type Result, type Route, type SavedTrip, type Segment, type TripDraft } from "./planner";
 import type { MissingFareGroup } from "./missingFares";
 
 // Pure display and decision helpers for the planner UI (spec sections C–G). No React here:
@@ -18,7 +18,9 @@ export function modeLabel(mode: string) {
   return modeLabels[mode] ?? mode;
 }
 
-const plural = (count: number, word: string, many = `${word}s`) => `${count} ${count === 1 ? word : many}`;
+/** A count with thousands separators ("1,234"). */
+const whole = (count: number) => formatNumber(count, 0);
+const plural = (count: number, word: string, many = `${word}s`) => `${whole(count)} ${count === 1 ? word : many}`;
 const joinAnd = (items: string[]) => items.length > 1 ? `${items.slice(0, -1).join(", ")} and ${items.at(-1)}` : items[0] ?? "";
 const capitalize = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 const hhmm = (time: string) => time.slice(0, 5);
@@ -281,8 +283,8 @@ export function searchState({ invalid, dirty, saved, result, job }: {
   if (invalid) return { ...state("invalid", "warn", "Fix the marked fields. Options show the last saved trip."), secondary: null };
   if (dirty && result) return { ...state("updating", "busy", "Updating options…"), secondary: null };
   if (status === "queued") return state("queued", "busy", "Starting the search…", [stop]);
-  if (status === "running") return state("running", "busy", `Searching · ${job!.processed} done · ${pending} left. Options update as results arrive.`, [{ ...stop, tip: "Found options and your prices are kept." }], {
-    progress: { value: job!.processed, max: job!.processed + pending, text: `${job!.processed} of ${job!.processed + pending} searches`, tip: "The total can grow while the search adds follow-up searches." },
+  if (status === "running") return state("running", "busy", `Searching · ${whole(job!.processed)} done · ${whole(pending)} left. Options update as results arrive.`, [{ ...stop, tip: "Found options and your prices are kept." }], {
+    progress: { value: job!.processed, max: job!.processed + pending, text: `${whole(job!.processed)} of ${whole(job!.processed + pending)} searches`, tip: "The total can grow while the search adds follow-up searches." },
   });
   // Before the stale row (C3.1 has it after): the server also marks the result of a trip that was
   // never searched as discovery_required, because no saved search matches the trip yet.
@@ -310,6 +312,52 @@ export function searchState({ invalid, dirty, saved, result, job }: {
     return state("gaps", "warn", parts.length ? `Search finished with gaps: ${parts.join(", ")}.` : "Search finished with gaps.");
   }
   return state("idle", "info", "");
+}
+
+const outcomeWords: [string, string][] = [["success", "found"], ["empty", "no results"], ["failed", "failed"], ["unsupported", "not supported"]];
+/**
+ * The status strip's Details (C3.1): search counters, the data version and the messages from data
+ * providers, only the lines whose data exist. Empty before the first search.
+ */
+export function searchDetails({ saved, job, result }: {
+  saved: Pick<SavedTrip, "snapshot"> | null;
+  job: Job | null;
+  result: Pick<Result, "snapshot_revision" | "feasible_count" | "expanded_labels" | "coverage"> | null;
+}) {
+  const lines: string[] = [];
+  if (!saved?.snapshot && !job) return { lines, messages: [] };
+  if (job) {
+    lines.push(`Searches: ${whole(job.processed)} done · ${whole(job.pending)} left · ${whole(job.failed_queries)} failed`);
+    if (job.batch_requests !== undefined && job.batch_budget !== undefined) lines.push(`This batch: ${whole(job.batch_requests)} of ${plural(job.batch_budget, "request")}`);
+    lines.push(`Requests to data providers: ${whole(job.requests)} · answered from saved results: ${whole(job.cache_hits)}`);
+    const outcomes = outcomeWords.filter(([key]) => job.outcomes?.[key]).map(([key, word]) => `${whole(job.outcomes![key])} ${word}`);
+    if (outcomes.length) lines.push(`Results: ${outcomes.join(" · ")}`);
+    if (job.manual_quote_queries) lines.push(`Combined tickets to check: ${whole(job.manual_quote_queries)}`);
+  }
+  if (result) lines.push(
+    `Data version ${result.snapshot_revision} · ${plural(result.feasible_count, "complete itinerary", "complete itineraries")} checked · ${plural(result.expanded_labels, "combination")} explored`,
+    "Scope: best among the schedules and prices collected, not every ticket on sale.",
+  );
+  const coverage = result?.coverage ?? saved?.snapshot?.coverage;
+  const gaps = (coverage?.source_gaps ?? []).map(gap => gap === "Transitous disabled" ? "Transit search is not set up on this server." : gap);
+  return { lines, messages: [...new Set([...(job?.messages ?? []), ...(coverage?.messages ?? []), ...gaps])] };
+}
+
+/** An error for the error banner (C2), with the action that removes its cause. */
+export type AppError = { text: string; action: "retry-save" | "reload" | "search-again" | null };
+/**
+ * The error banner for a failed action (C2). Errors from api() carry the HTTP status and the request
+ * path; for a conflict (409) on a search, the server's text tells the cases apart. `autosave` marks a
+ * failed autosave, which offers Retry save.
+ */
+export function appError(error: unknown, autosave = false): AppError {
+  const { message = "", status, path = "" }: Partial<ApiError> = error instanceof Error ? error : {};
+  // Starting or continuing a search: an active search, a request that is finishing, or changed search inputs.
+  if (status === 409 && path.includes("/searches")) return { text: message, action: message === "Start a new search after changing discovery inputs." ? "search-again" : null };
+  // Every other write to the trip checks its revision.
+  if (status === 409 && path.startsWith("/trips/")) return { text: "This trip changed elsewhere, for example in another tab or after a price rule change. Reload it to continue.", action: "reload" };
+  const text = message || "Something went wrong. Try again.";
+  return autosave ? { text: `Changes not saved: ${text}`, action: "retry-save" } : { text, action: null };
 }
 
 const bundleStatuses: Record<string, string> = { requires_manual_quote: "Check the price yourself", success: "Quote found", empty: "No results", failed: "Search failed", unsupported: "Not supported" };

@@ -87,9 +87,6 @@
 .p-airport-table td:nth-child(6) input { min-width: 64px !important; width: 64px !important; text-transform: uppercase; }
 .p-airport-clear { border: 0; border-radius: 6px; background: transparent; color: var(--muted-foreground); font-size: 18px; padding: 4px 8px; }
 .p-airport-clear:hover { background: var(--border); color: var(--destructive); }
-.pareto-chart { height: 380px; width: 100%; min-width: 0; }
-.p-chart-controls { margin: 8px 0; gap: 16px; }
-.p-chart-controls .p-check { margin: 0; }
 .p-route-sort { justify-content: space-between; margin: 14px 0; }
 .p-route-sort .p-field { flex-basis: 270px; }
 .p-route-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(285px, 1fr)); gap: 10px; max-height: 550px; overflow-y: auto; padding: 3px; }
@@ -127,7 +124,7 @@
 .p-purchases small { display: block; font-weight: normal; margin-top: 3px; }
 .p-footer { color: var(--muted-foreground); font-size: 10px; line-height: 1.8; padding: 12px 0 25px; }
 @media(max-width: 850px) { .p-main-fields, .p-places-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .p-detail-layout { grid-template-columns: 1fr; } }
-@media(max-width: 540px) { .p-panel { padding: 16px; border-radius: 11px; } .p-grid, .p-main-fields, .p-places-grid { grid-template-columns: 1fr; gap: 14px; } .p-visit-list { grid-template-columns: 1fr; } .p-panel-heading { align-items: start; } .p-panel-heading h2 { font-size: 17px; } .p-search-actions { align-items: end; } .p-search-actions .p-field { max-width: 100%; flex-basis: 100%; } .p-actions > button { flex: 1; } .pareto-chart { height: 310px; } .p-route-grid { grid-template-columns: 1fr; } .p-fare-editor .p-field { width: 125px; } .p-leg-details summary { flex-wrap: wrap; gap: 8px; } .p-leg-content { padding-left: 0; } .p-purchases > div { flex-wrap: wrap; } }
+@media(max-width: 540px) { .p-panel { padding: 16px; border-radius: 11px; } .p-grid, .p-main-fields, .p-places-grid { grid-template-columns: 1fr; gap: 14px; } .p-visit-list { grid-template-columns: 1fr; } .p-panel-heading { align-items: start; } .p-panel-heading h2 { font-size: 17px; } .p-search-actions { align-items: end; } .p-search-actions .p-field { max-width: 100%; flex-basis: 100%; } .p-actions > button { flex: 1; } .p-route-grid { grid-template-columns: 1fr; } .p-fare-editor .p-field { width: 125px; } .p-leg-details summary { flex-wrap: wrap; gap: 8px; } .p-leg-content { padding-left: 0; } .p-purchases > div { flex-wrap: wrap; } }
 
 /* Compact workspace layout with shared semantic theme tokens. */
 .optimizer h2 { font-size: 16px; font-weight: 600; letter-spacing: -.025em; }
@@ -371,6 +368,71 @@ html { scroll-padding-top: calc(var(--header-h) + var(--tabs-h, 0px) + 8px); scr
 .optimizer .p-missing-status { display: inline-flex; align-items: center; gap: 6px; color: var(--muted-foreground); font-size: 12px; text-align: right; }
 .p-missing-status svg { flex-shrink: 0; }
 
+/* Options column (C6, F1, C12): Next steps, the list toolbar, option rows, Show more, the Over budget group, empty states. */
+.p-next { margin-bottom: 24px; }
+.p-next-list { display: grid; gap: 8px; margin: 12px 0 0; padding: 0; list-style: none; }
+.p-next-list > li { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); }
+.p-next-list > li[data-tone=warn] { border-color: color-mix(in srgb, var(--warning) 25%, transparent); background: var(--warning-bg); }
+.p-next-icon { flex-shrink: 0; margin-top: 2px; color: var(--muted-foreground); }
+[data-tone=warn] > .p-next-icon { color: var(--warning); }
+.optimizer .p-next-list p { flex: 1 1 240px; margin: 0; color: var(--foreground); line-height: 1.5; }
+.p-next-list > li > button { margin-left: auto; }
+.optimizer .p-next .p-more-button { margin-top: 6px; }
+.p-options-heading { position: relative; display: flex; align-items: center; gap: 4px; margin-bottom: 12px; }
+.p-chart-toggle > summary { min-height: 44px; padding: 11px 0; cursor: pointer; color: var(--foreground); font-weight: 500; }
+/* Chart (E2): heading row with Reset zoom and Chart options, the canvas, the legend. --chart-h: 320 / 300 / 260 px (B2). */
+.p-options-pane { --chart-h: 320px; }
+.p-chart { margin-bottom: 8px; }
+.p-chart-head { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.optimizer .p-chart-head h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.p-chart-tools { position: relative; display: flex; align-items: center; gap: 4px 12px; margin-left: auto; }
+.p-chart-options { position: relative; }
+.p-chart-options > summary { padding: 4px 0; cursor: pointer; color: var(--foreground); font-size: 12px; font-weight: 500; }
+.p-chart-options-body { position: absolute; z-index: 30; top: calc(100% + 4px); right: 0; display: grid; gap: 6px; width: max-content; max-width: calc(100vw - 32px); padding: 10px 12px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 24px var(--shadow-color); }
+.p-chart-option { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; }
+.p-chart-option .p-check { margin: 0; }
+.optimizer .p-chart-reason { margin: 0; }
+.p-chart-canvas { width: 100%; min-width: 0; height: var(--chart-h); }
+/* The heading row and one legend line come on top of the canvas. */
+.p-chart-loading { display: grid; place-items: center; height: calc(var(--chart-h) + 56px); color: var(--muted-foreground); }
+.p-chart-legend { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 4px 0 0; padding: 0; list-style: none; color: var(--muted-foreground); font-size: 12px; }
+.p-chart-legend > li { display: inline-flex; align-items: center; gap: 4px; }
+.p-swatch { flex-shrink: 0; }
+.p-options-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin: 16px 0 8px; }
+.optimizer .p-options-count { margin: 0 auto 0 0; color: var(--foreground); font-weight: 600; font-variant-numeric: tabular-nums; }
+.p-options-sort { position: relative; display: flex; align-items: center; gap: 6px; }
+.optimizer .p-options-sort select { width: auto; height: 32px; padding-top: 4px; padding-bottom: 4px; }
+.p-options-toolbar .p-check { margin: 0; }
+.optimizer .p-options-note { margin: 0 0 8px; }
+.p-options { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.p-option { display: grid; gap: 4px; width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); color: var(--foreground); text-align: left; }
+.p-option:hover { border-color: var(--ring); }
+/* The selected row: a 3 px bar in --primary on the left. */
+.p-option[aria-pressed=true] { background: var(--muted-surface); box-shadow: inset 3px 0 0 var(--primary); }
+.p-option-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.p-option-number { color: var(--muted-foreground); font-size: 12px; font-variant-numeric: tabular-nums; }
+.p-option-price { font-size: 16px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.p-option-aside { margin-left: auto; color: var(--muted-foreground); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.p-option-chain { display: inline-flex; flex: 1 1 260px; flex-wrap: wrap; align-items: center; gap: 2px 6px; min-width: 0; }
+.p-chain-step { display: inline-flex; align-items: center; gap: 6px; }
+.p-mode-icon { flex-shrink: 0; color: var(--muted-foreground); }
+.p-chain-hours { color: var(--muted-foreground); font-size: 12px; font-variant-numeric: tabular-nums; }
+.p-option-meta { align-items: center; gap: 6px; color: var(--muted-foreground); font-size: 12px; }
+.p-option-per-hour { margin-right: 4px; font-variant-numeric: tabular-nums; }
+.p-chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border: 1px solid var(--border); border-radius: 5px; background: var(--muted-surface); color: var(--foreground); font-size: 11px; line-height: 18px; }
+.p-chip[data-tone=warn] { border-color: color-mix(in srgb, var(--warning) 25%, transparent); background: var(--warning-bg); color: var(--warning); }
+.p-chip > svg { flex-shrink: 0; }
+.optimizer .p-show-more { display: block; width: 100%; margin-top: 8px; padding: 8px; border: 1px dashed var(--border); border-radius: 8px; background: none; color: var(--foreground); font-weight: 500; }
+.p-show-more:hover { background: var(--muted-surface); }
+.p-over-budget { position: relative; margin-top: 16px; border-top: 1px solid var(--border); }
+.p-over-budget > details > summary { min-height: 44px; padding: 11px 36px 11px 0; cursor: pointer; color: var(--foreground); font-weight: 500; }
+.p-over-budget > .p-tip { position: absolute; top: 10px; right: 0; }
+.p-options-empty { padding: 16px; border-radius: 8px; background: var(--muted-surface); }
+.optimizer .p-options-empty h3 { margin: 0 0 8px; }
+.p-options-empty ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.p-options-empty-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.optimizer .p-options-empty-line p { flex: 1 1 240px; margin: 0; color: var(--foreground); }
+
 /* Tabs (C5, C11) */
 .p-tabs { display: flex; gap: 4px; }
 .p-tab { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 44px; padding: 0 12px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--muted-foreground); font-weight: 500; white-space: nowrap; }
@@ -389,6 +451,7 @@ html { scroll-padding-top: calc(var(--header-h) + var(--tabs-h, 0px) + 8px); scr
 }
 
 @media (max-width: 1099.98px) {
+  .p-options-pane { --chart-h: 300px; }
   .p-container { width: calc(100% - 48px); }
   /* The header keeps the Trip select and the save status (wireframe T1). */
   .p-brand-name { display: none; }
@@ -400,6 +463,8 @@ html { scroll-padding-top: calc(var(--header-h) + var(--tabs-h, 0px) + 8px); scr
   .p-side-panel { padding: 24px; border: 1px solid var(--border); border-radius: 9px; background: var(--card); box-shadow: 0 1px 2px var(--shadow-color); }
 }
 @media (max-width: 599.98px) {
+  .p-options-pane { --chart-h: 260px; }
+  .p-chart-tools { flex-wrap: wrap; }
   :root { --header-h: 48px; }
   .p-container { width: calc(100% - 32px); }
   .p-narrow-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
@@ -428,4 +493,9 @@ html { scroll-padding-top: calc(var(--header-h) + var(--tabs-h, 0px) + 8px); scr
   .p-footer-button > button { flex: 1; }
   .p-tab { padding: 0 8px; }
   .p-side-panel { padding: 16px; }
+  .p-next-list > li > button { flex: 1 1 100%; }
+  .p-options-sort { flex: 1 1 100%; }
+  .optimizer .p-options-sort select { flex: 1; height: 44px; }
+  .p-over-budget > .p-tip { right: 10px; }
+  .p-over-budget > details > summary { padding-right: 48px; }
 }

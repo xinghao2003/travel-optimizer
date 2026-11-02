@@ -210,6 +210,32 @@ export function sortRoutes<T extends Route>(routes: T[], key: string): T[] {
 /** "01", "02", … */
 export const optionNumber = (position: number) => String(position).padStart(2, "0");
 
+/** Hours with one decimal ("218.3"), as the option rows show them. */
+export const hoursText = (hours: number) => formatNumber(hours, 1);
+
+/** A chip on an option row (C6): exceptions only. "warn" chips use the warning colours. */
+export type OptionChip = { text: string; tone: "warn" | "plain" };
+/**
+ * The chips of an option row (C6, E1, E6). `estimatedOnce`: the list says once that every option includes
+ * estimated prices, so the rows leave out that chip. "May exceed budget" is for bounded prices only; an
+ * unbounded option says it once in Next steps (E6).
+ */
+export function optionChips(route: Route, { budget, rates, estimatedOnce, weaker, overBudget, compared }: {
+  budget: number | null; rates: Record<string, number>; estimatedOnce: boolean; weaker: boolean; overBudget: boolean; compared: boolean;
+}): OptionChip[] {
+  const chips: OptionChip[] = [];
+  const unpriced = unpricedSummary(route, rates).chip;
+  if (unpriced) chips.push({ text: unpriced, tone: "warn" });
+  if (!estimatedOnce && route.total_cost_myr !== null && priceEstimated(route)) chips.push({ text: "Includes estimates", tone: "plain" });
+  const high = highest(route);
+  if (!overBudget && budget !== null && high !== null && high > budget) chips.push({ text: "May exceed budget", tone: "warn" });
+  if (route.movements.some(movement => movement.schedule_estimated)) chips.push({ text: "Estimated timetable", tone: "warn" });
+  if (weaker) chips.push({ text: "Weaker", tone: "plain" });
+  if (overBudget) chips.push({ text: "Over budget", tone: "warn" });
+  if (compared) chips.push({ text: "Compared", tone: "plain" });
+  return chips;
+}
+
 /**
  * Compares the selected option with another option, numbered `otherNumber` (E7). Hours use the 0.1 h
  * shown, so the price per extra hour matches the numbers on screen. Unknown totals give no price difference.
@@ -805,6 +831,9 @@ export function needsInputCount(state: RefinementState) {
     + (state.routes.length ? 0 : state.gaps.length);
 }
 
+/** Modes that need transit search (Transitous). */
+export const transitSearchModes: string[] = ["rail", "bus", "coach", "subway", "tram"];
+
 /** Where a next step's button goes. */
 export type NextStepTarget = "airport-changes" | "airport-fallback" | "prices" | "exchange-rate" | "show-unpriced-flights";
 export type NextStep = { id: string; tone: "warn" | "info"; text: string; action: { label: string; target: NextStepTarget } | null };
@@ -858,4 +887,45 @@ export function buildNextSteps(state: RefinementState & {
   if (state.searched && state.excludeUnpricedFlights) steps.push({ id: "unpriced-flights", tone: "info", text: "Options that need a flight without a price are hidden.", action: { label: "Show them", target: "show-unpriced-flights" } });
   if (state.searched && state.transitOff) steps.push({ id: "transit", tone: "info", text: "Trains, buses, coaches, subways and trams were not searched: transit search is not set up on this server.", action: null });
   return steps;
+}
+
+/** Where an Options action goes: a next step's target, the trip settings, the connection form or the Over budget group. */
+export type OptionsTarget = NextStepTarget | "edit-trip" | "add-connection" | "over-budget";
+export type OptionsAction = { label: string; target: OptionsTarget };
+/** The Options panel when it has no best option (C12): a title (only for "no-itinerary") and lines, each with at most one action. */
+export type EmptyState = {
+  id: "not-searched" | "searching" | "searches-left" | "over-budget" | "no-itinerary";
+  title: string | null;
+  lines: { text: string; action: OptionsAction | null }[];
+};
+const editTrip: OptionsAction = { label: "Edit trip", target: "edit-trip" };
+/**
+ * The Options empty state (C12), or null when best options exist. `steps` are the Next steps (buildNextSteps):
+ * the no-itinerary reasons reuse their airport-change and access-time rows. `staySum` is staySumWarning() of
+ * the trip. Without a result there is nothing to explain yet, so a finished search shows nothing until it arrives.
+ */
+export function optionsEmptyState({ searched, active, pending, hasResult, best, refinement, budget, staySum, gaps, excludeUnpricedFlights, steps, placeName }: {
+  searched: boolean; active: boolean; pending: number; hasResult: boolean; best: number;
+  refinement: Pick<Route, "cost_low_myr">[]; budget: number | null; staySum: string | null;
+  gaps: { from_id: string; to_id: string }[]; excludeUnpricedFlights: boolean; steps: NextStep[];
+  placeName: (id: string) => string;
+}): EmptyState | null {
+  if (best > 0) return null;
+  const line = (text: string, action: OptionsAction | null = null) => ({ text, action });
+  if (!searched) return { id: "not-searched", title: null, lines: [line("No options yet. Search transport to find options. They appear while the search runs.")] };
+  if (refinement.length && budget !== null) {
+    const from = moneyShort(Math.min(...refinement.map(route => route.cost_low_myr)));
+    return { id: "over-budget", title: null, lines: [line(`No option fits your ${moneyShort(budget)} budget. ${plural(refinement.length, "option")} ${refinement.length === 1 ? "costs" : "cost"} more, from ${from}.`, { label: "Show over-budget options", target: "over-budget" })] };
+  }
+  if (active) return { id: "searching", title: null, lines: [line("Searching. The first options appear after a few searches.")] };
+  if (pending > 0) return { id: "searches-left", title: null, lines: [line(`No complete itinerary yet. ${plural(pending, "search", "searches")} ${pending === 1 ? "is" : "are"} left.`)] };
+  if (!hasResult) return null;
+  const blocked = steps.filter(step => step.id === "airport-changes" || step.id === "access-time");
+  return { id: "no-itinerary", title: "No itinerary fits these settings", lines: [
+    ...(staySum ? [line(staySum, editTrip)] : []),
+    ...gaps.map(gap => line(`No direct journey found between ${placeName(gap.from_id)} and ${placeName(gap.to_id)}.`, { label: "Add a connection", target: "add-connection" })),
+    ...blocked.map(step => line(step.text, step.action)),
+    ...(excludeUnpricedFlights ? [line("Flights without a price are skipped.", { label: "Show them", target: "show-unpriced-flights" })] : []),
+    line("Or change the trip: fewer minimum hours, more days, more transport or wider departure times.", editTrip),
+  ] };
 }

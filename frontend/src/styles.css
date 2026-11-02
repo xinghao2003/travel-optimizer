@@ -257,8 +257,8 @@ button { cursor: pointer; }
   .leg-search-link { width: 20px; height: 20px; }
 }
 
-:root { --background: #fafafa; --foreground: #18181b; --card: #ffffff; --primary: #18181b; --primary-foreground: #fafafa; --muted-surface: #f4f4f5; --muted-foreground: #71717a; --border: #e4e4e7; --input: #d4d4d8; --ring: #71717a; --warning: #92400e; --warning-bg: #fffbeb; --destructive: #b91c1c; --destructive-bg: #fef2f2; --shadow-color: #00000008; --chart: #2563eb; }
-:root.dark { --background: #09090b; --foreground: #fafafa; --card: #111113; --primary: #fafafa; --primary-foreground: #18181b; --muted-surface: #1c1c20; --muted-foreground: #a1a1aa; --border: #2a2a30; --input: #3f3f46; --ring: #71717a; --warning: #fbbf24; --warning-bg: #292014; --destructive: #f87171; --destructive-bg: #2e171a; --shadow-color: #00000030; --chart: #60a5fa; }
+:root { --background: #fafafa; --foreground: #18181b; --card: #ffffff; --primary: #18181b; --primary-foreground: #fafafa; --muted-surface: #f4f4f5; --muted-foreground: #71717a; --border: #e4e4e7; --input: #d4d4d8; --ring: #71717a; --warning: #92400e; --warning-bg: #fffbeb; --destructive: #b91c1c; --destructive-bg: #fef2f2; --shadow-color: #00000008; --chart: #2563eb; --chart-range: #b45309; --chart-muted: #8a8a93; --chart-selected: #c2410c; }
+:root.dark { --background: #09090b; --foreground: #fafafa; --card: #111113; --primary: #fafafa; --primary-foreground: #18181b; --muted-surface: #1c1c20; --muted-foreground: #a1a1aa; --border: #2a2a30; --input: #3f3f46; --ring: #71717a; --warning: #fbbf24; --warning-bg: #292014; --destructive: #f87171; --destructive-bg: #2e171a; --shadow-color: #00000030; --chart: #60a5fa; --chart-range: #fbbf24; --chart-muted: #71717a; --chart-selected: #fb923c; }
 :root { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--background); color: var(--foreground); }
 body { min-width: 320px; background: var(--background); color: var(--foreground); }
 ::selection { background: var(--primary); color: var(--primary-foreground); }

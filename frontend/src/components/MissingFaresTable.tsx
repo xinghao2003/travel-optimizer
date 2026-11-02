@@ -58,7 +58,7 @@ function AppliedSharedFareRow({ group, staged, onStage }: {
   </tr>;
 }
 
-function FareRow({ group, staged, placeName, offerFor, onStage, onSave, onRemove }: Omit<Props, "groups" | "onApply" | "storageKey"> & { group: MissingFareGroup; staged?: SharedFare; onStage: (fare: SharedFare) => void }) {
+function FareRow({ group, staged, placeName, offerFor, onStage, onSave, onRemove, inputId }: Omit<Props, "groups" | "onApply" | "storageKey"> & { group: MissingFareGroup; staged?: SharedFare; onStage: (fare: SharedFare) => void; inputId?: string }) {
   const first = staged ?? offerFor(group.components[0].component_id);
   const [low, setLow] = useState(first?.low?.toString() ?? "");
   const [high, setHigh] = useState(first?.high?.toString() ?? "");
@@ -85,7 +85,7 @@ function FareRow({ group, staged, placeName, offerFor, onStage, onSave, onRemove
       <td>{group.label}<small>{group.mode}</small></td>
       <td className="p-fare-count">{group.affected_itineraries}</td>
       <td><div className="p-shared-amounts">
-        <input aria-label={`${name} · ${group.label} · ${range ? "minimum" : "fare"}`} type="number" min="0" step="0.01" placeholder={range ? "Minimum" : "Unknown"} value={low} onChange={e => setLow(e.target.value)} />
+        <input id={inputId} aria-label={`${name} · ${group.label} · ${range ? "minimum" : "fare"}`} type="number" min="0" step="0.01" placeholder={range ? "Minimum" : "Unknown"} value={low} onChange={e => setLow(e.target.value)} />
         {range && <><span>–</span><input aria-label={`${name} · ${group.label} · maximum`} type="number" min={low || 0} step="0.01" placeholder="Unbounded" value={high} onChange={e => setHigh(e.target.value)} /></>}
         <label className="p-check"><input type="checkbox" checked={range} onChange={e => setRange(e.target.checked)} />Range</label>
       </div>{group.reason === "exchange_rate" && <small>Add a {group.currency} exchange rate, or enter a converted fare.</small>}
@@ -162,14 +162,14 @@ export function MissingFaresTable(props: Props) {
   const componentCount = props.groups.reduce((sum, group) => sum+group.components.length, 0);
   if (!props.groups.length && !props.appliedGroups.length) return null;
   return <section className="p-panel" aria-labelledby="missing-fares-title">
-    <div className="p-panel-heading"><div><span className="p-step">03</span><h2 id="missing-fares-title">{props.groups.length ? "Refine important missing fares" : "Applied shared estimates"}</h2></div><span className="p-tag">{props.groups.length} missing groups · {componentCount} components · {props.appliedGroups.length} applied groups</span></div>
+    <div className="p-panel-heading"><div><span className="p-step">03</span><h2 id="missing-fares-title" tabIndex={-1}>{props.groups.length ? "Refine important missing fares" : "Applied shared estimates"}</h2></div><span className="p-tag">{props.groups.length} missing groups · {componentCount} components · {props.appliedGroups.length} applied groups</span></div>
     {props.groups.length > 0 && <p>Enter a party fare per transfer or journey and save each row. Saved estimates stay in this browser until you apply them together; saving a row does not rerun optimization.</p>}
     <div className="p-actions"><Button type="button" disabled={busy || !active.length} onClick={() => void apply()}>{busy ? "Applying estimates…" : `Apply saved estimates (${active.length})`}</Button>{active.length > 0 && <Button type="button" variant="ghost" disabled={busy} onClick={() => setPending({})}>Discard saved estimates</Button>}<span className="p-hint">Applies each amount per component and recalculates once.</span></div>
     {error && <p className="p-error" role="alert">{error}</p>}
     {props.groups.length > 0 && <><p className="p-hint">Repeated journeys with the same endpoints, fare type, mode, currency, and missing-fare reason share one row, even across dates. Expand a row to inspect its components; estimates apply separately to every listed component. Future searches may add new unpriced components.</p>
       <div className="p-fares-table-wrap" inert={busy}><table className="p-fares-table"><caption className="sr-only">Missing fares grouped by matching transfer; each amount is a party fare per component.</caption>
         <thead><tr><th scope="col">Transfer / journey</th><th scope="col">Type</th><th scope="col">Alternatives</th><th scope="col">Party fare / range</th><th scope="col">Currency</th><th scope="col">Save</th></tr></thead>
-        <tbody>{props.groups.slice(currentPage*25, (currentPage+1)*25).map(group => <FareRow key={group.key} {...props} group={group} staged={pending[group.key]} onStage={fare => stage(group.key, fare)} offerFor={stagedOffer} onSave={stageIndividual} onRemove={removeIndividual} />)}</tbody>
+        <tbody>{props.groups.slice(currentPage*25, (currentPage+1)*25).map((group, index) => <FareRow key={group.key} {...props} group={group} inputId={index === 0 ? "missing-fare-first" : undefined} staged={pending[group.key]} onStage={fare => stage(group.key, fare)} offerFor={stagedOffer} onSave={stageIndividual} onRemove={removeIndividual} />)}</tbody>
       </table></div>
     </>}
     {props.appliedGroups.length > 0 && <>

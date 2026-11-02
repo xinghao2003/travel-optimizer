@@ -4,10 +4,9 @@ import { Button } from "./ui/button";
 import { InfoTip } from "./InfoTip";
 import { Field, NumberField, PlacePicker } from "./PlannerForms";
 import { PositioningSettings } from "./PositioningSettings";
-import { dateModeText, formatLocal, modeLabel, settingsSummaries, staySumWarning, type FooterState, type SettingsSummary } from "../lib/present";
+import { dateModeText, formatLocal, modeLabel, settingsSummaries, staySumWarning, transitSearchModes, type FooterState, type SettingsSummary } from "../lib/present";
 import { localInputToISO, modes, type Place, type TripDraft, type TripSpec } from "../lib/planner";
 
-const transitModes = ["rail", "bus", "coach", "subway", "tram"];
 const count = (n: number, word: string) => `${n} ${n === 1 ? word : `${word}s`}`;
 /** "2 days", "1.5 days" or "no minimum": the minimum stay of a city in days. */
 const stayDays = (hours: number) => hours > 0 ? count(Number((hours / 24).toFixed(1)), "day") : "no minimum";
@@ -74,7 +73,7 @@ export function TripSettings({ draft, edit, places, errors, transitConfigured, s
   const placeErrors = !isNew;
 
   return <section id="trip-settings" className="p-panel p-settings" aria-labelledby="settings-title">
-    <h2 id="settings-title">Trip settings</h2>
+    <h2 id="settings-title" tabIndex={-1}>Trip settings</h2>
     {searchActive && <p className="p-notice">A search is running. Changing places, dates, adults, transport, departure times, start and end cities or estimated train timetables stops it.</p>}
 
     <div className="p-settings-grid">
@@ -156,7 +155,7 @@ export function TripSettings({ draft, edit, places, errors, transitConfigured, s
         {errors.modes && <p id={modesErrorId} className="p-field-error">{errors.modes}</p>}
       </fieldset>
 
-      {!transitConfigured && draft.modes.some(mode => transitModes.includes(mode)) && <div className="p-notice p-setting-wide">
+      {!transitConfigured && draft.modes.some(mode => transitSearchModes.includes(mode)) && <div className="p-notice p-setting-wide">
         <p>Trains, buses, coaches, subways and trams are not searched: transit search is not set up on this server.</p>
         <InfoTip topic="transit search" align="end">To turn it on, set TRANSITOUS_CONTACT_URL in .env after you agree the routing use with Transitous. Then restart the server.</InfoTip>
       </div>}

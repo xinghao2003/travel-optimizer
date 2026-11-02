@@ -1,6 +1,7 @@
 import { AirportTransferTable } from "./components/AirportTransferTable";
 import { AppHeader } from "./components/AppHeader";
 import { InfoTip } from "./components/InfoTip";
+import { OptionsPanel } from "./components/OptionsPanel";
 import { ErrorBanner } from "./components/ErrorBanner";
 import { StatusStrip } from "./components/StatusStrip";
 import { Tabs, type TabItem } from "./components/Tabs";
@@ -13,16 +14,12 @@ import { FareEditor, Field, RulesEditor } from "./components/PlannerForms";
 import { MissingFaresTable, type AppliedSharedFareGroup } from "./components/MissingFaresTable";
 import { groupMissingFares } from "./lib/missingFares";
 import { storedOfferId, type SharedFare } from "./lib/drafts";
-import { airportChangeRows, appError, assumedConnections, cityGaps, needsInputCount, partySizeNotice, searchDetails, searchState, settingsFooter, splitGroups, transferDirections, unresolvedAccessJourneys, validateDraft, type AirportChangeRow, type AppError } from "./lib/present";
-import { api, blankTrip, cityHourCost, defaultBatchSize, localTime, modes, money, routeCost, type AirportTransferMode, type Job, type Movement, type Offer, type Place, type PricingRule, type Result, type Route, type SavedSummary, type SavedTrip, type TripDraft } from "./lib/planner";
+import { airportChangeRows, appError, assumedConnections, buildNextSteps, cityGaps, needsInputCount, optionNumber, optionsEmptyState, partySizeNotice, routeSignature, searchDetails, searchState, settingsFooter, sortRoutes, splitGroups, staySumWarning, transferDirections, transitSearchModes, unresolvedAccessJourneys, validateDraft, type AirportChangeRow, type AppError, type OptionsTarget } from "./lib/present";
+import { api, blankTrip, defaultBatchSize, localTime, modes, money, routeCost, type AirportTransferMode, type Job, type Movement, type Offer, type Place, type PricingRule, type Result, type Route, type SavedSummary, type SavedTrip, type TripDraft } from "./lib/planner";
 import { useMediaQuery } from "./lib/useMediaQuery";
 import "./planner.css";
 
-const LazyPareto = lazy(() => import("./components/ParetoExplorer").then(m => ({ default: m.ParetoExplorer })));
 const LazyMap = lazy(() => import("./components/PlannerMap").then(m => ({ default: m.PlannerMap })));
-function ParetoExplorer(props: { routes: Route[]; dominated?: Route[]; selected: string | null; onSelect: (id: string) => void }) {
-  return <Suspense fallback={<div className="p-empty">Loading the frontier chart…</div>}><LazyPareto {...props} /></Suspense>;
-}
 function PlannerMap(props: { places: Place[]; route: Route | null }) {
   return <Suspense fallback={<div className="p-empty">Loading the itinerary map…</div>}><LazyMap {...props} /></Suspense>;
 }
@@ -32,6 +29,8 @@ const airportTransferModes: AirportTransferMode[] = modes.filter((mode): mode is
 const pollError: AppError = { text: "Can't get the search status. Retrying…", action: null };
 /** The workspace panels (C5). Wide screens always show the options, and the side panel shows "itinerary" or "missing". */
 type Panel = "options" | "itinerary" | "missing";
+/** Option rows shown at first, and added by each "Show more" (C6). */
+const pageSize = 40;
 
 function AirportConnectionsTable({ tripId, rows: savedRows, onSaved, report }: {
   tripId: string;
@@ -51,6 +50,8 @@ function AirportConnectionsTable({ tripId, rows: savedRows, onSaved, report }: {
   const requirements = savedRows.filter(row => row.required);
   const requiredJourneys = requirements.reduce((sum, item) => sum + item.journey_count, 0);
   const pairKey = (row: Pick<AirportChangeRow, "from_airport" | "to_airport">) => `${row.from_airport}>${row.to_airport}`;
+  // Next steps › Add airport transfer focuses this row's mode.
+  const firstUnresolved = rows.find(row => row.unresolved_journey_count > 0);
   function updateRow(key: string, change: Partial<AirportChangeRow>) {
     setRows(current => current.map(row => pairKey(row) === key ? { ...row, ...change } : row));
   }
@@ -85,7 +86,7 @@ function AirportConnectionsTable({ tripId, rows: savedRows, onSaved, report }: {
       <tbody>{rows.map(row => <tr key={pairKey(row)}>
         <th scope="row"><strong>{row.from_airport} → {row.to_airport}</strong><small>{row.from_name} → {row.to_name}{!row.required && " · saved"}</small></th>
         <td>{row.required ? <>{row.journey_count}<small className={row.unresolved_journey_count > 0 ? "p-warning" : ""}>{row.unresolved_journey_count} unresolved</small></> : "—"}</td>
-        <td><select aria-label={`${row.from_airport} to ${row.to_airport} transfer mode`} value={row.mode} onChange={event => updateRow(pairKey(row), { mode: event.target.value as AirportTransferMode | "" })}><option value="">Choose mode</option>{airportTransferModes.map(mode => <option value={mode} key={mode}>{mode}</option>)}</select></td>
+        <td><select id={row === firstUnresolved ? "airport-change-unresolved" : undefined} aria-label={`${row.from_airport} to ${row.to_airport} transfer mode`} value={row.mode} onChange={event => updateRow(pairKey(row), { mode: event.target.value as AirportTransferMode | "" })}><option value="">Choose mode</option>{airportTransferModes.map(mode => <option value={mode} key={mode}>{mode}</option>)}</select></td>
         <td><input aria-label={`${row.from_airport} to ${row.to_airport} transfer time in minutes`} type="number" min="1" step="1" value={row.duration_minutes ?? ""} onChange={event => updateRow(pairKey(row), { duration_minutes: event.target.value === "" ? null : Number(event.target.value) })} /></td>
         <td><input aria-label={`${row.from_airport} to ${row.to_airport} total party fare`} type="number" min="0" step="0.01" placeholder="Unknown" value={row.fare_amount ?? ""} onChange={event => updateRow(pairKey(row), { fare_amount: event.target.value === "" ? null : Number(event.target.value) })} /></td>
         <td><input aria-label={`${row.from_airport} to ${row.to_airport} fare currency`} maxLength={3} value={row.currency} onChange={event => updateRow(pairKey(row), { currency: event.target.value.toUpperCase() })} /></td>
@@ -135,7 +136,7 @@ function AssumedConnection({ places, gaps, add, report }: { gaps: { from_id: str
     } catch (err) { report(err instanceof Error ? err.message : "Connection could not be saved."); }
     finally { setBusy(false); }
   }
-  return <><div aria-live="polite">{gaps.length > 0 && <><h3>Missing city connections</h3><p>No direct connection was collected in either direction for these cities. If your route needs one, enter a verified schedule or an assumed duration below. Connecting routes or enabled road transport may still provide alternatives.</p>{gaps.map(gap => <Button key={`${gap.from_id}:${gap.to_id}`} type="button" variant="secondary" onClick={() => { setForm(f => ({ ...f, from: gap.from_id, to: gap.to_id })); const panel = document.getElementById("assumed-city-connection") as HTMLDetailsElement | null; if (panel) { panel.open = true; panel.scrollIntoView({ block: "center" }); } }}>Add {places.find(p => p.id === gap.from_id)?.name} → {places.find(p => p.id === gap.to_id)?.name}</Button>)}</>}</div><details id="assumed-city-connection" className="p-details"><summary>Add a connection missing from the providers</summary><p>This explicitly assumes that the connection exists. Flexible connections use the duration; scheduled connections need both timestamps (shown in your browser timezone).</p><div className="p-grid">
+  return <><div aria-live="polite">{gaps.length > 0 && <><h3>Missing city connections</h3><p>No direct connection was collected in either direction for these cities. If your route needs one, enter a verified schedule or an assumed duration below. Connecting routes or enabled road transport may still provide alternatives.</p>{gaps.map(gap => <Button key={`${gap.from_id}:${gap.to_id}`} type="button" variant="secondary" onClick={() => { setForm(f => ({ ...f, from: gap.from_id, to: gap.to_id })); const panel = document.getElementById("assumed-city-connection") as HTMLDetailsElement | null; if (panel) { panel.open = true; panel.scrollIntoView({ block: "center" }); } }}>Add {places.find(p => p.id === gap.from_id)?.name} → {places.find(p => p.id === gap.to_id)?.name}</Button>)}</>}</div><details id="assumed-city-connection" className="p-details"><summary id="add-connection">Add a connection missing from the providers</summary><p>This explicitly assumes that the connection exists. Flexible connections use the duration; scheduled connections need both timestamps (shown in your browser timezone).</p><div className="p-grid">
     {(["from", "to"] as const).map(key => <Field key={key} label={`Assumed connection ${key}`}><select value={form[key]} onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}><option value="">Choose place</option>{places.map(p => <option value={p.id} key={p.id}>{p.name}</option>)}</select></Field>)}
     <Field label="Assumed mode"><select value={form.mode} onChange={e => setForm(f => ({ ...f, mode: e.target.value }))}>{modes.map(m => <option key={m}>{m}</option>)}</select></Field>
     <Field label="Assumed duration · hours"><input type="number" min="0.01" step="any" value={form.hours} onChange={e => setForm(f => ({ ...f, hours: e.target.value }))} /></Field><Field label="Assumed distance · km (optional)"><input type="number" min="0" value={form.distance} onChange={e => setForm(f => ({ ...f, distance: e.target.value }))} /></Field>
@@ -153,7 +154,8 @@ export default function Planner() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [comparisonId, setComparisonId] = useState<string | null>(null);
   const [ranking, setRanking] = useState("cheapest");
-  const [routePage, setRoutePage] = useState(0);
+  // Option rows shown (C6): 40, reset when the sort changes, clamped when the list gets shorter.
+  const [visibleCount, setVisibleCount] = useState(pageSize);
   const [showDominated, setShowDominated] = useState(false);
   // Requests per search batch (G › Search size): memory only, sent as the search request's budget.
   const [batchSize, setBatchSize] = useState(defaultBatchSize);
@@ -174,8 +176,10 @@ export default function Planner() {
   // Panels mount when first shown, then stay mounted while hidden, so typed values survive a tab change.
   const [visited, setVisited] = useState<Panel[]>([]);
   const isWide = useMediaQuery("(min-width: 1100px)");
-  // The id of the element to focus after the next render.
-  const [focusTarget, setFocusTarget] = useState<string | null>(null);
+  // The id of the element to focus after the next render; with a list, the first element that exists.
+  const [focusTarget, setFocusTarget] = useState<string | string[] | null>(null);
+  // A chart click scrolls the selected row into view after the render (E8).
+  const [revealRow, setRevealRow] = useState(0);
   const draftRef = useRef(draft);
   const savedRef = useRef(saved);
   const version = useRef(0);
@@ -332,9 +336,15 @@ export default function Planner() {
 
   useEffect(() => {
     if (!focusTarget) return;
-    document.getElementById(focusTarget)?.focus();
+    const element = (typeof focusTarget === "string" ? [focusTarget] : focusTarget).map(id => document.getElementById(id)).find(item => item !== null);
+    // focus() does nothing inside a closed <details>, so open every one around the element first.
+    for (let group = element?.closest("details"); group; group = group.parentElement?.closest("details")) group.open = true;
+    element?.focus();
     setFocusTarget(null);
   }, [focusTarget]);
+  useEffect(() => {
+    if (revealRow) document.getElementById("selected-option")?.scrollIntoView({ block: "nearest" });
+  }, [revealRow]);
 
   async function act(action: () => Promise<void>, name = "action") {
     setBusyAction(name); setError(null);
@@ -424,14 +434,10 @@ export default function Planner() {
     if (savedRef.current) { const id = savedRef.current.id; accept(await api<SavedTrip>(`/trips/${id}`)); acceptResult(await api<Result>(`/trips/${id}/optimize`, "POST"), id); }
   }
 
-  const routes = useMemo(() => {
-    const items = [...(result?.routes ?? []), ...(showDominated ? result?.dominated_routes ?? [] : [])];
-    const finite = items.filter(r => r.total_cost_myr !== null);
-    const costs = finite.map(r => r.total_cost_myr as number), stays = finite.map(r => r.stay_hours);
-    const minCost = Math.min(...costs), maxCost = Math.max(...costs), minStay = Math.min(...stays), maxStay = Math.max(...stays);
-    const score = (r: Route) => r.total_cost_myr === null ? Infinity : (maxCost > minCost ? (r.total_cost_myr - minCost) / (maxCost - minCost) : 0) + (maxStay > minStay ? (maxStay - r.stay_hours) / (maxStay - minStay) : 0);
-    return items.sort((a, b) => ranking === "stay" ? b.stay_hours - a.stay_hours || a.cost_low_myr - b.cost_low_myr : ranking === "balanced" ? score(a) - score(b) || a.cost_low_myr - b.cost_low_myr : Number(a.provisional) - Number(b.provisional) || a.cost_low_myr - b.cost_low_myr || b.stay_hours - a.stay_hours);
-  }, [result, ranking, showDominated]);
+  // The option list in the current order (E3), with weaker options when shown. Numbers are positions in this order.
+  const displayRoutes = useMemo(() => sortRoutes([...(result?.routes ?? []), ...(showDominated ? result?.dominated_routes ?? [] : [])], ranking), [result, ranking, showDominated]);
+  const numbers = useMemo(() => new Map(displayRoutes.map((route, index) => [route.id, index + 1])), [displayRoutes]);
+  const refinement = useMemo(() => sortRoutes(result?.refinement_routes ?? [], ranking), [result, ranking]);
   useEffect(() => {
     if (!busy && result?.dominated_routes === undefined) setShowDominated(false);
   }, [result, busy]);
@@ -448,9 +454,36 @@ export default function Planner() {
   const assumed = useMemo(() => saved ? assumedConnections(saved) : [], [saved]);
   const gaps = useMemo(() => saved ? cityGaps(saved) : [], [saved]);
   const airportChanges = useMemo(() => saved ? airportChangeRows(saved, result?.coverage) : [], [saved, result?.coverage]);
-  useEffect(() => { setRoutePage(p => Math.min(p, Math.max(0, Math.ceil(routes.length / 40) - 1))); }, [routes.length]);
-  const selected = routes.find(r => r.id === selectedId) ?? result?.refinement_routes?.find(r => r.id === selectedId) ?? routes[0] ?? null;
-  const compare = routes.find(r => r.id === comparisonId) ?? null;
+  useEffect(() => { setVisibleCount(count => Math.max(pageSize, Math.min(count, displayRoutes.length))); }, [displayRoutes.length]);
+  const selected = displayRoutes.find(r => r.id === selectedId) ?? refinement.find(r => r.id === selectedId) ?? displayRoutes[0] ?? null;
+  const compare = displayRoutes.find(r => r.id === comparisonId) ?? null;
+  // E8: route ids change when airport transfer prices change. When the selected or compared option is gone after a new
+  // result, the option with the same signature takes its place; otherwise the selection falls back and the status says so.
+  type Remembered = { id: string; signature: string; name: string } | null;
+  const lastSelected = useRef<Remembered>(null), lastCompared = useRef<Remembered>(null);
+  const remember = (route: Route | null): Remembered => route && {
+    id: route.id, signature: routeSignature(route),
+    name: numbers.has(route.id) ? `Option ${optionNumber(numbers.get(route.id)!)}` : `Over-budget option ${optionNumber(refinement.indexOf(route) + 1)}`,
+  };
+  useEffect(() => {
+    const shown = [...displayRoutes, ...refinement];
+    const lost: string[] = [];
+    const follow = (id: string | null, last: Remembered, set: (id: string | null) => void) => {
+      if (!id || shown.some(route => route.id === id)) return;
+      const match = last?.id === id ? shown.find(route => routeSignature(route) === last.signature) : undefined;
+      set(match?.id ?? null);
+      if (!match && last?.id === id) lost.push(`${last.name} is no longer shown`);
+    };
+    follow(selectedId, lastSelected.current, setSelectedId);
+    follow(comparisonId, lastCompared.current, setComparisonId);
+    if (lost.length) setSaveStatus(current => [current, ...lost].join(" · "));
+    // Runs when the options change; the ids are read from this render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [displayRoutes, refinement]);
+  // After the effect above, so it still sees the options from before a new result.
+  useEffect(() => { lastSelected.current = remember(selected); lastCompared.current = remember(compare); },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [selected, compare, numbers, refinement]);
   const active = !!job && ["running", "queued"].includes(job.status);
   const allOffers = [...(saved?.snapshot?.offers ?? []), ...(saved?.offers ?? [])];
   const newestOffers = [...allOffers].reverse();
@@ -515,11 +548,20 @@ export default function Planner() {
   const directions = useMemo(() => saved ? transferDirections(saved.airport_transfer_rows ?? [],
     [...(result?.routes ?? []), ...(result?.dominated_routes ?? []), ...(result?.refinement_routes ?? [])], saved.spec.adults, saved.spec.exchange_rates) : [], [saved, result]);
   // Missing info (C8, F2): items that need input, for the tab badge and the panel status.
-  const needs = needsInputCount({ routes: result?.routes ?? [], airportChanges, unresolvedAccess, directions, groups: splitGroups(missingFareGroups, saved?.airport_transfer_rows ?? []), gaps });
+  const groups = useMemo(() => splitGroups(missingFareGroups, saved?.airport_transfer_rows ?? []), [missingFareGroups, saved?.airport_transfer_rows]);
+  const needs = needsInputCount({ routes: result?.routes ?? [], airportChanges, unresolvedAccess, directions, groups, gaps });
   const needsText = `${needs} ${needs === 1 ? "item needs" : "items need"} input`;
   const searched = !!saved?.snapshot || !!job;
   // "Nothing missing" needs search data: until the first search stores some, there is nothing to check yet.
   const allClear = !!saved?.snapshot && !needs;
+  // The options were calculated with the saved trip's budget and exchange rates.
+  const budget = saved?.spec.budget_myr ?? null;
+  const rates = saved?.spec.exchange_rates ?? {};
+  // Next steps (F1). "Show them" and the transit row follow the trip settings as typed.
+  const nextSteps = buildNextSteps({ routes: result?.routes ?? [], airportChanges, unresolvedAccess, directions, groups, gaps, searched, budget, rates,
+    excludeUnpricedFlights: !!draft.exclude_unpriced_flights, transitOff: !transitConfigured && draft.modes.some(mode => transitSearchModes.includes(mode)) });
+  const emptyState = optionsEmptyState({ searched, active, pending: job?.pending ?? 0, hasResult: !!result, best: result?.routes.length ?? 0, refinement, budget,
+    staySum: staySumWarning(draft), gaps, excludeUnpricedFlights: !!draft.exclude_unpriced_flights, steps: nextSteps, placeName });
 
   // C3.1 row 2 ("Updating options…") is for a save in progress. After a refused save nothing runs until the next
   // edit or Retry save, so the strip shows the search state; the header ("Not saved") and the banner report it (C13).
@@ -557,6 +599,12 @@ export default function Planner() {
   // Selecting an option shows its itinerary (C5, E8): beside the options on a wide screen; on a narrow screen a row opens the Itinerary tab.
   function selectOption(id: string, source: "row" | "chart") {
     setSelectedId(id);
+    // A chart click shows the option's row, also beyond the rows shown so far (C6, E8); focus stays on the chart.
+    if (source === "chart") {
+      const index = displayRoutes.findIndex(route => route.id === id);
+      if (index >= visibleCount) setVisibleCount(Math.ceil((index + 1) / pageSize) * pageSize);
+      setRevealRow(count => count + 1);
+    }
     if (isWide) chooseTab("itinerary");
     else if (source === "row") { chooseTab("itinerary"); setFocusTarget("itinerary-title"); }
   }
@@ -564,6 +612,37 @@ export default function Planner() {
   function backToOptions() {
     chooseTab("options");
     setFocusTarget(document.getElementById("selected-option") ? "selected-option" : "options-title");
+  }
+  // Show weaker options (E4): the first time, the saved trip is recalculated with them; it turns off again on failure.
+  function toggleDominated(show: boolean) {
+    if (!show) { setShowDominated(false); return; }
+    if (result?.dominated_routes !== undefined) { setShowDominated(true); return; }
+    setShowDominated(true);
+    void act(async () => {
+      try {
+        const record = await saveSpec();
+        const updated = await api<Result>(`/trips/${record.id}/optimize`, "POST", { include_dominated: true });
+        accept(await api<SavedTrip>(`/trips/${record.id}`)); acceptResult(updated, record.id);
+        setSaveStatus("Weaker options loaded");
+      } catch (err) { setShowDominated(false); throw err; }
+    }, "weaker");
+  }
+  // The buttons of Next steps and of the empty states. Missing info targets fall back to its heading while
+  // their section has no such field.
+  function runAction(target: OptionsTarget) {
+    const showMissing = (ids: string[]) => { chooseTab("missing"); setFocusTarget([...ids, "missing-title"]); };
+    if (target === "airport-changes") showMissing(["airport-change-unresolved"]);
+    else if (target === "prices") {
+      // Airport transfers first (F3): one price there covers every matching journey.
+      const direction = directions.find(item => item.state === "missing");
+      showMissing([...(direction ? [`transfer-price-${direction.from_id}>${direction.to_id}`] : []), "missing-fare-first"]);
+    }
+    else if (target === "exchange-rate") showMissing(["missing-fares-title"]);
+    else if (target === "add-connection") showMissing(["add-connection"]);
+    else if (target === "airport-fallback") { setSettingsOpen(true); setFocusTarget("setting-airport-fallback"); }
+    else if (target === "edit-trip") { setSettingsOpen(true); setFocusTarget("settings-title"); }
+    else if (target === "over-budget") setFocusTarget("over-budget-summary");
+    else edit({ ...draft, exclude_unpriced_flights: false });
   }
   const best = result?.routes.length ?? 0;
   const optionsTab: TabItem<Panel> = { id: "options", label: "Options", ...(searched && result ? { badge: best, badgeText: `${best} best option${best === 1 ? "" : "s"}` } : {}) };
@@ -597,37 +676,18 @@ export default function Planner() {
     {saved && <div id="workspace" className="p-workspace" aria-busy={strip.id === "updating" || undefined}>
       {!isWide && <Tabs id="workspace-tabs" className="p-tabs p-tabs-bar" label="Workspace" tabs={[optionsTab, itineraryTab, missingTab]} selected={tab} onSelect={chooseTab} />}
       <section id="panel-options" className="p-panel p-options-pane" role={isWide ? undefined : "tabpanel"} aria-labelledby={isWide ? "options-title" : "tab-options"} tabIndex={isWide ? undefined : 0} hidden={!shown.includes("options")}>
-        <div className="p-panel-heading"><h2 id="options-title" tabIndex={-1}>Options</h2>{searched && result && <span className="p-tag">{result.routes.length} frontier alternatives{showDominated && result.dominated_routes ? ` + ${result.dominated_routes.length} dominated` : ""}</span>}</div>
-        {visited.includes("options") && (!searched ? <p className="p-empty">No options yet. Search transport to find options. They appear while the search runs.</p> : result && <>
-          <p className="p-hint">Circles: priced offers. Diamonds: estimates. Horizontal bands: fare ranges; their selection marker is the midpoint, not an expected price. Unknown totals stay in the list below. Optimality covers retrieved options and stated assumptions.</p>
-          <p className="p-hint">{result.feasible_count.toLocaleString()} completed histories evaluated. The frontier keeps cost/city-time tradeoffs under your fare and budget settings. Other histories are hidden by default; source schedules and fares remain saved.</p>
-          <div className="p-inline"><label className="p-check"><input type="checkbox" checked={showDominated} disabled={busy} onChange={e => {
-            if (!e.target.checked) { setShowDominated(false); return; }
-            if (result.dominated_routes !== undefined) { setShowDominated(true); return; }
-            setShowDominated(true);
-            void act(async () => {
-              try {
-                const record = await saveSpec();
-                const updated = await api<Result>(`/trips/${record.id}/optimize`, "POST", { include_dominated: true });
-                accept(await api<SavedTrip>(`/trips/${record.id}`)); acceptResult(updated, record.id);
-                setSaveStatus("Weaker options loaded");
-              } catch (err) { setShowDominated(false); throw err; }
-            }, "weaker");
-          }} />Show dominated alternatives</label>{busyAction === "weaker" && <span className="p-hint">Calculating…</span>}</div>
-          <p className="p-hint">Grey points are other completed alternatives from this search, usually below/right of the frontier. First loading them recalculates saved data without provider requests. Earlier pruning may have removed other histories.</p>
-          <ParetoExplorer routes={result.routes} dominated={showDominated ? result.dominated_routes : undefined} selected={selected?.id ?? null} onSelect={id => selectOption(id, "chart")} />
-          <div className="p-inline p-route-sort"><Field label={showDominated ? "Order displayed alternatives" : "Order frontier alternatives"}><select value={ranking} onChange={e => setRanking(e.target.value)}><option value="cheapest">Lowest known total</option><option value="stay">Most city-stay hours</option><option value="balanced">Balanced · equal cost/time weights</option></select></Field><small>Ordering does not change frontier membership.</small></div>
-          {!routes.length && <div className="p-empty">No feasible itinerary has been found in the collected data. {job?.pending ? "Continue discovery or add a missing connection." : "Check coverage, dates, minimum stays, and transport assumptions."}</div>}
-          {!routes.length && !!result.refinement_routes?.length && <details className="p-details"><summary>Review an over-budget candidate to add a ticket quote</summary><p>These are up to ten fare-refinement examples, outside your current budget. They are not plotted as feasible frontier options.</p>{result.refinement_routes.map(r => <Button key={r.id} type="button" size="sm" variant="secondary" onClick={() => selectOption(r.id, "row")}>{routeCost(r)} · {r.stay_hours.toFixed(1)} city hours</Button>)}</details>}
-          <div className="p-route-grid">{routes.slice(Math.min(routePage, Math.max(0, Math.ceil(routes.length / 40) - 1)) * 40, (Math.min(routePage, Math.max(0, Math.ceil(routes.length / 40) - 1)) + 1) * 40).map((r, i) => <button type="button" key={r.id} id={selected?.id === r.id ? "selected-option" : undefined} className={`p-route-card ${selected?.id === r.id ? "selected" : ""}`} aria-pressed={selected?.id === r.id} onClick={() => selectOption(r.id, "row")}><span className="p-route-number">{String(i + Math.min(routePage, Math.max(0, Math.ceil(routes.length / 40) - 1)) * 40 + 1).padStart(2, "0")}</span><div><strong>{routeCost(r)}</strong><span>{r.stay_hours.toFixed(1)} city hours · {r.travel_hours.toFixed(1)} h travel · <span title="Total party fare divided by city-stay hours">{cityHourCost(r)}</span></span><small>{placeName(r.departure_gateway)} outward · {placeName(r.arrival_gateway)} return</small><small>{r.movements.map(m => m.mode).join(" → ")}</small>{r.movements.some(m => m.schedule_estimated) && <small className="p-warning">Estimated rail timetable</small>}</div><span className={`p-tag ${r.provisional ? "uncertain" : ""}`}>{result.dominated_routes?.some(other => other.id === r.id) ? "Dominated" : r.provisional ? "Provisional" : r.estimated ? "Includes estimates" : "Priced"}</span>{r.budget_status === "uncertain" && <small className="p-warning">Budget compliance uncertain</small>}</button>)}</div>
-          {routes.length > 40 && <div className="p-actions"><Button type="button" size="sm" variant="secondary" disabled={routePage === 0} onClick={() => setRoutePage(p => Math.max(0, p - 1))}>Previous alternatives</Button><span>Page {Math.min(routePage + 1, Math.ceil(routes.length / 40))} / {Math.ceil(routes.length / 40)}</span><Button type="button" size="sm" variant="secondary" disabled={(routePage + 1) * 40 >= routes.length} onClick={() => setRoutePage(p => p + 1)}>Next alternatives</Button></div>}
-          {selected && routes.length > 1 && <div className="p-comparison"><Field label="Compare selected itinerary with"><select value={comparisonId ?? ""} onChange={e => setComparisonId(e.target.value || null)}><option value="">Choose another alternative</option>{routes.filter(r => r.id !== selected.id).map(r => <option value={r.id} key={r.id}>{routeCost(r)} · {r.stay_hours.toFixed(1)} city hours</option>)}</select></Field>{compare && compare.id !== selected.id && <p>Selected itinerary: <strong>{(selected.stay_hours - compare.stay_hours).toFixed(1)} additional city hours</strong>{selected.total_cost_myr !== null && compare.total_cost_myr !== null && <> for <strong>{money(selected.total_cost_myr - compare.total_cost_myr)} additional cost</strong>{selected.stay_hours > compare.stay_hours && ` · ${money((selected.total_cost_myr - compare.total_cost_myr) / (selected.stay_hours - compare.stay_hours))} per additional hour`}</>}{(selected.provisional || compare.provisional) && " · resolve fare ranges to compare an exact additional cost"}.</p>}</div>}
-        </>)}
+        {visited.includes("options") && <OptionsPanel result={result} displayRoutes={displayRoutes} numbers={numbers} refinement={refinement}
+          selectedId={selected?.id ?? null} comparedId={compare?.id ?? null}
+          ranking={ranking} onRanking={value => { setRanking(value); setVisibleCount(pageSize); }}
+          showDominated={showDominated} onToggleDominated={toggleDominated} loadingWeaker={busyAction === "weaker"} busy={busy}
+          visibleCount={visibleCount} onShowMore={() => setVisibleCount(count => count + pageSize)} onSelect={selectOption}
+          nextSteps={nextSteps} emptyState={emptyState} onAction={runAction} budget={budget} adults={saved.spec.adults} rates={rates} placeName={placeName} />}
       </section>
       <div id="side-panel" className="p-side">
         {isWide && <Tabs className="p-tabs p-tabs-side" label="Workspace" tabs={[itineraryTab, missingTab]} selected={tab} onSelect={chooseTab} />}
         <div id="panel-itinerary" className="p-side-panel" role="tabpanel" aria-labelledby="tab-itinerary" tabIndex={0} hidden={tab !== "itinerary"}>{visited.includes("itinerary") && <>
           {!isWide && searched && selected && <Button type="button" variant="ghost" size="sm" className="p-back" onClick={backToOptions}><ArrowLeft size={15} aria-hidden="true" /><span className="sr-only">Back to </span>Options</Button>}
+          {selected && displayRoutes.length > 1 && <div className="p-comparison"><Field label="Compare selected itinerary with"><select value={comparisonId ?? ""} onChange={e => setComparisonId(e.target.value || null)}><option value="">Choose another alternative</option>{displayRoutes.filter(r => r.id !== selected.id).map(r => <option value={r.id} key={r.id}>{routeCost(r)} · {r.stay_hours.toFixed(1)} city hours</option>)}</select></Field>{compare && compare.id !== selected.id && <p>Selected itinerary: <strong>{(selected.stay_hours - compare.stay_hours).toFixed(1)} additional city hours</strong>{selected.total_cost_myr !== null && compare.total_cost_myr !== null && <> for <strong>{money(selected.total_cost_myr - compare.total_cost_myr)} additional cost</strong>{selected.stay_hours > compare.stay_hours && ` · ${money((selected.total_cost_myr - compare.total_cost_myr) / (selected.stay_hours - compare.stay_hours))} per additional hour`}</>}{(selected.provisional || compare.provisional) && " · resolve fare ranges to compare an exact additional cost"}.</p>}</div>}
           {!searched ? <p className="p-empty">Options appear here after a search.</p> : !selected ? <p className="p-empty">No option to show.</p> : <section className="p-panel" aria-labelledby="itinerary-title"><div className="p-panel-heading"><div><span className="p-step">05</span><h2 id="itinerary-title" tabIndex={-1}>Itinerary details</h2>{selected.budget_status === "over" && <span className="p-tag uncertain">Outside budget · fare refinement only</span>}</div><strong>{routeCost(selected)}</strong></div><div className="p-detail-layout"><div><PlannerMap places={places} route={selected} /><p className="p-hint">City reference points and schematic connections; lines do not show road or track geometry.</p></div><div className="p-timeline"><h3>Time in each required city</h3>{selected.stays.map((s, i) => <div key={`${s.place_id}:${i}`}><span className="p-timeline-dot" /><strong>{placeName(s.place_id)} <span>{s.hours.toFixed(1)} h</span></strong><small>{localTime(s.arrival, byId.get(s.place_id)?.timezone ?? "UTC")}<ArrowRight size={13} />{localTime(s.departure, byId.get(s.place_id)?.timezone ?? "UTC")}</small><progress max={selected.stay_hours || 1} value={s.hours} /></div>)}<p className="p-hint">City-stay hours include nights, exclude all transportation and terminal overhead, and do not count time at home or other positioning cities.</p></div></div>
             <div className="p-leg-details">{selected.movements.map((m, i) => <details key={`${m.id}:${i}`} open={i === 0}><summary><span className="p-leg-index">{i + 1}</span><strong>{placeName(m.from_id)} → {placeName(m.to_id)}</strong><span className="p-tag">{m.mode}{m.vehicle_kind ? ` · ${m.vehicle_kind}` : ""}</span><span>{(m.duration_minutes / 60).toFixed(1)} h</span></summary><div className="p-leg-content"><p>{localTime(m.departure, byId.get(m.from_id)?.timezone ?? "UTC", "Flexible departure")} → {localTime(m.arrival, byId.get(m.to_id)?.timezone ?? "UTC", "Flexible departure")}<br /><small>{m.source} · {m.transfers} transfers{m.distance_km !== null ? ` · ${m.distance_km.toFixed(1)} km` : ""}</small></p>{m.assumptions.map(a => <p className="p-notice" key={a}>{a}</p>)}
               {m.schedule_estimated && <p className="p-notice">Estimated rail timetable{m.schedule_reference_date ? ` · based on ${m.schedule_reference_date}` : " · provider extended calendar"}. Verify the actual travel date before booking.</p>}

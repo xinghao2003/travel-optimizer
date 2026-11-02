@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { loadTs } from "./loadTs.mjs";
 const {
   airportChangeRows, appError, assumedConnections, assumptionNotes, buildNextSteps, bundleStatusLabel, cityGaps, compareText, dateModeText, dateRange, formatDuration,
-  formatLocal, matchingQuoteLinks, modeLabel, moneyShort, needsInputCount, partySizeNotice, perCityHourText, priceEstimated, priceText, routeChain, routeSignature,
+  formatLocal, hoursText, matchingQuoteLinks, modeLabel, moneyShort, needsInputCount, optionChips, optionsEmptyState, partySizeNotice, perCityHourText, priceEstimated, priceText, routeChain, routeSignature,
   searchDetails, searchState, settingsFooter, settingsSummaries, sortRoutes, sourceLabel, splitGroups, stepLabel, staySumWarning, transferDirections, tripSummary,
   unpricedSummary, unresolvedAccessJourneys, validateDraft,
 } = await loadTs("../src/lib/present.ts");
@@ -167,6 +167,60 @@ test("options sort by highest possible price, by time in cities or by balance, w
   assert.equal(order("stay"), "gedcbaf");
   assert.equal(order("balanced"), "cagbfed");
   assert.equal(routes.map(route => route.id).join(""), "abcdefg");
+});
+
+test("option rows show only the exceptions as chips", () => {
+  const context = { budget: 6000, rates: { MYR: 1 }, estimatedOnce: false, weaker: false, overBudget: false, compared: false };
+  const chips = (route, extra = {}) => optionChips(route, { ...context, ...extra }).map(chip => `${chip.tone}:${chip.text}`);
+  const estimated = exact("e", 5395, 218, { purchases: [fare("f1", 5395, 5395, { source: "rule" })] });
+  assert.deepEqual(chips(estimated), ["plain:Includes estimates"]);
+  // Said once above the list instead.
+  assert.deepEqual(chips(estimated, { estimatedOnce: true }), []);
+  // A range above the budget may exceed it; an unbounded option says so once, in Next steps (E6).
+  assert.deepEqual(chips(range("r", 5900, 6200, 220)), ["warn:May exceed budget"]);
+  assert.deepEqual(chips(range("r", 5900, 6200, 220), { budget: null }), []);
+  const unbounded = partial("p", 7000, 220);
+  unbounded.movements = [flightTo("f1", "KUL", "PUS", { schedule_estimated: true })];
+  unbounded.purchases = [noFare("f1"), noFare("f1:access", "Airport access")];
+  assert.deepEqual(chips(unbounded, { weaker: true, compared: true }), ["warn:2 not priced", "warn:Estimated timetable", "plain:Weaker", "plain:Compared"]);
+  // Over-budget rows carry their own chip, not "May exceed budget".
+  assert.deepEqual(chips(exact("o", 7000, 220), { overBudget: true }), ["warn:Over budget"]);
+  assert.equal(hoursText(218.25), "218.3");
+  assert.equal(hoursText(31.6), "31.6");
+});
+
+test("the options empty state follows the search and explains why nothing fits", () => {
+  const names = { PUS: "Busan", HND: "Tokyo" };
+  const base = { searched: true, active: false, pending: 0, hasResult: true, best: 0, refinement: [], budget: 12000, staySum: null, gaps: [], excludeUnpricedFlights: false, steps: [], placeName: id => names[id] ?? id };
+  const state = (extra = {}) => optionsEmptyState({ ...base, ...extra });
+  const lines = value => value && value.lines.map(line => [plain(line.text), line.action?.target ?? null]);
+  assert.equal(state({ best: 3 }), null);
+  assert.deepEqual(lines(state({ searched: false })), [["No options yet. Search transport to find options. They appear while the search runs.", null]]);
+  assert.deepEqual(lines(state({ active: true, pending: 85 })), [["Searching. The first options appear after a few searches.", null]]);
+  assert.deepEqual(lines(state({ pending: 41 })), [["No complete itinerary yet. 41 searches are left.", null]]);
+  assert.deepEqual(lines(state({ pending: 1 })), [["No complete itinerary yet. 1 search is left.", null]]);
+  // Over-budget options explain the empty list, also while the search runs.
+  assert.deepEqual(lines(state({ active: true, refinement: [{ cost_low_myr: 13200 }, { cost_low_myr: 14100 }] })), [["No option fits your RM 12,000 budget. 2 options cost more, from RM 13,200.", "over-budget"]]);
+  // A finished search before its result arrives has nothing to explain yet.
+  assert.equal(state({ hasResult: false }), null);
+
+  const steps = [
+    { id: "airport-changes", tone: "warn", text: "1 flight journey can't be used until you add the transfer from GMP to ICN airport.", action: { label: "Add airport transfer", target: "airport-changes" } },
+    { id: "prices", tone: "warn", text: "No option has a complete price yet.", action: { label: "Add prices", target: "prices" } },
+    { id: "access-time", tone: "warn", text: "2 journeys can't be used: the airport transfer time is unknown in Busan.", action: { label: "Set default time", target: "airport-fallback" } },
+  ];
+  const none = state({ staySum: "Minimum stays add up to 240 h, but these dates allow at most 216 h.", gaps: [{ from_id: "PUS", to_id: "HND" }], excludeUnpricedFlights: true, steps });
+  assert.equal(none.id, "no-itinerary");
+  assert.equal(none.title, "No itinerary fits these settings");
+  assert.deepEqual(lines(none), [
+    ["Minimum stays add up to 240 h, but these dates allow at most 216 h.", "edit-trip"],
+    ["No direct journey found between Busan and Tokyo.", "add-connection"],
+    ["1 flight journey can't be used until you add the transfer from GMP to ICN airport.", "airport-changes"],
+    ["2 journeys can't be used: the airport transfer time is unknown in Busan.", "airport-fallback"],
+    ["Flights without a price are skipped.", "show-unpriced-flights"],
+    ["Or change the trip: fewer minimum hours, more days, more transport or wider departure times.", "edit-trip"],
+  ]);
+  assert.deepEqual(lines(state()), [["Or change the trip: fewer minimum hours, more days, more transport or wider departure times.", "edit-trip"]]);
 });
 
 test("comparisons state the differences in time and price, or that the price difference is unknown", () => {

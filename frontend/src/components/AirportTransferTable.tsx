@@ -1,14 +1,14 @@
 import { useState } from "react";
 import { Button } from "./ui/button";
 import { modes, type AirportTransferEstimate, type AirportTransferMode, type SavedTrip } from "../lib/planner";
+import { transferKey, type TransferRowDraft as Draft } from "../lib/drafts";
 
-type Draft = { mode: AirportTransferMode; low: string; high: string; duration: string; currency: string };
 export function AirportTransferTable({ trip, save, report }: { trip: SavedTrip; save: (estimates: AirportTransferEstimate[]) => Promise<void>; report: (message: string) => void }) {
   const [drafts, setDrafts] = useState<Record<string, Draft[]>>({});
   const [busy, setBusy] = useState(false);
   const rows = trip.airport_transfer_rows ?? [];
   const adults = trip.spec.adults;
-  const keyFor = (from: string, to: string) => JSON.stringify([from, to, adults]);
+  const keyFor = (from: string, to: string) => transferKey(from, to, adults);
   const blank = (mode: AirportTransferMode = "taxi"): Draft => ({ mode, low: "", high: "", duration: "", currency: "MYR" });
   const values = (from: string, to: string): Draft[] => {
     const saved = trip.airport_transfer_estimates?.filter(e => e.from_id === from && e.to_id === to && e.adults === adults) ?? [];

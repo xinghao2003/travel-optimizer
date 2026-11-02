@@ -5,9 +5,11 @@ import { Compass, LoaderCircle, Play, Plus, Save, Square, ArrowRight, RefreshCw,
 import { Button } from "./components/ui/button";
 import { AdvancedSettings, FareEditor, Field, NumberField, PlaceChips, PlacePicker, RulesEditor } from "./components/PlannerForms";
 import { PositioningSettings } from "./components/PositioningSettings";
-import { MissingFaresTable, type AppliedSharedFareGroup, type SharedFare } from "./components/MissingFaresTable";
+import { MissingFaresTable, type AppliedSharedFareGroup } from "./components/MissingFaresTable";
 import { groupMissingFares } from "./lib/missingFares";
-import { api, blankTrip, cityHourCost, localTime, modes, money, routeCost, type AirportConnection, type AirportConnectionRequirement, type AirportTransferMode, type Job, type Movement, type Offer, type Place, type PricingRule, type Result, type Route, type SavedSummary, type SavedTrip, type TripDraft, type TripSpec } from "./lib/planner";
+import { storedOfferId, type SharedFare } from "./lib/drafts";
+import { airportChangeRows, assumedConnections, cityGaps, unresolvedAccessJourneys, type AirportChangeRow } from "./lib/present";
+import { api, blankTrip, cityHourCost, defaultBatchSize, localTime, modes, money, routeCost, type AirportTransferMode, type Job, type Movement, type Offer, type Place, type PricingRule, type Result, type Route, type SavedSummary, type SavedTrip, type TripDraft, type TripSpec } from "./lib/planner";
 import "./planner.css";
 
 const LazyPareto = lazy(() => import("./components/ParetoExplorer").then(m => ({ default: m.ParetoExplorer })));
@@ -19,67 +21,30 @@ function PlannerMap(props: { places: Place[]; route: Route | null }) {
   return <Suspense fallback={<div className="p-empty">Loading the itinerary map…</div>}><LazyMap {...props} /></Suspense>;
 }
 
-type AirportConnectionDraft = {
-  from_airport: string;
-  to_airport: string;
-  from_name: string;
-  to_name: string;
-  journey_count: number;
-  unresolved_journey_count: number;
-  required: boolean;
-  mode: AirportTransferMode | "";
-  duration_minutes: number | null;
-  fare_amount: number | null;
-  currency: string;
-};
-
 const airportTransferModes: AirportTransferMode[] = modes.filter((mode): mode is AirportTransferMode => mode !== "flight");
-const noAirportConnectionRequirements: AirportConnectionRequirement[] = [];
-const noAirportConnections: AirportConnection[] = [];
 
-function airportConnectionRows(requirements: AirportConnectionRequirement[], connections: AirportConnection[]): AirportConnectionDraft[] {
-  const requiredByPair = new Map(requirements.map(item => [`${item.from_airport}>${item.to_airport}`, item]));
-  const connectionByPair = new Map(connections.map(item => [`${item.from_airport}>${item.to_airport}`, item]));
-  const keys = [...new Set([...requiredByPair.keys(), ...connectionByPair.keys()])].sort();
-  return keys.map(key => {
-    const requirement = requiredByPair.get(key);
-    const connection = connectionByPair.get(key);
-    const [from_airport, to_airport] = key.split(">");
-    return {
-      from_airport, to_airport,
-      from_name: requirement?.from_name ?? from_airport,
-      to_name: requirement?.to_name ?? to_airport,
-      journey_count: requirement?.journey_count ?? 0,
-      unresolved_journey_count: requirement?.unresolved_journey_count ?? 0,
-      required: !!requirement,
-      mode: connection?.mode ?? "",
-      duration_minutes: connection?.duration_minutes ?? null,
-      fare_amount: connection?.fare_amount ?? null,
-      currency: connection?.currency ?? "MYR",
-    };
-  });
-}
-
-function AirportConnectionsTable({ tripId, requirements, connections, onSaved, report }: {
+function AirportConnectionsTable({ tripId, rows: savedRows, onSaved, report }: {
   tripId: string;
-  requirements: AirportConnectionRequirement[];
-  connections: AirportConnection[];
+  rows: AirportChangeRow[];
   onSaved: (record: SavedTrip, result: Result) => void;
   report: (message: string) => void;
 }) {
-  const requirementSignature = JSON.stringify(requirements);
-  const connectionSignature = JSON.stringify(connections);
-  const [rows, setRows] = useState<AirportConnectionDraft[]>(() => airportConnectionRows(requirements, connections));
+  // Typed rows reset only when the trip or the server's pairs change. Polling and
+  // autosave replace the records with new objects that hold the same rows.
+  const signature = JSON.stringify(savedRows);
+  const [rows, setRows] = useState<AirportChangeRow[]>(savedRows);
   const [busy, setBusy] = useState(false);
-  useEffect(() => setRows(airportConnectionRows(requirements, connections)), [tripId, requirementSignature, connectionSignature, requirements, connections]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => setRows(savedRows), [tripId, signature]);
 
   if (!rows.length) return null;
+  const requirements = savedRows.filter(row => row.required);
   const requiredJourneys = requirements.reduce((sum, item) => sum + item.journey_count, 0);
-  const pairKey = (row: Pick<AirportConnectionDraft, "from_airport" | "to_airport">) => `${row.from_airport}>${row.to_airport}`;
-  function updateRow(key: string, change: Partial<AirportConnectionDraft>) {
+  const pairKey = (row: Pick<AirportChangeRow, "from_airport" | "to_airport">) => `${row.from_airport}>${row.to_airport}`;
+  function updateRow(key: string, change: Partial<AirportChangeRow>) {
     setRows(current => current.map(row => pairKey(row) === key ? { ...row, ...change } : row));
   }
-  function clearOrRemove(row: AirportConnectionDraft) {
+  function clearOrRemove(row: AirportChangeRow) {
     if (row.required) updateRow(pairKey(row), { mode: "", duration_minutes: null, fare_amount: null, currency: "MYR" });
     else setRows(current => current.filter(item => pairKey(item) !== pairKey(row)));
   }
@@ -123,13 +88,16 @@ function AirportConnectionsTable({ tripId, requirements, connections, onSaved, r
 
 function BundleEntry({ route, placeName, save, report }: { route: Route; placeName: (id: string) => string; save: (offer: Offer) => Promise<void>; report: (s: string) => void }) {
   const flights = route.movements.filter(m => m.mode === "flight");
-  const [selected, setSelected] = useState<string[]>(flights.map(m => m.id));
+  // A combined ticket covers template ids: the server checks it against the saved flights,
+  // and transfer estimates give route flights variant ids.
+  const ticketId = (m: Movement) => m.template_id ?? m.id;
+  const [selected, setSelected] = useState<string[]>(flights.map(ticketId));
   const [kind, setKind] = useState<"round-trip" | "multi-city">("multi-city");
   const [low, setLow] = useState("");
   const [high, setHigh] = useState("");
   const [currency, setCurrency] = useState("MYR");
   const [busy, setBusy] = useState(false);
-  useEffect(() => { setSelected(route.movements.filter(m => m.mode === "flight").map(m => m.id)); }, [route.id]);
+  useEffect(() => { setSelected(route.movements.filter(m => m.mode === "flight").map(ticketId)); }, [route.id]);
   if (flights.length < 2) return null;
   async function submit() {
     setBusy(true);
@@ -141,7 +109,7 @@ function BundleEntry({ route, placeName, save, report }: { route: Route; placeNa
     finally { setBusy(false); }
   }
   return <details className="p-details"><summary>Enter a combined flight ticket price</summary><p>Choose the exact journeys covered by your quote. Enter the total for the whole party; airport transfers remain separate. The optimizer compares this purchase with separate tickets.</p>
-    <div>{flights.map(m => <label className="p-check" key={m.id}><input type="checkbox" checked={selected.includes(m.id)} onChange={e => setSelected(ids => e.target.checked ? [...ids, m.id] : ids.filter(id => id !== m.id))} />{placeName(m.from_id)} → {placeName(m.to_id)} · {m.departure?.slice(0, 10)}</label>)}</div>
+    <div>{flights.map(m => <label className="p-check" key={m.id}><input type="checkbox" checked={selected.includes(ticketId(m))} onChange={e => setSelected(ids => e.target.checked ? [...ids, ticketId(m)] : ids.filter(id => id !== ticketId(m)))} />{placeName(m.from_id)} → {placeName(m.to_id)} · {m.departure?.slice(0, 10)}</label>)}</div>
     <div className="p-inline"><Field label="Ticket type"><select value={kind} onChange={e => setKind(e.target.value as typeof kind)}><option value="multi-city">Multi-city / open-jaw</option><option value="round-trip">Round trip</option></select></Field><Field label="Combined party fare"><input type="number" min="0" step="0.01" value={low} onChange={e => setLow(e.target.value)} /></Field><Field label="Maximum (blank = fixed)"><input type="number" min={low || 0} step="0.01" value={high} onChange={e => setHigh(e.target.value)} /></Field><Field label="Bundle currency"><input maxLength={3} value={currency} onChange={e => setCurrency(e.target.value.toUpperCase())} /></Field><Button type="button" size="sm" disabled={busy} onClick={() => void submit()}>Save bundle</Button></div>
   </details>;
 }
@@ -177,7 +145,7 @@ export default function Planner() {
   const [ranking, setRanking] = useState("cheapest");
   const [routePage, setRoutePage] = useState(0);
   const [showDominated, setShowDominated] = useState(false);
-  const [budget, setBudget] = useState(100);
+  const [budget, setBudget] = useState(defaultBatchSize);
   const [busy, setBusy] = useState(false);
   const [loadingTrip, setLoadingTrip] = useState(true);
   const [dirty, setDirty] = useState(false);
@@ -371,12 +339,28 @@ export default function Planner() {
     (result?.missing_fares ?? []).filter(fare => !fare.label.startsWith("Airport transfer ")),
     [...(result?.routes ?? []), ...(result?.dominated_routes ?? []), ...(result?.refinement_routes ?? [])],
   ), [result]);
+  // Route movement id → template id. Transfer estimates give flights variant ids
+  // ("{template}:transfer:{hash}") that change with every estimate edit.
+  const templateOf = useMemo(() => new Map([...(result?.routes ?? []), ...(result?.dominated_routes ?? []), ...(result?.refinement_routes ?? [])]
+    .flatMap(route => route.movements.map(movement => [movement.id, movement.template_id ?? movement.id] as const))), [result]);
+  // Autosave (PUT /trips/{id}) returns the trip with snapshot.movements and airport_transfer_rows, but
+  // without the other fields that GET adds; these helpers derive them from the snapshot.
+  const assumed = useMemo(() => saved ? assumedConnections(saved) : [], [saved]);
+  const gaps = useMemo(() => saved ? cityGaps(saved) : [], [saved]);
+  const airportChanges = useMemo(() => saved ? airportChangeRows(saved, result?.coverage) : [], [saved, result?.coverage]);
   useEffect(() => { setRoutePage(p => Math.min(p, Math.max(0, Math.ceil(routes.length / 40) - 1))); }, [routes.length]);
   const selected = routes.find(r => r.id === selectedId) ?? result?.refinement_routes?.find(r => r.id === selectedId) ?? routes[0] ?? null;
   const compare = routes.find(r => r.id === comparisonId) ?? null;
   const active = !!job && ["running", "queued"].includes(job.status);
   const allOffers = [...(saved?.snapshot?.offers ?? []), ...(saved?.offers ?? [])];
-  const offerFor = (id: string) => [...allOffers].reverse().find(o => o.movement_ids.length === 1 && o.movement_ids[0] === id);
+  const newestOffers = [...allOffers].reverse();
+  const latestOffer = (id: string, user = false) => newestOffers.find(o => o.movement_ids.length === 1 && o.movement_ids[0] === id && (!user || o.source === "user"));
+  // The offer that prices the component, in price_path's order: a user price wins over other offers, and one on
+  // the template id wins over one on the variant id. Prices are saved on template ids now; older ones can sit on a variant id.
+  const offerFor = (id: string) => {
+    const template = templateOf.get(id) ?? id;
+    return latestOffer(template, true) ?? latestOffer(id, true) ?? latestOffer(template) ?? latestOffer(id);
+  };
   const appliedSharedGroups = useMemo(() => {
     const offers = new Map<string, Offer>(allOffers.map(offer => [offer.id, offer] as const));
     const grouped = new Map<string, Offer[]>();
@@ -422,10 +406,10 @@ export default function Planner() {
     });
   }
   const coverage = result?.coverage;
-  const unresolvedAccess = (coverage?.unresolved_movements ?? []).map(movement => ({
+  const unresolvedAccess = unresolvedAccessJourneys(coverage?.unresolved_movements ?? []).map(movement => ({
     ...movement,
     assumptions: movement.assumptions.filter(assumption => !assumption.startsWith("Airport change ") && !assumption.startsWith("Airport connection ")),
-  })).filter(movement => movement.assumptions.length > 0);
+  }));
   const extras = selected?.extra_charges ?? [];
 
   if (loadingTrip) return <main className="optimizer app-shell" aria-busy="true"><div className="p-empty" role="status">Loading your saved trip…</div></main>;
@@ -467,13 +451,13 @@ export default function Planner() {
 
     {job && <section className="p-panel p-job" aria-live="polite"><div><span className="p-step">02</span><h2>Transport discovery</h2><strong>{active && <LoaderCircle size={15} className="spin" />}{job.status}</strong></div><p>{job.processed} queries processed · {job.requests} provider requests · {job.cache_hits} cache hits{job.manual_quote_queries ? ` · ${job.manual_quote_queries} manual quotes (no request)` : ""} · {job.pending} pending</p><div className="p-actions">{active ? <Button type="button" size="sm" variant="secondary" onClick={() => void act(async () => { setJob(await api<Job>(`/searches/${job.id}/cancel`, "POST")); })}><Square size={13} />Cancel discovery</Button> : job.status !== "superseded" && (job.pending > 0 || job.failed_queries > 0 || result?.optimization_complete === false) && <Button type="button" size="sm" disabled={busy} onClick={() => void search(true)}><RefreshCw size={13} />{job.pending > 0 ? "Continue searching" : job.failed_queries > 0 ? "Retry failed searches" : "Continue optimizing"}</Button>}<span className="p-hint">Collected data and fare edits are retained.</span></div>{job.messages.length > 0 && <details><summary>Provider status and coverage</summary>{job.messages.map((m, i) => <p key={i}>{m}</p>)}</details>}</section>}
 
-    <section id="pricing" className="p-panel">{saved && (saved.assumed_connections?.length ?? 0) > 0 && <div><h3>Saved assumed connections</h3>{saved.assumed_connections!.map(m => <div className="p-actions" key={m.id}><span>{placeName(m.from_id)} → {placeName(m.to_id)} · {m.mode} · {m.duration_minutes} min{m.departure ? ` · ${localTime(m.departure, places.find(p => p.id === m.from_id)?.timezone ?? "UTC")}` : " · Flexible departure"}</span><Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => void removeAssumedConnection(m.id)}>Remove</Button></div>)}</div>}<RulesEditor rules={rules} places={places} changed={rulesChanged} report={setError} />{saved && <AssumedConnection gaps={saved.city_connection_gaps ?? []} places={places} report={setError} add={async m => { const record = await saveSpec(); const next = await api<Result>(`/trips/${record.id}/movements`, "POST", m); accept(await api<SavedTrip>(`/trips/${record.id}`)); acceptResult(next, record.id); }} />}</section>
+    <section id="pricing" className="p-panel">{assumed.length > 0 && <div><h3>Saved assumed connections</h3>{assumed.map(m => <div className="p-actions" key={m.id}><span>{placeName(m.from_id)} → {placeName(m.to_id)} · {m.mode} · {m.duration_minutes} min{m.departure ? ` · ${localTime(m.departure, places.find(p => p.id === m.from_id)?.timezone ?? "UTC")}` : " · Flexible departure"}</span><Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => void removeAssumedConnection(m.id)}>Remove</Button></div>)}</div>}<RulesEditor rules={rules} places={places} changed={rulesChanged} report={setError} />{saved && <AssumedConnection gaps={gaps} places={places} report={setError} add={async m => { const record = await saveSpec(); const next = await api<Result>(`/trips/${record.id}/movements`, "POST", m); accept(await api<SavedTrip>(`/trips/${record.id}`)); acceptResult(next, record.id); }} />}</section>
 
     {result && <>
       {(result.discovery_required || dirty) && <div className="p-notice">{dirty ? "Trip changes are being saved; displayed results belong to the previous revision." : "Transport discovery is needed for these trip inputs. Saved fare edits remain available."}</div>}
 
-      {saved && <AirportConnectionsTable key={`airport-connections:${saved.id}`} tripId={saved.id} requirements={saved.airport_connections_required ?? coverage?.airport_connections_required ?? noAirportConnectionRequirements} connections={saved.airport_connections ?? noAirportConnections} report={setError} onSaved={(record, updated) => { accept(record); acceptResult(updated, record.id); setSaveStatus("Airport connections saved · frontier recalculated"); }} />}
-      {(missingFareGroups.length > 0 || appliedSharedGroups.length > 0) && <MissingFaresTable key={`missing-fares:${saved?.id}`} storageKey={`wayfinder:pending-estimates:${saved?.id}`} groups={missingFareGroups} appliedGroups={appliedSharedGroups} placeName={placeName} offerFor={offerFor} onApply={applySharedFares} onSave={updatePrice} onRemove={removePrice} />}
+      {saved && <AirportConnectionsTable key={`airport-connections:${saved.id}`} tripId={saved.id} rows={airportChanges} report={setError} onSaved={(record, updated) => { accept(record); acceptResult(updated, record.id); setSaveStatus("Airport connections saved · frontier recalculated"); }} />}
+      {(missingFareGroups.length > 0 || appliedSharedGroups.length > 0) && <MissingFaresTable key={`missing-fares:${saved?.id}`} storageKey={`wayfinder:pending-estimates:${saved?.id}`} groups={missingFareGroups} appliedGroups={appliedSharedGroups} placeName={placeName} templateOf={templateOf} offerFor={offerFor} onApply={applySharedFares} onSave={updatePrice} onRemove={removePrice} />}
       {!!unresolvedAccess.length && <details className="p-panel"><summary>{unresolvedAccess.length} retrieved journeys need airport access timing</summary>{unresolvedAccess.map(m => <p key={m.id}>{placeName(m.from_id)} → {placeName(m.to_id)}: {m.assumptions.join(" · ")}</p>)}</details>}
       <section className="p-panel" aria-labelledby="frontier-title"><div className="p-panel-heading"><div><span className="p-step">04</span><h2 id="frontier-title">Your cost–time frontier</h2></div><span className="p-tag">{result.routes.length} frontier alternatives{showDominated && result.dominated_routes ? ` + ${result.dominated_routes.length} dominated` : ""}</span></div><p>{coverage?.discovery_complete ? "Discovery queue exhausted" : "Preliminary discovery"} · {result.optimization_complete ? "Optimization complete for this snapshot" : "Optimization incomplete"} · snapshot {result.snapshot_revision}</p><p className="p-hint">Circles: priced offers. Diamonds: estimates. Horizontal bands: fare ranges; their selection marker is the midpoint, not an expected price. Unknown totals stay in the list below. Optimality covers retrieved options and stated assumptions.</p>
         <p className="p-hint">{result.feasible_count.toLocaleString()} completed histories evaluated. The frontier keeps cost/city-time tradeoffs under your fare and budget settings. Other histories are hidden by default; source schedules and fares remain saved.</p>
@@ -501,12 +485,12 @@ export default function Planner() {
       </section>
 
       {selected && <section className="p-panel" aria-labelledby="details-title"><div className="p-panel-heading"><div><span className="p-step">05</span><h2 id="details-title">Itinerary details</h2>{selected.budget_status === "over" && <span className="p-tag uncertain">Outside budget · fare refinement only</span>}</div><strong>{routeCost(selected)}</strong></div><div className="p-detail-layout"><div><PlannerMap places={places} route={selected} /><p className="p-hint">City reference points and schematic connections; lines do not show road or track geometry.</p></div><div className="p-timeline"><h3>Time in each required city</h3>{selected.stays.map((s, i) => <div key={`${s.place_id}:${i}`}><span className="p-timeline-dot" /><strong>{placeName(s.place_id)} <span>{s.hours.toFixed(1)} h</span></strong><small>{localTime(s.arrival, byId.get(s.place_id)?.timezone ?? "UTC")}<ArrowRight size={13} />{localTime(s.departure, byId.get(s.place_id)?.timezone ?? "UTC")}</small><progress max={selected.stay_hours || 1} value={s.hours} /></div>)}<p className="p-hint">City-stay hours include nights, exclude all transportation and terminal overhead, and do not count time at home or other positioning cities.</p></div></div>
-        <div className="p-leg-details">{selected.movements.map((m, i) => <details key={`${m.id}:${i}`} open={i === 0}><summary><span className="p-leg-index">{i + 1}</span><strong>{placeName(m.from_id)} → {placeName(m.to_id)}</strong><span className="p-tag">{m.mode}{m.vehicle_kind ? ` · ${m.vehicle_kind}` : ""}</span><span>{(m.duration_minutes / 60).toFixed(1)} h</span></summary><div className="p-leg-content"><p>{localTime(m.departure, byId.get(m.from_id)?.timezone ?? "UTC")} → {localTime(m.arrival, byId.get(m.to_id)?.timezone ?? "UTC")}<br /><small>{m.source} · {m.transfers} transfers{m.distance_km !== null ? ` · ${m.distance_km.toFixed(1)} km` : ""}</small></p>{m.assumptions.map(a => <p className="p-notice" key={a}>{a}</p>)}
+        <div className="p-leg-details">{selected.movements.map((m, i) => <details key={`${m.id}:${i}`} open={i === 0}><summary><span className="p-leg-index">{i + 1}</span><strong>{placeName(m.from_id)} → {placeName(m.to_id)}</strong><span className="p-tag">{m.mode}{m.vehicle_kind ? ` · ${m.vehicle_kind}` : ""}</span><span>{(m.duration_minutes / 60).toFixed(1)} h</span></summary><div className="p-leg-content"><p>{localTime(m.departure, byId.get(m.from_id)?.timezone ?? "UTC", "Flexible departure")} → {localTime(m.arrival, byId.get(m.to_id)?.timezone ?? "UTC", "Flexible departure")}<br /><small>{m.source} · {m.transfers} transfers{m.distance_km !== null ? ` · ${m.distance_km.toFixed(1)} km` : ""}</small></p>{m.assumptions.map(a => <p className="p-notice" key={a}>{a}</p>)}
           {m.schedule_estimated && <p className="p-notice">Estimated rail timetable{m.schedule_reference_date ? ` · based on ${m.schedule_reference_date}` : " · provider extended calendar"}. Verify the actual travel date before booking.</p>}
-          {m.segments.length > 0 && <ul className="p-segments">{m.segments.map((s, j) => <li key={j}><strong>{s.mode}: {s.from_name} → {s.to_name}</strong><small>{s.departure && `${localTime(s.departure, s.from_timezone ?? "UTC")} (${s.from_timezone ?? "UTC"}) → ${localTime(s.arrival, s.to_timezone ?? "UTC")} (${s.to_timezone ?? "UTC"}) · `}{s.service} {s.operator}{s.source ? ` · ${s.source}` : ""}{s.assumed ? " · assumed" : ""}{s.duration_minutes !== null ? ` · ${s.duration_minutes.toFixed(0)} min` : ""}</small></li>)}</ul>}
-          <FareEditor componentId={m.id} label={`Standalone ${m.mode} fare`} offer={offerFor(m.id)} onSave={updatePrice} onRemove={removePrice} />{m.charges.filter(c => !c.kind.startsWith("Airport transfer ")).map(c => <FareEditor key={c.id} componentId={c.id} label={c.kind} offer={offerFor(c.id)} onSave={updatePrice} onRemove={removePrice} />)}{m.search_url && <a href={m.search_url} target="_blank" rel="noreferrer">Open flight search ↗</a>}</div></details>)}</div>
+          {m.segments.length > 0 && <ul className="p-segments">{m.segments.map((s, j) => <li key={j}><strong>{s.mode}: {s.from_name} → {s.to_name}</strong><small>{s.departure && `${localTime(s.departure, s.from_timezone ?? "UTC")} (${s.from_timezone ?? "UTC"}) → ${localTime(s.arrival, s.to_timezone ?? "UTC", "Flexible departure")} (${s.to_timezone ?? "UTC"}) · `}{s.service} {s.operator}{s.source ? ` · ${s.source}` : ""}{s.assumed ? " · assumed" : ""}{s.duration_minutes !== null ? ` · ${s.duration_minutes.toFixed(0)} min` : ""}</small></li>)}</ul>}
+          <FareEditor componentId={m.template_id ?? m.id} label={`Standalone ${m.mode} fare`} offer={offerFor(m.id)} onSave={updatePrice} onRemove={removePrice} />{m.charges.filter(c => !c.kind.startsWith("Airport transfer ")).map(c => <FareEditor key={c.id} componentId={c.id} label={c.kind} offer={offerFor(c.id)} onSave={updatePrice} onRemove={removePrice} />)}{m.search_url && <a href={m.search_url} target="_blank" rel="noreferrer">Open flight search ↗</a>}</div></details>)}</div>
         {extras.map(c => <FareEditor key={c.id} componentId={c.id} label={c.kind} offer={offerFor(c.id)} onSave={updatePrice} onRemove={removePrice} />)}
-        <h3>Ticket purchases and cost breakdown</h3><div className="p-purchases">{selected.purchases.map(o => <div key={o.id}><strong>{o.label || o.kind}<small>{o.kind} · {o.movement_ids.length} component(s) · {o.source}{o.estimated ? " estimate" : ""}</small></strong><span>{o.low === o.high ? money(o.low, o.currency) : `${money(o.low, o.currency)} – ${money(o.high, o.currency)}`}</span>{o.source === "user" && <button type="button" aria-label={`Remove fare ${o.label}`} onClick={() => void act(() => removePrice(o.id))}>×</button>}</div>)}</div>
+        <h3>Ticket purchases and cost breakdown</h3><div className="p-purchases">{selected.purchases.map(o => <div key={o.id}><strong>{o.label || o.kind}<small>{o.kind} · {o.movement_ids.length} component(s) · {o.source}{o.estimated ? " estimate" : ""}</small></strong><span>{o.low === o.high ? money(o.low, o.currency) : `${money(o.low, o.currency)} – ${money(o.high, o.currency)}`}</span>{o.source === "user" && <button type="button" aria-label={`Remove fare ${o.label}`} onClick={() => void act(() => removePrice(storedOfferId(o)))}>×</button>}</div>)}</div>
         <p className="p-hint">Each ticket is charged once. Combined flight tickets do not include separately listed airport transfers. Average fare per stay hour: {money(selected.cost_per_stay_hour_myr)}. Prices are quotes or assumptions, not booking guarantees.</p>
         <BundleEntry route={selected} placeName={placeName} save={updatePrice} report={setError} />
       </section>}

@@ -1,0 +1,754 @@
+import { blankTrip, defaultBatchSize, modes, type AirportConnectionRequirement, type AirportTransferMode, type AirportTransferRow, type Charge, type Coverage, type Job, type Movement, type Offer, type Result, type Route, type SavedTrip, type Segment, type TripDraft } from "./planner";
+import type { MissingFareGroup } from "./missingFares";
+
+// Pure display and decision helpers for the planner UI (spec sections C–G). No React here:
+// tests load this file directly.
+//
+// Trip records come in two shapes. GET /trips/{id} empties snapshot.movements and adds
+// fields that the server computes (read_trip in planner_api.py). PUT /trips/{id} returns the
+// stored record with snapshot.movements and airport_transfer_rows, but without
+// airport_connections_required, assumed_connections, city_connection_gaps and fare_component_ids.
+// Helpers that read the record use the server field when it is present, otherwise they derive it the same way.
+
+// ---------------------------------------------------------------- display
+
+const modeLabels: Record<string, string> = { flight: "Flight", rail: "Train", bus: "Bus", coach: "Coach", subway: "Subway", tram: "Tram", car: "Car", taxi: "Taxi", rental: "Rental car", "*": "Any" };
+/** Display label for a transport mode value ("rail" → "Train"). Other values show as they are. */
+export function modeLabel(mode: string) {
+  return modeLabels[mode] ?? mode;
+}
+
+const plural = (count: number, word: string, many = `${word}s`) => `${count} ${count === 1 ? word : many}`;
+const joinAnd = (items: string[]) => items.length > 1 ? `${items.slice(0, -1).join(", ")} and ${items.at(-1)}` : items[0] ?? "";
+const capitalize = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+const hhmm = (time: string) => time.slice(0, 5);
+const cents = (value: number) => Math.round(value * 100) / 100;
+
+const numberFormats = new Map<string, Intl.NumberFormat>();
+function formatNumber(value: number, digits: number, currency?: string) {
+  const key = `${currency ?? ""}:${digits}`;
+  let format = numberFormats.get(key);
+  if (!format) {
+    const fraction = { minimumFractionDigits: digits, maximumFractionDigits: digits };
+    format = new Intl.NumberFormat("en-MY", currency ? { style: "currency", currency, currencyDisplay: currency === "MYR" ? "symbol" : "code", ...fraction } : fraction);
+    numberFormats.set(key, format);
+  }
+  return format.format(value);
+}
+const fractionDigits = (value: number) => Math.round(value * 100) % 100 === 0 ? 0 : 2;
+/** An amount without the currency, by the moneyShort rule ("6,227", "6,227.50"). */
+const amount = (value: number) => formatNumber(value, fractionDigits(value));
+
+/** Money for display: whole amounts without decimals ("RM 5,395"), others with 2; other currencies by code ("JPY 12,000"). */
+export function moneyShort(value: number, currency = "MYR") {
+  return formatNumber(value, fractionDigits(value), currency);
+}
+
+/** A duration in minutes: "45 min", "2 h", "1 h 30 min". */
+export function formatDuration(minutes: number) {
+  const total = Math.round(minutes);
+  const hours = Math.floor(total / 60), rest = total % 60;
+  return hours ? rest ? `${hours} h ${rest} min` : `${hours} h` : `${rest} min`;
+}
+
+const dateStyles = {
+  date: { weekday: "short", day: "numeric", month: "short" },
+  time: { hour: "2-digit", minute: "2-digit", hourCycle: "h23" },
+  day: { day: "numeric", month: "short" },
+  year: { day: "numeric", month: "short", year: "numeric" },
+  iso: { year: "numeric", month: "2-digit", day: "2-digit" },
+} satisfies Record<string, Intl.DateTimeFormatOptions>;
+const dateFormats = new Map<string, Intl.DateTimeFormat>();
+function dateFormat(zone: string, style: keyof typeof dateStyles) {
+  const key = `${style}|${zone}`;
+  let format = dateFormats.get(key);
+  if (!format) {
+    // sv-SE writes dates as YYYY-MM-DD.
+    format = new Intl.DateTimeFormat(style === "iso" ? "sv-SE" : "en-GB", { ...dateStyles[style], timeZone: zone });
+    dateFormats.set(key, format);
+  }
+  return format;
+}
+
+/** A timestamp in a place's time zone: "Fri 4 Dec 18:54" (datetime), "Fri 4 Dec" (date), "18:54" (time) or "4 Dec" (day). */
+export function formatLocal(value: string, zone: string, style: "datetime" | "date" | "time" | "day" = "datetime") {
+  const date = new Date(value);
+  return style === "datetime" ? `${dateFormat(zone, "date").format(date)} ${dateFormat(zone, "time").format(date)}` : dateFormat(zone, style).format(date);
+}
+
+/** Trip dates (YYYY-MM-DD) as "4–14 Dec 2026", "28 Nov – 4 Dec 2026" or "28 Dec 2026 – 3 Jan 2027". */
+export function dateRange(start: string, end: string) {
+  const [a, b] = [start, end].map(value => {
+    const date = new Date(`${value}T00:00:00Z`);
+    return Number.isNaN(date.getTime()) ? null : Object.fromEntries(dateFormat("UTC", "year").formatToParts(date).map(part => [part.type, part.value]));
+  });
+  // A cleared date input leaves "" in the draft.
+  if (!a || !b) return [start, end].filter(Boolean).join(" – ");
+  if (a.year !== b.year) return `${a.day} ${a.month} ${a.year} – ${b.day} ${b.month} ${b.year}`;
+  if (a.month !== b.month) return `${a.day} ${a.month} – ${b.day} ${b.month} ${b.year}`;
+  return a.day === b.day ? `${b.day} ${b.month} ${b.year}` : `${a.day}–${b.day} ${b.month} ${b.year}`;
+}
+
+/** The total price of an option: "RM 5,395" (exact), "RM 6,187 – 6,227" (range) or "From RM 2,480" (some items not priced). */
+export function priceText(route: Pick<Route, "total_cost_myr" | "cost_low_myr" | "cost_high_myr">) {
+  if (route.total_cost_myr !== null) return moneyShort(route.total_cost_myr);
+  if (route.cost_high_myr === null) return `From ${moneyShort(route.cost_low_myr)}`;
+  return `${moneyShort(route.cost_low_myr)} – ${amount(route.cost_high_myr)}`;
+}
+
+const isEstimate = (offer: Pick<Offer, "estimated" | "source" | "currency">) => offer.estimated || offer.source === "rule" || offer.currency !== "MYR";
+/** Whether the price uses estimates: your prices, rules, older quotes or a converted currency (the backend rule). */
+export function priceEstimated(route: Pick<Route, "purchases">) {
+  return route.purchases.some(isEstimate);
+}
+
+const hasRate = (currency: string, rates: Record<string, number>) => currency === "MYR" || rates[currency] !== undefined;
+const isPriced = (offer: Pick<Offer, "low" | "currency">, rates: Record<string, number>) => offer.low !== null && hasRate(offer.currency, rates);
+
+type ItemKind = "flight" | "train" | "bus" | "transfer" | "change" | "other";
+const itemWords: [ItemKind, string, string][] = [["flight", "flight", "flights"], ["train", "train", "trains"], ["bus", "bus", "buses"], ["transfer", "airport transfer", "airport transfers"], ["change", "airport change", "airport changes"], ["other", "other item", "other items"]];
+/** What each priced component of a route is: movement ids by mode, charge ids by kind. Extra charges (rental) count as other. */
+function itemKinds(route: Pick<Route, "movements">) {
+  const kinds = new Map<string, ItemKind>();
+  for (const movement of route.movements) {
+    kinds.set(movement.id, movement.mode === "flight" ? "flight" : movement.mode === "rail" ? "train" : movement.mode === "bus" || movement.mode === "coach" ? "bus" : "other");
+    for (const charge of movement.charges) kinds.set(charge.id, charge.kind === "Airport access" || charge.kind === "Airport egress" ? "transfer" : charge.kind.startsWith("Airport transfer ") ? "change" : "other");
+  }
+  return kinds;
+}
+function itemList(kinds: ItemKind[]) {
+  return itemWords.flatMap(([kind, one, many]) => {
+    const count = kinds.filter(item => item === kind).length;
+    return count ? [plural(count, one, many)] : [];
+  }).join(", ");
+}
+
+/**
+ * Items without a complete price in an option. A purchase with no price, or in a currency without
+ * an exchange rate, is not priced; a price without an upper limit is open-ended. `chip` is the short
+ * form for option rows ("10 not priced"); `text` adds the items ("10 not priced: 2 flights, 8 airport transfers").
+ */
+export function unpricedSummary(route: Pick<Route, "purchases" | "movements">, rates: Record<string, number>) {
+  const kinds = itemKinds(route);
+  const kindOf = (offer: Offer) => kinds.get(offer.movement_ids[0]) ?? "other";
+  const notPriced = route.purchases.filter(offer => !isPriced(offer, rates)).map(kindOf);
+  const openEnded = route.purchases.filter(offer => isPriced(offer, rates) && offer.high === null).map(kindOf);
+  const openText = plural(openEnded.length, "open-ended price");
+  const chip = notPriced.length ? `${notPriced.length} not priced` : openEnded.length === 1 ? "open-ended price" : openEnded.length ? openText : "";
+  const text = notPriced.length ? `${notPriced.length} not priced: ${itemList(notPriced)}${openEnded.length ? ` · ${openText}` : ""}`
+    : openEnded.length ? `${openText}: ${itemList(openEnded)}` : "";
+  return { count: notPriced.length, openEnded: openEnded.length, chip, text };
+}
+
+/** "RM 24.72 per city hour" (exact) or "RM 28.0 – 28.2 per city hour" (range). Null when some items are not priced. */
+export function perCityHourText(route: Pick<Route, "total_cost_myr" | "cost_low_myr" | "cost_high_myr" | "cost_per_stay_hour_myr" | "stay_hours">) {
+  if (route.cost_high_myr === null || route.stay_hours <= 0) return null;
+  if (route.total_cost_myr !== null) return route.cost_per_stay_hour_myr === null ? null : `${moneyShort(route.cost_per_stay_hour_myr)} per city hour`;
+  return `${formatNumber(route.cost_low_myr / route.stay_hours, 1, "MYR")} – ${formatNumber(route.cost_high_myr / route.stay_hours, 1)} per city hour`;
+}
+
+/** E9.4 amount of one purchase: "RM 2,180", "RM 210 – 250", "RM 900 or more" or "Not priced". */
+function offerAmount(offer: Pick<Offer, "low" | "high" | "currency">) {
+  if (offer.low === null) return "Not priced";
+  const low = moneyShort(offer.low, offer.currency);
+  return offer.high === null ? `${low} or more` : offer.high === offer.low ? low : `${low} – ${amount(offer.high)}`;
+}
+
+// ---------------------------------------------------------------- routes
+
+/** An option's route for its list row: the start place, then each journey's mode, destination and the stay that starts there. */
+export function routeChain(route: Pick<Route, "movements" | "stays">) {
+  // Stays and movements write the same instant in different formats ("+00:00" and "Z").
+  const stays = new Map(route.stays.map(stay => [`${stay.place_id}@${Date.parse(stay.arrival)}`, stay.hours]));
+  return {
+    from: route.movements[0]?.from_id ?? "",
+    steps: route.movements.map(movement => ({ mode: movement.mode, to: movement.to_id, hours: movement.arrival ? stays.get(`${movement.to_id}@${Date.parse(movement.arrival)}`) ?? null : null })),
+  };
+}
+
+const passiveModes = new Set(["transfer", "walk", "foot", "wait"]);
+// The first scheduled service in a journey. A trip transfer estimate relabels the airport access
+// segment with its mode ("taxi"), so skip it the way the optimizer does (planner_optimizer.py).
+function firstServiceDeparture(movement: Movement) {
+  return movement.segments.find(segment => !passiveModes.has(segment.mode) && !(segment.source ?? "").startsWith("User-estimated airport") && segment.departure)?.departure ?? movement.departure;
+}
+/** Identifies an option across recalculations. Route and flight ids change when airport transfer prices change; templates and times do not. */
+export function routeSignature(route: Pick<Route, "departure_gateway" | "arrival_gateway" | "movements">) {
+  return JSON.stringify([route.departure_gateway, route.arrival_gateway, route.movements.map(movement => [movement.template_id ?? movement.id, firstServiceDeparture(movement)])]);
+}
+
+const highest = (route: Pick<Route, "total_cost_myr" | "cost_high_myr">) => route.total_cost_myr ?? route.cost_high_myr;
+const byId = (a: Route, b: Route) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+// Bounded options by their highest possible price, then unbounded options.
+function compareHighest(a: Route, b: Route) {
+  const x = highest(a), y = highest(b);
+  return x === null || y === null ? Number(x === null) - Number(y === null) : x - y;
+}
+function lowestPrice(a: Route, b: Route) {
+  return compareHighest(a, b) || a.cost_low_myr - b.cost_low_myr || b.stay_hours - a.stay_hours || byId(a, b);
+}
+/**
+ * Orders options (E3). "cheapest": bounded options by highest possible price, then unbounded options by
+ * their known part. "stay": most time in cities first. "balanced": normalized highest price plus normalized
+ * time over bounded options, unbounded options last.
+ */
+export function sortRoutes<T extends Route>(routes: T[], key: string): T[] {
+  if (key === "stay") return [...routes].sort((a, b) => b.stay_hours - a.stay_hours || compareHighest(a, b) || byId(a, b));
+  if (key !== "balanced") return [...routes].sort(lowestPrice);
+  const bounded = routes.filter(route => highest(route) !== null);
+  const prices = bounded.map(route => highest(route)!), stays = bounded.map(route => route.stay_hours);
+  const minPrice = Math.min(...prices), maxPrice = Math.max(...prices), minStay = Math.min(...stays), maxStay = Math.max(...stays);
+  const score = (route: Route) => (maxPrice > minPrice ? (highest(route)! - minPrice) / (maxPrice - minPrice) : 0) + (maxStay > minStay ? (maxStay - route.stay_hours) / (maxStay - minStay) : 0);
+  return [...routes].sort((a, b) => {
+    const unbounded = Number(highest(a) === null) - Number(highest(b) === null);
+    return unbounded || (highest(a) === null ? lowestPrice(a, b) : score(a) - score(b) || lowestPrice(a, b));
+  });
+}
+
+/** "01", "02", … */
+export const optionNumber = (position: number) => String(position).padStart(2, "0");
+
+/**
+ * Compares the selected option with another option, numbered `otherNumber` (E7). Hours use the 0.1 h
+ * shown, so the price per extra hour matches the numbers on screen. Unknown totals give no price difference.
+ */
+export function compareText(selected: Route, other: Route, otherNumber: number) {
+  const name = `Option ${optionNumber(otherNumber)}`;
+  const hours = Math.round((selected.stay_hours - other.stay_hours) * 10) / 10;
+  const time = hours === 0 ? "the same time in cities" : `${Math.abs(hours).toFixed(1)} h ${hours > 0 ? "more" : "less"} time in cities`;
+  const selectedHigh = highest(selected), otherHigh = highest(other);
+  if (selectedHigh === null || otherHigh === null) {
+    const who = selectedHigh === null && otherHigh === null ? "both options have" : selectedHigh === null ? "this option has" : `${name} has`;
+    return `vs ${name}: ${time}. Price difference unknown: ${who} items that are not priced.`;
+  }
+  // The price difference lies in [low, high]; both ends are equal when both totals are exact.
+  const low = cents((selected.total_cost_myr ?? selected.cost_low_myr) - otherHigh);
+  const high = cents(selectedHigh - (other.total_cost_myr ?? other.cost_low_myr));
+  const span = (a: number, b: number) => a === b ? moneyShort(a) : `${moneyShort(a)} – ${amount(b)}`;
+  const price = low === 0 && high === 0 ? "the same price"
+    : low >= 0 ? `${span(low, high)} more`
+    // Math.abs, not negation: -0 prints as "-RM 0".
+    : high <= 0 ? `${span(Math.abs(high), Math.abs(low))} less`
+    : `between ${moneyShort(-low)} less and ${moneyShort(high)} more`;
+  // Whole ringgit per hour from RM 10, as on screen ("RM 273 – 287"); smaller values keep cents.
+  const perHour = (value: number) => cents(Math.abs(value / hours) >= 10 ? Math.round(value / hours) : value / hours);
+  const extra = hours > 0 && low >= 0 && high > 0 ? ` That is ${low === high ? moneyShort(perHour(low)) : `${moneyShort(perHour(low))} – ${amount(perHour(high))}`} per extra hour.`
+    : hours > 0 && high < 0 ? " This option has more time in cities and costs less." : "";
+  return `vs ${name}: ${time} and ${price}.${extra}`;
+}
+
+// ---------------------------------------------------------------- status
+
+/** What a status strip button does: stop the search, start a new search, continue the search (search(true)) or recalculate with a higher limit. */
+export type StripAction = { label: string; run: "stop" | "search" | "continue" | "optimize"; tip?: string };
+export type SearchState = {
+  /** Stable per state, so a live region announces state changes and not counter ticks. */
+  id: string;
+  tone: "busy" | "info" | "ok" | "warn" | "error";
+  text: string;
+  tip?: string;
+  progress?: { value: number; max: number; text: string; tip: string };
+  /** The "search" action of the not-searched state shows only while trip settings are closed. */
+  actions: StripAction[];
+  secondary: { text: string; tip: string; action: StripAction } | null;
+};
+
+/** The status strip (C3.1): the first matching row of the state table, plus the "Check more combinations" line. */
+export function searchState({ invalid, dirty, saved, result, job }: {
+  invalid: boolean; dirty: boolean;
+  saved: Pick<SavedTrip, "snapshot"> | null;
+  result: Pick<Result, "discovery_required" | "optimization_complete" | "coverage"> | null;
+  job: Job | null;
+}): SearchState {
+  const status = job?.status;
+  const searched = !!saved?.snapshot || !!job;
+  const active = status === "queued" || status === "running";
+  const stale = !!result?.discovery_required || status === "superseded";
+  const pending = job?.pending ?? 0, failed = job?.failed_queries ?? 0;
+  const left = `${plural(pending, "search", "searches")} left`;
+  const stop: StripAction = { label: "Stop search", run: "stop" };
+  const searchMore: StripAction = { label: "Search more", run: "continue" };
+  const retry: StripAction = { label: "Retry failed searches", run: "continue" };
+  // Continuing a search with nothing pending or failed only raises the limit, so it spends no provider
+  // requests. The server refuses to continue a search after the search inputs changed (409).
+  const secondary = !active && result?.optimization_complete === false ? {
+    text: "Not all combinations were checked. Better options may exist.",
+    tip: "Recalculates from saved data with a higher limit. No new searches.",
+    action: { label: "Check more combinations", run: job && !stale && pending === 0 && failed === 0 ? "continue" : "optimize" } as StripAction,
+  } : null;
+  const state = (id: string, tone: SearchState["tone"], text: string, actions: StripAction[] = [], extra: Partial<SearchState> = {}): SearchState => ({ id, tone, text, actions, secondary, ...extra });
+
+  if (invalid) return { ...state("invalid", "warn", "Fix the marked fields. Options show the last saved trip."), secondary: null };
+  if (dirty && result) return { ...state("updating", "busy", "Updating options…"), secondary: null };
+  if (status === "queued") return state("queued", "busy", "Starting the search…", [stop]);
+  if (status === "running") return state("running", "busy", `Searching · ${job!.processed} done · ${pending} left. Options update as results arrive.`, [{ ...stop, tip: "Found options and your prices are kept." }], {
+    progress: { value: job!.processed, max: job!.processed + pending, text: `${job!.processed} of ${job!.processed + pending} searches`, tip: "The total can grow while the search adds follow-up searches." },
+  });
+  // Before the stale row (C3.1 has it after): the server also marks the result of a trip that was
+  // never searched as discovery_required, because no saved search matches the trip yet.
+  if (!searched) return state("not-searched", "info", "Not searched yet.", [{ label: "Search transport", run: "search" }]);
+  if (stale) return state("stale", "warn", "Your trip changed. Search again to include the changes. Options shown use the earlier search.", [{ label: "Search again", run: "search" }]);
+  if (status === "paused" && pending > 0) return state("paused", "info", `Search paused · ${left}.`, [searchMore], {
+    tip: `The search pauses after each batch of ${job!.batch_budget ? `${job!.batch_budget} ` : ""}new requests to data providers. Search more runs the next batch. Saved results are reused.`,
+  });
+  if (status === "cancelled" && pending > 0) return state("stopped", "info", `Search stopped · ${left}. Found options are kept.`, [searchMore]);
+  if (status === "interrupted") return state("interrupted", "warn", `The search stopped because the server stopped${pending > 0 ? ` · ${left}` : ""}. Found options are kept.`, pending > 0 ? [searchMore] : failed > 0 ? [retry] : []);
+  if (status === "failed") {
+    const message = [...job!.messages].reverse().find(text => text.startsWith("Planner:"))?.slice("Planner:".length).trim().replace(/\.$/, "");
+    return state("failed", "error", `The search failed${message ? `: ${message}` : ""}. Found options are kept.`, [pending > 0 ? searchMore : { label: "Search again", run: "search" }]);
+  }
+  if (job && !active && pending === 0 && failed > 0) return state("failed-searches", "warn", `Search finished · ${plural(failed, "search", "searches")} failed.`, [retry]);
+  if (status === "complete") {
+    const coverage = result?.coverage ?? saved?.snapshot?.coverage;
+    if (coverage?.discovery_complete !== false) return state("complete", "ok", "Search complete.");
+    const tickets = job!.manual_quote_queries ?? 0;
+    const parts = [
+      ...(failed ? [plural(failed, "failed search", "failed searches")] : []),
+      ...(tickets ? [`${plural(tickets, "combined ticket")} to check`] : []),
+      ...(coverage.source_gaps?.length ? ["trains and buses not searched"] : []),
+    ];
+    return state("gaps", "warn", parts.length ? `Search finished with gaps: ${parts.join(", ")}.` : "Search finished with gaps.");
+  }
+  return state("idle", "info", "");
+}
+
+const bundleStatuses: Record<string, string> = { requires_manual_quote: "Check the price yourself", success: "Quote found", empty: "No results", failed: "Search failed", unsupported: "Not supported" };
+/** Plain text for a combined-ticket search status. Other values show as they are. */
+export function bundleStatusLabel(status: string) {
+  return bundleStatuses[status] ?? status;
+}
+
+/** Where a price comes from (E9.4 source labels). */
+export function sourceLabel(offer: Pick<Offer, "id" | "source" | "label">) {
+  if (offer.source === "provider") {
+    const label = offer.label.replace(/^Stale quote: /, "");
+    const mapped = label.startsWith("Google Flights") ? "Google Flights" : label === "GTFS fare products for party" ? "Transit fare" : label;
+    return label === offer.label ? mapped : `${mapped} · older quote`;
+  }
+  if (offer.source === "user") {
+    if (offer.label.startsWith("Shared estimate:")) return "Your group price";
+    if (offer.label === "Manually entered whole-ticket party fare") return "Your combined ticket price";
+    return offer.id.startsWith("positioning-fare:") ? "Your journey price" : "Your price";
+  }
+  if (offer.source === "rule") {
+    if (offer.label === "Trip airport transfer estimate") return "Your airport transfer price";
+    if (offer.label === "Configured driving cost") return "Driving cost (Cars settings)";
+    return offer.id.startsWith("charge:") && offer.label.startsWith("Rental") ? "Rental settings" : `Rule: ${offer.label}`;
+  }
+  return "Not priced";
+}
+
+const railModes = new Set(["rail", "highspeed_rail", "long_distance", "night_rail", "regional_fast_rail", "regional_rail", "suburban"]);
+const transitModes = new Set(["bus", "coach", "subway", "tram"]);
+/**
+ * The text of one step in a journey (E9.3), without its start time: the caller writes that first, in
+ * segment.from_timezone or else the journey's origin. Times inside the text use the segment's zones.
+ * `warning` marks steps that make a journey unusable.
+ */
+export function stepLabel(segment: Segment, movement: Pick<Movement, "source">) {
+  const source = segment.source ?? "";
+  const minutes = segment.duration_minutes ?? (segment.departure && segment.arrival ? (Date.parse(segment.arrival) - Date.parse(segment.departure)) / 60000 : null);
+  const duration = minutes === null ? "" : ` · ${formatDuration(minutes)}`;
+  const at = (value: string | null, zone: string | null | undefined) => value ? ` ${formatLocal(value, zone ?? segment.from_timezone ?? "UTC", "time")}` : "";
+  const times = `${segment.from_name}${at(segment.departure, segment.from_timezone)} → ${segment.to_name}${at(segment.arrival, segment.to_timezone)}`;
+  // Airport access and egress keep the mode "transfer" until a trip estimate sets one; the default price is a taxi.
+  const mode = segment.mode === "transfer" ? "Taxi" : railModes.has(segment.mode) ? "Train" : modeLabel(segment.mode);
+  const service = segment.service ? ` ${segment.service}` : "";
+  const step = (text: string, warning = false) => ({ text, warning });
+  if (/^(User-estimated airport|Airport) (access|egress)$/.test(source)) return step(`${mode} to ${segment.to_name}${duration}${segment.assumed ? " (estimate)" : ""}`);
+  if (source === "Flight readiness buffer") return step(`At the airport before the flight${duration}`);
+  if (source === "Arrival buffer") return step(`After landing${duration}`);
+  if (source === "Scheduled connection") return step(`Connection at ${segment.from_name}${duration}`);
+  if (source === "User-verified airport transfer") return step(`${mode} from ${segment.from_name} to ${segment.to_name}${duration} (your airport change)`);
+  if (source === "Layover after airport transfer") return step(`Wait at ${segment.to_name}${duration}`);
+  if (source === "Airport change needs confirmation") return step(`Airport change ${segment.from_name} → ${segment.to_name} is not confirmed`, true);
+  if (source === "Airport transfer exceeds available layover") return step("Your airport change takes longer than the layover", true);
+  // Before the flight row: your journey can be a flight.
+  if (source === "User-supplied positioning" || movement.source === "User-supplied positioning") return step(`${mode}${service} · ${times} (your journey)`);
+  if (segment.mode === "flight") return step(`${[segment.operator, segment.service].filter(Boolean).join(" ")} · ${times}`);
+  if (segment.mode === "walk" || segment.mode === "foot") return step(`Walk to ${segment.to_name}${duration}`);
+  if (railModes.has(segment.mode) || transitModes.has(segment.mode)) return step([`${mode}${service}`, segment.operator, times].filter(Boolean).join(" · "));
+  return step(`${mode}: ${times}`);
+}
+
+/** A "Check before booking" note. `action: "transfer-times"` offers Set transfer times (Missing info › Airport transfers). */
+export type AssumptionNote = { text: string; action: "transfer-times" | null };
+function assumptionText(assumption: string, pair: string) {
+  if (assumption === "User supplied connectivity and timing" || assumption === "User-defined travel time and connectivity") return `Your connection ${pair} is assumed to exist.`;
+  const copied = /^Estimated timetable based on (\d{4}-\d{2}-\d{2})/.exec(assumption);
+  if (copied) return `${pair} uses an estimated timetable copied from ${dateRange(copied[1], copied[1])}. Check the real timetable.`;
+  if (assumption.startsWith("Estimated timetable: provider repeated service")) return `${pair} uses an estimated timetable (extended provider calendar). Check the real timetable.`;
+  const stations = /^Station search within ([\d.]+) km/.exec(assumption);
+  if (stations) return `${pair} uses stations up to ${stations[1]} km away. Check how you get to them.`;
+  if (assumption.startsWith("Driving time estimate;")) return "Driving times are estimates without traffic. Rental cars are not checked for availability.";
+  if (assumption.startsWith("User supplied city-to-city schedule;")) return `Your journey ${pair} uses the times you entered.`;
+  return assumption;
+}
+/** The option's assumptions in plain words (E9.6), each once. Airport transfer estimates merge into one note per duration. */
+export function assumptionNotes(route: Pick<Route, "movements" | "purchases">, placeName: (id: string) => string): AssumptionNote[] {
+  const notes = new Map<string, AssumptionNote>();
+  const transferCities = new Map<string, Set<string>>();
+  for (const movement of route.movements) {
+    const pair = `${placeName(movement.from_id)} → ${placeName(movement.to_id)}`;
+    for (const assumption of movement.assumptions) {
+      const transfer = /^(.+): (\d+) minute airport transfer assumption; road routing unavailable$/.exec(assumption);
+      if (transfer) {
+        const key = `transfer:${transfer[2]}`;
+        const cities = transferCities.get(key) ?? new Set<string>();
+        transferCities.set(key, cities.add(transfer[1]));
+        // Map.set keeps the note at the position of its first city.
+        notes.set(key, { text: `Airport transfer times are estimates (${formatDuration(Number(transfer[2]))} each, no road data): ${[...cities].join(", ")}.`, action: "transfer-times" });
+        continue;
+      }
+      const text = assumptionText(assumption, pair);
+      if (!notes.has(text)) notes.set(text, { text, action: null });
+    }
+  }
+  const estimates = route.purchases.filter(isEstimate).length;
+  if (estimates) notes.set("estimates", { text: `${estimates === 1 ? "1 price is an estimate" : `${estimates} prices are estimates`} (your prices, rules or older quotes).`, action: null });
+  return [...notes.values()];
+}
+
+// ---------------------------------------------------------------- trip
+
+const placeNames = (places: { name: string }[], home: { name: string } | null) => (places.length ? places : home ? [home] : []).map(place => place.name).join(" or ") || "home";
+
+/** The two summary lines of a trip (C3): its places, then dates, departure times, adults, budget and transport. */
+export function tripSummary(draft: TripDraft) {
+  const visits = draft.visits.map(visit => visit.min_stay_hours > 0 ? `${visit.place.name} ${visit.min_stay_hours} h+` : visit.place.name).join(", ");
+  const route = `${placeNames(draft.departures, draft.home)} → ${visits}${draft.visits.length > 1 ? " (any order)" : ""} → ${placeNames(draft.arrivals, draft.home)}`;
+  const details = [
+    `${dateRange(draft.start_date, draft.end_date)} (${draft.date_mode === "fixed" ? "exact dates" : "any days"})`,
+    `leave ${hhmm(draft.departure_start)}–${hhmm(draft.departure_end)}`,
+    plural(draft.adults, "adult"),
+    draft.budget_myr === null ? "no budget" : `budget ${moneyShort(draft.budget_myr)}`,
+    modes.filter(mode => draft.modes.includes(mode)).map(modeLabel).join(", "),
+  ].join(" · ");
+  return { route, details };
+}
+
+/** One More settings group: its summary line, and its non-default parts for the More settings summary (none = all default). */
+export type SettingsSummary = { summary: string; changes: string[] };
+/** Summary lines of the More settings groups (G). `batchSize` is the requests per search batch, kept outside the trip. */
+export function settingsSummaries(draft: TripDraft, batchSize: number): Record<"places" | "departures" | "buffers" | "appointments" | "cars" | "prices" | "timetables" | "searchSize", SettingsSummary> {
+  const defaults = blankTrip();
+  // Each part is [text, changed from the default].
+  const group = (parts: [string, boolean][], fallback?: string): SettingsSummary => {
+    const changes = parts.filter(([, changed]) => changed).map(([text]) => capitalize(text));
+    return { summary: fallback && !changes.length ? fallback : capitalize(parts.map(([text]) => text).join(" · ")), changes };
+  };
+  const homeOnly = (places: { id: string }[]) => !places.length || (places.length === 1 && places[0].id === draft.home?.id);
+  const journeys = draft.positioning_services?.length ?? 0;
+  const places = group([
+    [`Start: ${placeNames(draft.departures, draft.home)}`, !homeOnly(draft.departures)],
+    [`End: ${placeNames(draft.arrivals, draft.home)}`, !homeOnly(draft.arrivals)],
+    ...(draft.home_departure_earliest ? [[`leave home after ${hhmm(draft.home_departure_earliest)}`, true] as [string, boolean]] : []),
+    ...(draft.home_arrival_latest ? [[`be home by ${hhmm(draft.home_arrival_latest)}`, true] as [string, boolean]] : []),
+    ...(journeys ? [[plural(journeys, "journey"), true] as [string, boolean]] : []),
+  ], "Home only");
+
+  const leave = (trip: TripDraft) => `${hhmm(trip.departure_start)}–${hhmm(trip.departure_end)}`;
+  const transfers = draft.max_transfers === null ? "any number of changes" : draft.max_transfers === 0 ? "no changes" : `max ${plural(draft.max_transfers, "change")}`;
+  const departures = group([
+    [`leave ${leave(draft)}`, leave(draft) !== leave(defaults)],
+    [transfers, draft.max_transfers !== defaults.max_transfers],
+    [draft.allow_overnight ? "overnight allowed" : "no overnight journeys", draft.allow_overnight !== defaults.allow_overnight],
+  ]);
+
+  const timing = draft.timing;
+  const changed = (...keys: (keyof TripDraft["timing"])[]) => keys.some(key => timing[key] !== defaults.timing[key]);
+  const buffers = group([
+    [`flights ${timing.flight_before_minutes} + ${timing.flight_after_minutes} min`, changed("flight_before_minutes", "flight_after_minutes")],
+    [`trains and buses ${timing.transit_before_minutes} + ${timing.transit_after_minutes} min`, changed("transit_before_minutes", "transit_after_minutes")],
+    [`changes ${timing.connection_minutes} min`, changed("connection_minutes")],
+    [timing.airport_transfer_fallback_minutes === null ? "no default airport transfer time" : `airport transfer ${timing.airport_transfer_fallback_minutes} min`, changed("airport_transfer_fallback_minutes")],
+  ]);
+
+  const first = draft.commitments[0];
+  let appointments: SettingsSummary = { summary: "None", changes: [] };
+  if (first) {
+    const place = draft.visits.find(visit => visit.place.id === first.place_id)?.place;
+    const zone = place?.timezone ?? "UTC";
+    const sameDay = formatLocal(first.start, zone, "date") === formatLocal(first.end, zone, "date");
+    const count = draft.commitments.length;
+    appointments = {
+      summary: `${count}: ${place?.name ?? first.place_id} ${formatLocal(first.start, zone)}–${formatLocal(first.end, zone, sameDay ? "time" : "datetime")}${count > 1 ? ", …" : ""}`,
+      changes: [plural(count, "appointment")],
+    };
+  }
+
+  const carText = [draft.cars.own_enabled ? "own car" : "", draft.cars.rental_enabled ? "rental car" : ""].filter(Boolean).join(", ");
+  const cars = group([[carText || "not used", !!carText]]);
+
+  const currencies = ["MYR", ...Object.keys(draft.exchange_rates).filter(code => code !== "MYR")];
+  const prices = group([
+    [currencies.length > 1 ? currencies.join(", ") : "MYR only", currencies.length > 1],
+    ...(draft.exclude_unpriced_flights ? [["flights without a price skipped", true] as [string, boolean]] : []),
+  ]);
+
+  const rail = draft.rail_fallback;
+  const timetables = rail?.enabled
+    ? { summary: `On · stations within ${rail.station_radius_km} km · up to ${rail.max_shift_days} days`, changes: ["Estimated train timetables"] }
+    : { summary: "Off", changes: [] };
+
+  const searchSize = group([[`${plural(batchSize, "request")} per batch`, batchSize !== defaultBatchSize]]);
+  return { places, departures, buffers, appointments, cars, prices, timetables, searchSize };
+}
+
+/**
+ * Errors that keep the trip from saving or searching, keyed by field. The keys are in the order the
+ * settings footer reports them, so the first value is the footer's reason.
+ */
+export function validateDraft(draft: TripDraft): Record<string, string> {
+  const errors: Record<string, string> = {};
+  if (!draft.home) errors.home = "Add your home city.";
+  if (!draft.visits.length) errors.visits = "Add at least one city to visit.";
+  if (!draft.modes.length) errors.modes = "Choose at least one type of transport.";
+  if (!draft.start_date || !draft.end_date) errors.dates = "Choose a start date and an end date.";
+  else if (draft.end_date < draft.start_date) errors.dates = "The end date must be on or after the start date.";
+  else if ((Date.parse(draft.end_date) - Date.parse(draft.start_date)) / 86_400_000 > 365) errors.dates = "Choose up to 365 days.";
+  if (!draft.departure_start || !draft.departure_end) errors.departureWindow = "Enter both departure times.";
+  else if (hhmm(draft.departure_end) <= hhmm(draft.departure_start)) errors.departureWindow = "The latest departure must be after the earliest.";
+  if (draft.start_date === draft.end_date && draft.home_departure_earliest && draft.home_arrival_latest && hhmm(draft.home_arrival_latest) <= hhmm(draft.home_departure_earliest)) errors.homeTimes = "Be home after you leave home.";
+  if (draft.visits.some(visit => !(visit.min_stay_hours >= 0 && visit.min_stay_hours <= 8760))) errors.stays = "Enter 0 to 8,760 hours.";
+  if (!Number.isInteger(draft.adults) || draft.adults < 1 || draft.adults > 9) errors.adults = "Enter 1 to 9 adults.";
+  if (draft.budget_myr !== null && !(draft.budget_myr >= 0)) errors.budget = "Enter 0 or more, or leave it blank.";
+  return errors;
+}
+
+// ---------------------------------------------------------------- refinement
+
+export type AirportChangeRow = {
+  from_airport: string; to_airport: string; from_name: string; to_name: string;
+  journey_count: number; unresolved_journey_count: number; required: boolean;
+  mode: AirportTransferMode | ""; duration_minutes: number | null; fare_amount: number | null; currency: string;
+};
+
+// The same list as required_airport_connections in planner_discovery.py, without its sort.
+function requiredAirportConnections(movements: Movement[]): AirportConnectionRequirement[] {
+  const pairs = new Map<string, AirportConnectionRequirement>();
+  for (const movement of movements) {
+    if (movement.source !== "Google Flights / fast-flights") continue;
+    const flights = movement.segments.filter(segment => segment.mode === "flight");
+    flights.slice(1).forEach((following, i) => {
+      const previous = flights[i];
+      const from_airport = previous.to_id, to_airport = following.from_id;
+      if (!from_airport || !to_airport || from_airport === to_airport) return;
+      const key = `${from_airport}>${to_airport}`;
+      const pair = pairs.get(key) ?? { from_airport, to_airport, from_name: previous.to_name ?? from_airport, to_name: following.from_name ?? to_airport, journey_count: 0, unresolved_journey_count: 0 };
+      pairs.set(key, pair);
+      pair.journey_count++;
+      if (movement.assumptions.some(text => text.startsWith(`Airport change ${from_airport} → ${to_airport}:`) || text.startsWith(`Airport connection ${from_airport} → ${to_airport} `))) pair.unresolved_journey_count++;
+    });
+  }
+  return [...pairs.values()];
+}
+
+/**
+ * One row per directed airport pair that journeys need or that the trip has saved, sorted by pair.
+ * The requirements come from the result's coverage first: after a change of search inputs, the PUT
+ * record's snapshot can be a shared search graph without the trip's airport changes. A result reused
+ * during a search has no requirements in its coverage.
+ */
+export function airportChangeRows(saved: Pick<SavedTrip, "snapshot" | "airport_connections" | "airport_connections_required">, coverage?: Pick<Coverage, "airport_connections_required">): AirportChangeRow[] {
+  const requirements = coverage?.airport_connections_required ?? saved.airport_connections_required ?? requiredAirportConnections(saved.snapshot?.movements ?? []);
+  const requiredByPair = new Map(requirements.map(item => [`${item.from_airport}>${item.to_airport}`, item]));
+  const connectionByPair = new Map((saved.airport_connections ?? []).map(item => [`${item.from_airport}>${item.to_airport}`, item]));
+  const keys = [...new Set([...requiredByPair.keys(), ...connectionByPair.keys()])].sort();
+  return keys.map(key => {
+    const requirement = requiredByPair.get(key);
+    const connection = connectionByPair.get(key);
+    const [from_airport, to_airport] = key.split(">");
+    return {
+      from_airport, to_airport,
+      from_name: requirement?.from_name ?? from_airport,
+      to_name: requirement?.to_name ?? to_airport,
+      journey_count: requirement?.journey_count ?? 0,
+      unresolved_journey_count: requirement?.unresolved_journey_count ?? 0,
+      required: !!requirement,
+      mode: connection?.mode ?? "",
+      duration_minutes: connection?.duration_minutes ?? null,
+      fare_amount: connection?.fare_amount ?? null,
+      currency: connection?.currency ?? "MYR",
+    };
+  });
+}
+
+const unresolvedAccessText = ": airport access time is unresolved";
+/** Journeys that can't be used because an airport transfer time is unknown (no road time and no default time). */
+export function unresolvedAccessJourneys<T extends { assumptions: string[] }>(movements: T[]): T[] {
+  return movements.filter(movement => movement.assumptions.some(text => text.includes("airport access time is unresolved")));
+}
+// The server writes "{city}: airport access time is unresolved; …".
+function unresolvedAccessCities(movements: { assumptions: string[] }[]) {
+  return [...new Set(movements.flatMap(movement => movement.assumptions.filter(text => text.includes(unresolvedAccessText)).map(text => text.slice(0, text.indexOf(unresolvedAccessText)))))];
+}
+
+/** Connections the user added to the trip. */
+export function assumedConnections(saved: Pick<SavedTrip, "snapshot" | "assumed_connections">): Movement[] {
+  return saved.assumed_connections ?? (saved.snapshot?.movements ?? []).filter(movement => movement.source === "User-defined connection");
+}
+
+/** Pairs of cities to visit with no journey in either direction. Empty before the first search. */
+export function cityGaps(saved: Pick<SavedTrip, "spec" | "snapshot" | "city_connection_gaps">): { from_id: string; to_id: string }[] {
+  if (saved.city_connection_gaps) return saved.city_connection_gaps;
+  if (!saved.snapshot) return [];
+  const pairs = new Set(saved.snapshot.movements.map(movement => `${movement.from_id}\n${movement.to_id}`));
+  const ids = saved.spec.visits.map(visit => visit.place.id);
+  return ids.flatMap((a, i) => ids.slice(i + 1)
+    .filter(b => !pairs.has(`${a}\n${b}`) && !pairs.has(`${b}\n${a}`))
+    .map(b => ({ from_id: a, to_id: b })));
+}
+
+/** One charge of an airport transfer direction in the current results, with the purchase that prices it. */
+export type TransferJourney = { charge: Charge; movement: Movement; offer: Offer | undefined };
+export type TransferDirection = AirportTransferRow & {
+  /** "missing": some option has no price for it; "priced": used and priced; "unused": no option uses it. */
+  state: "missing" | "priced" | "unused";
+  /** Options that use this direction, and options in which it has no price. */
+  options: number; missing: number;
+  /** Its charges in the current results, once each. */
+  journeys: TransferJourney[];
+  /** Journeys priced by a price the user set for that journey. */
+  ownPrices: number;
+  /** "Price missing · in 9 options", "RM 130 for 2 adults" or "Not used now". */
+  status: string;
+};
+/**
+ * One entry per airport transfer row (F2 Airport transfers), with its use in `routes` (best, weaker
+ * and over-budget options). Order: missing (most options first), then priced, then unused; ties keep
+ * the server's label order.
+ */
+export function transferDirections(rows: AirportTransferRow[], routes: Route[], adults: number, rates: Record<string, number>): TransferDirection[] {
+  const uses = new Map(rows.map(row => [`${row.from_id}>${row.to_id}`, { journeys: new Map<string, TransferJourney>(), used: new Set<string>(), missing: new Set<string>() }]));
+  for (const route of routes) {
+    const offers = new Map(route.purchases.flatMap(offer => offer.movement_ids.map(id => [id, offer] as const)));
+    for (const movement of route.movements) for (const charge of movement.charges) {
+      const use = (charge.kind === "Airport access" || charge.kind === "Airport egress") && uses.get(`${charge.from_id}>${charge.to_id}`);
+      if (!use) continue;
+      const offer = offers.get(charge.id);
+      if (!use.journeys.has(charge.id)) use.journeys.set(charge.id, { charge, movement, offer });
+      use.used.add(route.id);
+      if (!offer || !isPriced(offer, rates)) use.missing.add(route.id);
+    }
+  }
+  const rank = { missing: 0, priced: 1, unused: 2 };
+  return rows.map((row): TransferDirection => {
+    const use = uses.get(`${row.from_id}>${row.to_id}`)!;
+    const journeys = [...use.journeys.values()];
+    const state = use.missing.size ? "missing" : use.used.size ? "priced" : "unused";
+    const priced = journeys.flatMap(journey => journey.offer && isPriced(journey.offer, rates) ? [journey.offer] : []);
+    // A journey's own price is an exception to the direction's price (F5); own prices show only when every journey has one.
+    const directionPrices = priced.filter(offer => offer.source !== "user");
+    const amounts = [...new Set((directionPrices.length ? directionPrices : priced).map(offerAmount))];
+    return {
+      ...row, state, journeys,
+      options: use.used.size, missing: use.missing.size,
+      ownPrices: journeys.filter(journey => journey.offer?.source === "user").length,
+      status: state === "missing" ? `Price missing · in ${plural(use.missing.size, "option")}` : state === "unused" ? "Not used now" : `${amounts.join(", ")} for ${plural(adults, "adult")}`,
+    };
+  }).sort((a, b) => rank[a.state] - rank[b.state] || b.missing - a.missing);
+}
+
+/**
+ * Splits missing-price groups for Missing info: airport access and egress groups that match a transfer row
+ * belong to Airport transfers; the rest are Journey prices. Airport change groups ("Airport transfer …") belong to neither.
+ */
+export function splitGroups(groups: MissingFareGroup[], rows: AirportTransferRow[]) {
+  const pairs = new Set(rows.map(row => `${row.from_id}>${row.to_id}`));
+  const transfers: MissingFareGroup[] = [], journeys: MissingFareGroup[] = [];
+  for (const group of groups) {
+    if (group.label.startsWith("Airport transfer ")) continue;
+    const transfer = (group.label === "Airport access" || group.label === "Airport egress") && pairs.has(`${group.from_id}>${group.to_id}`);
+    (transfer ? transfers : journeys).push(group);
+  }
+  return { transfers, journeys };
+}
+
+/**
+ * Combined-ticket searches for this option (E9.5): every leg matches one of its flights by places and
+ * by the local date of the flight's first departure, as the server builds them.
+ */
+export function matchingQuoteLinks<L extends { legs: { from_id: string; to_id: string; date: string }[] }>(links: L[], route: Pick<Route, "movements">, zoneOf: (placeId: string) => string): L[] {
+  const flights = new Set(route.movements.filter(movement => movement.mode === "flight").map(movement => {
+    const departure = movement.segments.find(segment => segment.mode === "flight" && segment.departure)?.departure ?? movement.departure;
+    return `${movement.from_id}>${movement.to_id}>${departure ? dateFormat(zoneOf(movement.from_id), "iso").format(new Date(departure)) : ""}`;
+  }));
+  return links.filter(link => link.legs.length > 0 && link.legs.every(leg => flights.has(`${leg.from_id}>${leg.to_id}>${leg.date}`)));
+}
+
+/** What blocks the decision (F1, F2). `routes` are the best options. */
+export type RefinementState = {
+  routes: Route[];
+  airportChanges: AirportChangeRow[];
+  /** unresolvedAccessJourneys() of the result's coverage. */
+  unresolvedAccess: { assumptions: string[] }[];
+  directions: TransferDirection[];
+  /** splitGroups() of the missing-price groups. */
+  groups: { transfers: MissingFareGroup[]; journeys: MissingFareGroup[] };
+  gaps: { from_id: string; to_id: string }[];
+};
+
+/** Items that need input (F2): the Missing info tab badge and status. */
+export function needsInputCount(state: RefinementState) {
+  return state.airportChanges.filter(row => row.unresolved_journey_count > 0).length
+    + state.directions.filter(direction => direction.state === "missing").length
+    + state.groups.journeys.length
+    + unresolvedAccessCities(state.unresolvedAccess).length
+    + (state.routes.length ? 0 : state.gaps.length);
+}
+
+/** Where a next step's button goes. */
+export type NextStepTarget = "airport-changes" | "airport-fallback" | "prices" | "exchange-rate" | "show-unpriced-flights";
+export type NextStep = { id: string; tone: "warn" | "info"; text: string; action: { label: string; target: NextStepTarget } | null };
+/** The Next steps rows (F1), in priority order. Rows about search scope wait for the first search. */
+export function buildNextSteps(state: RefinementState & {
+  searched: boolean; budget: number | null; rates: Record<string, number>;
+  excludeUnpricedFlights: boolean;
+  /** Transit search is not set up on the server and a transit mode is on. */
+  transitOff: boolean;
+}): NextStep[] {
+  const steps: NextStep[] = [];
+  const blocked = state.airportChanges.filter(row => row.unresolved_journey_count > 0);
+  if (blocked.length) {
+    const journeys = plural(blocked.reduce((sum, row) => sum + row.unresolved_journey_count, 0), "flight journey");
+    const what = blocked.length === 1 ? `the transfer from ${blocked[0].from_airport} to ${blocked[0].to_airport} airport` : `${blocked.length} airport transfers (${blocked.map(row => `${row.from_airport} → ${row.to_airport}`).join(", ")})`;
+    steps.push({ id: "airport-changes", tone: "warn", text: `${journeys} can't be used until you add ${what}.`, action: { label: "Add airport transfer", target: "airport-changes" } });
+  }
+  if (state.unresolvedAccess.length) {
+    const count = state.unresolvedAccess.length;
+    steps.push({ id: "access-time", tone: "warn", text: `${plural(count, "journey")} can't be used: the airport transfer time is unknown in ${unresolvedAccessCities(state.unresolvedAccess).join(", ")}.`, action: { label: "Set default time", target: "airport-fallback" } });
+  }
+  const unbounded = state.routes.filter(route => route.cost_high_myr === null);
+  if (unbounded.length) {
+    const total = state.routes.length;
+    const lead = unbounded.length === total ? "No option has a complete price yet" : `${unbounded.length} of ${total} options ${unbounded.length === 1 ? "is" : "are"} not fully priced`;
+    // Rows the user fills: transfer directions, then journey groups by mode.
+    const byMode = (test: (mode: string) => boolean) => state.groups.journeys.filter(group => test(group.mode)).length;
+    const counts: [number, string][] = [
+      [state.directions.filter(direction => direction.state === "missing").length, "airport transfer price"],
+      [byMode(mode => mode === "flight"), "flight price"],
+      [byMode(mode => mode === "rail"), "train price"],
+      [byMode(mode => mode !== "flight" && mode !== "rail"), "other price"],
+    ];
+    const parts = counts.filter(([count]) => count > 0);
+    const missing = parts.reduce((sum, [count]) => sum + count, 0);
+    // Options that only airport transfer prices keep from a complete price.
+    const transfersOnly = unbounded.filter(route => {
+      const kinds = itemKinds(route);
+      const open = route.purchases.filter(offer => !isPriced(offer, state.rates) || offer.high === null);
+      return open.length > 0 && open.every(offer => kinds.get(offer.movement_ids[0]) === "transfer");
+    }).length;
+    const text = [
+      parts.length ? `${lead}: ${joinAnd(parts.map(([count, word]) => plural(count, word)))} ${missing === 1 ? "is" : "are"} missing.` : `${lead}.`,
+      ...(transfersOnly ? [`${plural(transfersOnly, "option")} ${transfersOnly === 1 ? "needs" : "need"} only airport transfer prices.`] : []),
+      ...(state.budget !== null ? [`Until then, options may exceed your ${moneyShort(state.budget)} budget.`] : []),
+    ].join(" ");
+    steps.push({ id: "prices", tone: "warn", text, action: { label: "Add prices", target: "prices" } });
+  }
+  const currencies = [...new Set([...state.groups.transfers, ...state.groups.journeys].filter(group => group.reason === "exchange_rate").map(group => group.currency))];
+  if (currencies.length) steps.push({ id: "exchange-rates", tone: "warn", text: `Prices in ${joinAnd(currencies)} need ${currencies.length === 1 ? "an exchange rate" : "exchange rates"}.`, action: { label: "Add rate", target: "exchange-rate" } });
+  if (state.searched && state.excludeUnpricedFlights) steps.push({ id: "unpriced-flights", tone: "info", text: "Options that need a flight without a price are hidden.", action: { label: "Show them", target: "show-unpriced-flights" } });
+  if (state.searched && state.transitOff) steps.push({ id: "transit", tone: "info", text: "Trains, buses, coaches, subways and trams were not searched: transit search is not set up on this server.", action: null });
+  return steps;
+}

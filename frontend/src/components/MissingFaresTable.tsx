@@ -3,11 +3,13 @@ import { Button } from "./ui/button";
 import { FareEditor } from "./PlannerForms";
 import type { Offer } from "../lib/planner";
 import type { MissingFareGroup } from "../lib/missingFares";
+import { activeFares, canonicalIds, stageFare, type SharedFare } from "../lib/drafts";
 
-export type SharedFare = { component_ids: string[]; low: number; high: number | null; currency: string; label: string };
 export type AppliedSharedFareGroup = { key: string; component_ids: string[]; low: number | null; high: number | null; currency: string; mixed_amounts: boolean; mixed_currency: boolean; label: string };
 type Props = {
   storageKey: string; groups: MissingFareGroup[]; appliedGroups: AppliedSharedFareGroup[]; placeName: (id: string) => string;
+  /** Route movement id → template id. Prices are staged on template ids. */
+  templateOf: Map<string, string>;
   offerFor: (id: string) => Offer | undefined;
   onApply: (fares: SharedFare[]) => Promise<void>;
   onSave: (offer: Offer) => Promise<void>; onRemove: (id: string) => Promise<void>;
@@ -106,7 +108,10 @@ export function MissingFaresTable(props: Props) {
   const [pending, setPending] = useState<Record<string, SharedFare>>(() => {
     try {
       const value = JSON.parse(localStorage.getItem(props.storageKey) ?? "{}");
-      return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+      if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+      // Drafts staged before prices moved to template ids can hold variant ids. Convert them like stage().
+      return Object.entries(value as Record<string, SharedFare>).reduce((drafts, [key, fare]) =>
+        stageFare(drafts, key, { ...fare, component_ids: canonicalIds(fare.component_ids, props.templateOf) }), {} as Record<string, SharedFare>);
     } catch { return {}; }
   });
   const [busy, setBusy] = useState(false);
@@ -114,31 +119,23 @@ export function MissingFaresTable(props: Props) {
   useEffect(() => {
     try { localStorage.setItem(props.storageKey, JSON.stringify(pending)); } catch { /* Keep drafts in memory if storage is unavailable. */ }
   }, [pending, props.storageKey]);
-  const editableIds = new Set([
+  const editableIds = new Set(canonicalIds([
     ...props.groups.flatMap(group => group.components.map(c => c.component_id)),
     ...props.appliedGroups.flatMap(group => group.component_ids),
-  ]);
-  const active = Object.values(pending).flatMap(staged => {
-    const component_ids = staged.component_ids.filter(id => editableIds.has(id));
-    return component_ids.length ? [{ ...staged, component_ids }] : [];
-  });
+  ], props.templateOf));
+  const active = activeFares(pending, editableIds);
   function stage(key: string, fare: SharedFare) {
-    setPending(values => {
-      const overwritten = new Set(fare.component_ids);
-      const remaining = Object.fromEntries(Object.entries(values).flatMap(([id, value]) => {
-        const component_ids = value.component_ids.filter(id => !overwritten.has(id));
-        return component_ids.length ? [[id, { ...value, component_ids }]] : [];
-      }));
-      return { ...remaining, [key]: fare };
-    });
+    setPending(values => stageFare(values, key, { ...fare, component_ids: canonicalIds(fare.component_ids, props.templateOf) }));
   }
   const stagedOffer = (id: string): Offer | undefined => {
-    const draft = active.find(value => value.component_ids.includes(id));
-    return draft ? { id: `draft:${id}`, movement_ids: [id], kind: "charge", source: "user",
+    const key = props.templateOf.get(id) ?? id;
+    const draft = active.find(value => value.component_ids.includes(key));
+    return draft ? { id: `draft:${key}`, movement_ids: [key], kind: "charge", source: "user",
       estimated: true, validated: true, low: draft.low, high: draft.high, currency: draft.currency, label: draft.label } : props.offerFor(id);
   };
   async function stageIndividual(offer: Offer) {
-    stage(`component:${offer.movement_ids[0]}`, { component_ids: offer.movement_ids,
+    const [id] = canonicalIds(offer.movement_ids, props.templateOf);
+    stage(`component:${id}`, { component_ids: [id],
       low: offer.low!, high: offer.high, currency: offer.currency, label: offer.label });
   }
   async function removeIndividual(id: string) {

@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { loadTs } from "./loadTs.mjs";
 const {
-  airportChangeRows, appError, assumedConnections, assumptionNotes, buildNextSteps, bundleStatusLabel, cityGaps, compareText, dateRange, formatDuration,
-  formatLocal, matchingQuoteLinks, modeLabel, moneyShort, needsInputCount, perCityHourText, priceEstimated, priceText, routeChain, routeSignature,
-  searchDetails, searchState, settingsSummaries, sortRoutes, sourceLabel, splitGroups, stepLabel, transferDirections, tripSummary, unpricedSummary,
-  unresolvedAccessJourneys, validateDraft,
+  airportChangeRows, appError, assumedConnections, assumptionNotes, buildNextSteps, bundleStatusLabel, cityGaps, compareText, dateModeText, dateRange, formatDuration,
+  formatLocal, matchingQuoteLinks, modeLabel, moneyShort, needsInputCount, partySizeNotice, perCityHourText, priceEstimated, priceText, routeChain, routeSignature,
+  searchDetails, searchState, settingsFooter, settingsSummaries, sortRoutes, sourceLabel, splitGroups, stepLabel, staySumWarning, transferDirections, tripSummary,
+  unpricedSummary, unresolvedAccessJourneys, validateDraft,
 } = await loadTs("../src/lib/present.ts");
 const { blankTrip } = await loadTs("../src/lib/planner.ts");
 
@@ -387,6 +387,50 @@ test("draft validation lists errors in the order the settings footer reports the
   assert.deepEqual(validateDraft(draftTrip({ adults: 0, budget_myr: -1, visits: [{ place: place("GMP", "Seoul"), min_stay_hours: 9000 }] })), {
     stays: "Enter 0 to 8,760 hours.", adults: "Enter 1 to 9 adults.", budget: "Enter 0 or more, or leave it blank.",
   });
+});
+
+test("date mode helper lines and the minimum stay warning", () => {
+  assert.equal(dateModeText(draftTrip()), "Leave home on 4 Dec. Be back home on 14 Dec.");
+  assert.equal(dateModeText(draftTrip({ date_mode: "flexible" })), "Leave and come back on any days from 4 to 14 Dec.");
+  assert.equal(dateModeText(draftTrip({ date_mode: "flexible", start_date: "2026-11-28" })), "Leave and come back on any days from 28 Nov to 14 Dec.");
+  assert.equal(dateModeText(draftTrip({ end_date: "" })), "");
+  // 4–14 Dec is 11 days: 264 h. The demo stays add up to 120 h.
+  assert.equal(staySumWarning(draftTrip()), null);
+  assert.equal(staySumWarning(draftTrip({ end_date: "2026-12-08" })), null);
+  assert.equal(staySumWarning(draftTrip({ end_date: "2026-12-07" })), "Minimum stays add up to 120 h, but these dates allow at most 96 h.");
+  assert.equal(staySumWarning(draftTrip({ end_date: "2026-12-01" })), null);
+});
+
+test("the party-size notice counts your prices and airport transfer prices for another number of adults", () => {
+  const offer = (id, source, adults) => ({ id, source, adults, movement_ids: [id], kind: "one-way", low: 1, high: 1, currency: "MYR", estimated: true, label: "", validated: true });
+  const estimate = adults => ({ mode: "taxi", duration_minutes: null, from_id: "KUL", to_id: "airport:KUL", adults, low: 95, high: 95, currency: "MYR" });
+  // The priced demo trip: 2 user prices and 14 airport transfer prices, all for 2 adults.
+  const saved = { offers: [offer("user:a", "user", 2), offer("user:b", "user", 2), offer("p", "provider", 3), offer("user:old", "user", null)], airport_transfer_estimates: Array.from({ length: 14 }, () => estimate(2)) };
+  assert.equal(partySizeNotice(saved, 2), null);
+  assert.equal(partySizeNotice(saved, 3), "16 prices you entered are for 2 adults. They are not used for 3 adults.");
+  assert.equal(partySizeNotice({ offers: [offer("user:a", "user", 1)], airport_transfer_estimates: [estimate(3)] }, 2), "2 prices you entered are for 1 or 3 adults. They are not used for 2 adults.");
+  assert.equal(partySizeNotice({ offers: [offer("user:a", "user", 1)] }, 2), "1 price you entered is for 1 adult. It is not used for 2 adults.");
+  assert.equal(partySizeNotice(null, 2), null);
+});
+
+test("the settings footer states", () => {
+  const flags = { errors: {}, isNew: false, searched: true, active: false, stale: false };
+  const labels = state => state.buttons.map(button => button.label);
+  const fresh = settingsFooter({ ...flags, isNew: true, searched: false });
+  assert.equal(fresh.text, "Ready. The search can take a few minutes.");
+  assert.deepEqual(labels(fresh), ["Save without searching", "Search transport"]);
+  assert.deepEqual(fresh.buttons.map(button => button.run), ["save", "search"]);
+  // The result of a trip that was never searched is marked stale too.
+  assert.deepEqual(labels(settingsFooter({ ...flags, searched: false, stale: true })), ["Search transport"]);
+  const stale = settingsFooter({ ...flags, stale: true });
+  assert.deepEqual([stale.text, labels(stale), stale.disabled], ["Your changes need a new search.", ["Search again"], false]);
+  const idle = settingsFooter(flags);
+  assert.deepEqual([idle.text, labels(idle)], ["", ["Start a new search"]]);
+  assert.equal(idle.buttons[0].tip, "Starts the search again from the beginning. Saved provider responses are reused.");
+  const active = settingsFooter({ ...flags, active: true, stale: true });
+  assert.deepEqual([active.text, active.disabled], ["Searching…", true]);
+  const invalid = settingsFooter({ ...flags, isNew: true, searched: false, errors: { home: "Add your home city.", modes: "Choose at least one type of transport." } });
+  assert.deepEqual([invalid.text, labels(invalid), invalid.disabled], ["Add your home city.", ["Save without searching", "Search transport"], true]);
 });
 
 test("airport transfer directions show their use, missing prices, own prices and order", () => {

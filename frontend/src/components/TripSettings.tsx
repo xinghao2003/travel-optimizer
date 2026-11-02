@@ -1,0 +1,378 @@
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { ChevronDown, LoaderCircle, Play } from "lucide-react";
+import { Button } from "./ui/button";
+import { InfoTip } from "./InfoTip";
+import { Field, NumberField, PlacePicker } from "./PlannerForms";
+import { PositioningSettings } from "./PositioningSettings";
+import { dateModeText, formatLocal, modeLabel, settingsSummaries, staySumWarning, type FooterState, type SettingsSummary } from "../lib/present";
+import { localInputToISO, modes, type Place, type TripDraft, type TripSpec } from "../lib/planner";
+
+const transitModes = ["rail", "bus", "coach", "subway", "tram"];
+const count = (n: number, word: string) => `${n} ${n === 1 ? word : `${word}s`}`;
+/** "2 days", "1.5 days" or "no minimum": the minimum stay of a city in days. */
+const stayDays = (hours: number) => hours > 0 ? count(Number((hours / 24).toFixed(1)), "day") : "no minimum";
+
+/**
+ * Trip settings (C4): the core fields, More settings (G) and the sticky footer with the search actions.
+ * `errors` is validateDraft(draft). The forms in More settings show their own errors inline (C2).
+ */
+export function TripSettings({ draft, edit, places, errors, transitConfigured, searchActive, partyNotice, isNew, footer, busyAction, onSearch, onSaveOnly, batchSize, onBatchSize }: {
+  draft: TripDraft; edit: (value: TripDraft) => void; places: Place[]; errors: Record<string, string>;
+  transitConfigured: boolean; searchActive: boolean; partyNotice: string | null; isNew: boolean;
+  footer: FooterState; busyAction: string | null; onSearch: () => void; onSaveOnly: () => void;
+  /** Requests per search batch: kept in memory, not in the trip. */
+  batchSize: number; onBatchSize: (value: number) => void;
+}) {
+  const reasonId = useId(), modesErrorId = useId(), dateModeName = useId(), windowErrorId = useId();
+  const changeHome = useRef<HTMLButtonElement>(null);
+  const [changingHome, setChangingHome] = useState(false);
+  // Polite status lines for what a change removed as well.
+  const [homeStatus, setHomeStatus] = useState("");
+  const [visitStatus, setVisitStatus] = useState("");
+  // Change opens the home picker and moves focus into it; choosing a place or Cancel returns focus to Change.
+  const homeFocus = useRef<"picker" | "change" | null>(null);
+  useEffect(() => {
+    const target = homeFocus.current === "picker" ? document.getElementById("home-city") : homeFocus.current === "change" ? changeHome.current : null;
+    homeFocus.current = null;
+    target?.focus();
+  }, [changingHome, draft.home?.id]);
+
+  function chooseHome(place: Place) {
+    const journeys = draft.positioning_services?.length ?? 0;
+    if (draft.home && draft.home.id !== place.id && journeys && !window.confirm(`Changing home removes your ${count(journeys, "journey")} to start and end cities.`)) return;
+    // Home can't be a city to visit, and appointments belong to cities to visit.
+    const visit = draft.visits.some(item => item.place.id === place.id);
+    const appointments = draft.commitments.filter(item => item.place_id === place.id).length;
+    // Home stays a start and end option: the new home takes the old home's place in those lists.
+    const swap = (list: Place[]) => [...new Map(list.map(item => item.id === draft.home?.id ? place : item).map(item => [item.id, item])).values()];
+    edit({ ...draft, home: place, departures: swap(draft.departures), arrivals: swap(draft.arrivals),
+      visits: draft.visits.filter(item => item.place.id !== place.id), commitments: draft.commitments.filter(item => item.place_id !== place.id) });
+    setHomeStatus(visit ? `${place.name} removed from cities to visit.${appointments ? ` Also removed ${count(appointments, "appointment")} in ${place.name}.` : ""}` : "");
+    homeFocus.current = "change"; setChangingHome(false);
+  }
+  function removeVisit(place: Place) {
+    const appointments = draft.commitments.filter(item => item.place_id === place.id).length;
+    edit({ ...draft, visits: draft.visits.filter(item => item.place.id !== place.id), commitments: draft.commitments.filter(item => item.place_id !== place.id) });
+    setVisitStatus(appointments ? `Also removed ${count(appointments, "appointment")} in ${place.name}.` : "");
+  }
+  // Departure window › Change: opens More settings › Departure times and changes, then focuses the earliest time.
+  function changeDepartureTimes() {
+    const field = document.getElementById("setting-departure-start");
+    for (let group = field?.closest("details"); group; group = group.parentElement?.closest("details")) group.open = true;
+    field?.focus();
+  }
+
+  const visits = draft.visits;
+  const full = visits.length >= 4;
+  const firstStay = visits[0]?.min_stay_hours ?? 0;
+  const staySum = staySumWarning(draft);
+  const summaries = settingsSummaries(draft, batchSize);
+  const changed = Object.values(summaries).flatMap(group => group.changes);
+  const rail = draft.rail_fallback;
+  const home = draft.home;
+  // Home and cities to visit are missing on every new trip: the footer says so, the fields stay unmarked.
+  const placeErrors = !isNew;
+
+  return <section id="trip-settings" className="p-panel p-settings" aria-labelledby="settings-title">
+    <h2 id="settings-title">Trip settings</h2>
+    {searchActive && <p className="p-notice">A search is running. Changing places, dates, adults, transport, departure times, start and end cities or estimated train timetables stops it.</p>}
+
+    <div className="p-settings-grid">
+      <div className="p-setting">
+        {home && !changingHome ? <div className="p-field">
+          <div className="p-field-label"><span className="p-label">Home city</span><InfoTip topic="home city">The trip starts and ends here. Time at home does not count as time in cities.</InfoTip></div>
+          <div className="p-home-chip">
+            <span>{[home.name, home.country_code, home.airport_codes.join(", ")].filter(Boolean).join(" · ")}</span>
+            <button ref={changeHome} type="button" className="p-text-button" aria-label="Change home city" onClick={() => { homeFocus.current = "picker"; setChangingHome(true); }}>Change</button>
+          </div>
+        </div> : <>
+          <PlacePicker inputId="home-city" label="Home city" disabledIds={home ? [home.id] : []} onSelect={chooseHome}
+            info={<InfoTip topic="home city">The trip starts and ends here. Time at home does not count as time in cities.</InfoTip>} />
+          {home && <button type="button" className="p-text-button" onClick={() => { homeFocus.current = "change"; setChangingHome(false); }}>Cancel</button>}
+        </>}
+        <p className="p-field-status" aria-live="polite">{homeStatus}</p>
+      </div>
+
+      <div className="p-setting">
+        <PlacePicker label="Cities to visit (any order)" placeholder="Add a city: name or airport code" limitText={`${visits.length} of 4`} disabled={full}
+          hint={full ? "Up to 4 cities. Remove one to add another." : undefined} disabledIds={[home?.id ?? "", ...visits.map(visit => visit.place.id)]}
+          info={<InfoTip topic="cities to visit" align="end">The search picks the best order. Each city gets at least its minimum stay.</InfoTip>}
+          onSelect={place => { if (!full) { edit({ ...draft, visits: [...visits, { place, min_stay_hours: 0 }] }); setVisitStatus(""); } }} />
+        {placeErrors && errors.visits && <p className="p-field-error">{errors.visits}</p>}
+        {visits.length > 0 && <ul className="p-visit-rows">{visits.map((visit, i) => <li key={visit.place.id}>
+          <span className="p-visit-name">{[visit.place.name, visit.place.country_code].filter(Boolean).join(" · ")}</span>
+          <NumberField className="p-stay-field" label={<><span className="sr-only">Minimum stay in {visit.place.name}: </span>At least</>} unit="h" hint={stayDays(visit.min_stay_hours)}
+            value={visit.min_stay_hours} min={0} max={8760} message="Enter 0 to 8,760 hours."
+            onChange={n => edit({ ...draft, visits: visits.map((item, j) => j === i ? { ...item, min_stay_hours: n ?? 0 } : item) })} />
+          <button type="button" className="p-icon-button" aria-label={`Remove ${visit.place.name}`} onClick={() => removeVisit(visit.place)}>×</button>
+        </li>)}</ul>}
+        {visits.length > 1 && visits.some(visit => visit.min_stay_hours !== firstStay) && <button type="button" className="p-text-button"
+          onClick={() => edit({ ...draft, visits: visits.map(visit => ({ ...visit, min_stay_hours: firstStay })) })}>Use {firstStay} h for all cities</button>}
+        <p className="p-field-status" aria-live="polite">{visitStatus}</p>
+      </div>
+
+      {staySum && <p className="p-notice p-setting-wide">{staySum}</p>}
+
+      <div className="p-setting p-setting-wide p-dates">
+        <div className="p-date-range">
+          <Field label="Start date" info={<InfoTip topic="dates">Dates use your home city's time.</InfoTip>}>
+            <input type="date" value={draft.start_date} onChange={e => edit({ ...draft, start_date: e.target.value })} />
+          </Field>
+          <span className="p-date-to" aria-hidden="true">to</span>
+          <Field label="End date" error={errors.dates}>
+            <input type="date" min={draft.start_date} value={draft.end_date} onChange={e => edit({ ...draft, end_date: e.target.value })} />
+          </Field>
+        </div>
+        <fieldset className="p-radio-group">
+          <legend className="sr-only">Date mode</legend>
+          {([["fixed", "Exact dates"], ["flexible", "Any days in this period"]] as const).map(([mode, label]) => <label className="p-check" key={mode}>
+            <input type="radio" name={dateModeName} checked={draft.date_mode === mode} onChange={() => edit({ ...draft, date_mode: mode })} />{label}
+          </label>)}
+        </fieldset>
+        <p className="p-hint">{dateModeText(draft)}</p>
+      </div>
+
+      <div className="p-setting p-setting-wide">
+        <p className="p-departure-text">Leave between {draft.departure_start.slice(0, 5)} and {draft.departure_end.slice(0, 5)} (local time). <button type="button" className="p-text-button" aria-label="Change departure times" onClick={changeDepartureTimes}>Change</button></p>
+        {errors.departureWindow && <p className="p-field-error">{errors.departureWindow}</p>}
+      </div>
+
+      <div className="p-setting">
+        <NumberField label="Adults" value={draft.adults} min={1} max={9} integer message="Enter 1 to 9 adults." error={errors.adults}
+          onChange={n => { if (n !== null) edit({ ...draft, adults: n }); }} />
+        <div aria-live="polite">{partyNotice && <p className="p-notice">{partyNotice}</p>}</div>
+      </div>
+      <div className="p-setting">
+        <NumberField label={`Budget for ${count(draft.adults, "adult")} (MYR)`} value={draft.budget_myr} optional placeholder="No limit" message="Enter 0 or more, or leave it blank." error={errors.budget}
+          info={<InfoTip topic="budget" align="end">Total for all adults. Options that cost more than this, even at their lowest price, move to Over budget.</InfoTip>}
+          onChange={n => edit({ ...draft, budget_myr: n })} />
+      </div>
+
+      <fieldset className="p-modes p-setting-wide" aria-describedby={errors.modes ? modesErrorId : undefined}>
+        <legend>Transport<InfoTip topic="transport">Used between all places in the trip. Car needs More settings › Cars.</InfoTip></legend>
+        <div className="p-mode-chips">{modes.map(mode => <label className="p-check" key={mode}>
+          <input type="checkbox" checked={draft.modes.includes(mode)} onChange={e => edit({ ...draft, modes: e.target.checked ? [...draft.modes, mode] : draft.modes.filter(m => m !== mode) })} />{modeLabel(mode)}
+        </label>)}</div>
+        {errors.modes && <p id={modesErrorId} className="p-field-error">{errors.modes}</p>}
+      </fieldset>
+
+      {!transitConfigured && draft.modes.some(mode => transitModes.includes(mode)) && <div className="p-notice p-setting-wide">
+        <p>Trains, buses, coaches, subways and trams are not searched: transit search is not set up on this server.</p>
+        <InfoTip topic="transit search" align="end">To turn it on, set TRANSITOUS_CONTACT_URL in .env after you agree the routing use with Transitous. Then restart the server.</InfoTip>
+      </div>}
+    </div>
+
+    <details className="p-more">
+      <summary><span>More settings</span><span className="p-more-summary">{changed.length ? changed.join(" · ") : "All default"}</span><ChevronDown size={16} className="p-chevron" aria-hidden="true" /></summary>
+      <div className="p-more-body">
+        <SettingsGroup title="Start and end cities" summary={summaries.places}>
+          <PositioningSettings draft={draft} edit={edit} homeTimesError={errors.homeTimes} />
+        </SettingsGroup>
+
+        <SettingsGroup title="Departure times and changes" summary={summaries.departures}>
+          <fieldset className="p-time-range">
+            <legend>Leave between<InfoTip topic="departure times">Local time at each departure city. Applies to the scheduled departure of flights, trains and buses. Your journeys to start and end cities can be outside these times.</InfoTip></legend>
+            <div className="p-time-inputs">
+              <input id="setting-departure-start" type="time" aria-label="Earliest departure" value={draft.departure_start} onChange={e => edit({ ...draft, departure_start: e.target.value })} />
+              <span aria-hidden="true">and</span>
+              <input type="time" aria-label="Latest departure" aria-invalid={errors.departureWindow ? true : undefined} aria-describedby={errors.departureWindow ? windowErrorId : undefined}
+                value={draft.departure_end} onChange={e => edit({ ...draft, departure_end: e.target.value })} />
+            </div>
+            {errors.departureWindow && <p id={windowErrorId} className="p-field-error">{errors.departureWindow}</p>}
+          </fieldset>
+          <div className="p-group-fields">
+            <NumberField label="Max changes per journey" value={draft.max_transfers} optional integer max={10} placeholder="Any" onChange={n => edit({ ...draft, max_transfers: n })} />
+          </div>
+          <div className="p-check-row">
+            <label className="p-check"><input type="checkbox" checked={draft.allow_overnight} onChange={e => edit({ ...draft, allow_overnight: e.target.checked })} />Allow overnight journeys</label>
+            <InfoTip topic="overnight journeys">A journey is overnight when it crosses midnight in the departure city's time.</InfoTip>
+          </div>
+        </SettingsGroup>
+
+        <SettingsGroup title="Time buffers" summary={summaries.buffers}>
+          <p className="p-hint">These times are part of each journey and reduce time in cities.</p>
+          <div className="p-group-fields">
+            {bufferFields.map(([key, label, max]) => <NumberField key={key} label={label} value={draft.timing[key]} integer max={max}
+              onChange={n => { if (n !== null) edit({ ...draft, timing: { ...draft.timing, [key]: n } }); }} />)}
+            <NumberField id="setting-airport-fallback" label="Default airport transfer time (min)" value={draft.timing.airport_transfer_fallback_minutes} optional integer max={600} placeholder="None"
+              info={<InfoTip topic="default airport transfer time" align="end">Used when no road time is available. Blank: those flights can't be used until you enter a transfer time.</InfoTip>}
+              onChange={n => edit({ ...draft, timing: { ...draft.timing, airport_transfer_fallback_minutes: n } })} />
+          </div>
+        </SettingsGroup>
+
+        <SettingsGroup title="Fixed appointments" summary={summaries.appointments}>
+          <Appointments draft={draft} edit={edit} />
+        </SettingsGroup>
+
+        <SettingsGroup title="Cars" summary={summaries.cars}>
+          <Cars draft={draft} edit={edit} places={places} />
+        </SettingsGroup>
+
+        <SettingsGroup title="Prices and currencies" summary={summaries.prices}>
+          <div className="p-check-row">
+            <label className="p-check"><input type="checkbox" checked={draft.exclude_unpriced_flights ?? false} onChange={e => edit({ ...draft, exclude_unpriced_flights: e.target.checked })} />Skip flights without a price</label>
+            <InfoTip topic="skipping flights without a price">Removes options that need a flight without a price after your prices, combined tickets and rules apply. Saved schedules are kept. Other prices can still be not priced.</InfoTip>
+          </div>
+          <ExchangeRates draft={draft} edit={edit} />
+        </SettingsGroup>
+
+        <SettingsGroup title="Estimated train timetables" summary={summaries.timetables}>
+          <div className="p-check-row">
+            <label className="p-check"><input type="checkbox" checked={rail?.enabled ?? false}
+              onChange={e => edit({ ...draft, rail_fallback: { reference_date: null, max_shift_days: 180, station_radius_km: 25, ...rail, enabled: e.target.checked } })} />Use estimated train timetables when no train is found for the date</label>
+            <InfoTip topic="estimated train timetables" align="end">When the search finds no train for the date, it tries stations within the radius. For trips more than 2 weeks away it copies up to 3 matching weekdays from the reference period. Station access uses walking times.</InfoTip>
+          </div>
+          {rail?.enabled && <>
+            <div className="p-group-fields">
+              <Field label="Copy from the week starting" hint="Blank: today"><input type="date" value={rail.reference_date ?? ""} onChange={e => edit({ ...draft, rail_fallback: { ...rail, reference_date: e.target.value || null } })} /></Field>
+              <NumberField label="Maximum date shift (days)" value={rail.max_shift_days} integer min={7} max={365} onChange={n => { if (n !== null) edit({ ...draft, rail_fallback: { ...rail, max_shift_days: n } }); }} />
+              <NumberField label="Station search radius (km)" value={rail.station_radius_km} min={1} max={50} onChange={n => { if (n !== null) edit({ ...draft, rail_fallback: { ...rail, station_radius_km: n } }); }} />
+            </div>
+            <p className="p-notice">Estimated timetables are not confirmed. Check holidays, prices and seats before you book. Start a new search after you change these settings.</p>
+          </>}
+        </SettingsGroup>
+
+        <SettingsGroup title="Search size" summary={summaries.searchSize}>
+          <div className="p-group-fields">
+            <NumberField label="Requests per search batch" value={batchSize} min={1} max={500} integer
+              info={<InfoTip topic="requests per search batch">The search pauses after this many new requests to data providers. Search more runs the next batch. Saved results are reused.</InfoTip>}
+              onChange={n => { if (n !== null) onBatchSize(n); }} />
+          </div>
+        </SettingsGroup>
+      </div>
+    </details>
+
+    <div className="p-settings-footer">
+      {footer.text && <p id={reasonId} className="p-footer-reason">{footer.text}</p>}
+      <div className="p-footer-buttons">{footer.buttons.map(button => <span className="p-footer-button" key={button.label}>
+        <Button type="button" variant={button.variant} disabled={footer.disabled || busyAction !== null} aria-describedby={footer.text ? reasonId : undefined}
+          onClick={button.run === "save" ? onSaveOnly : onSearch}>
+          {button.run === "search" && (busyAction === "search" ? <LoaderCircle size={15} className="p-spin" aria-hidden="true" /> : <Play size={15} aria-hidden="true" />)}{button.label}
+        </Button>
+        {button.tip && <InfoTip topic={button.label} align="end">{button.tip}</InfoTip>}
+      </span>)}</div>
+    </div>
+  </section>;
+}
+
+/** A More settings group (G): a title, a dot when it differs from the defaults, and its summary line. */
+function SettingsGroup({ title, summary, children }: { title: string; summary: SettingsSummary; children: ReactNode }) {
+  return <details className="p-group">
+    <summary>
+      <span className="p-group-title">{title}{summary.changes.length > 0 && <><span className="p-dot" aria-hidden="true" /><span className="sr-only"> (changed)</span></>}</span>
+      <span className="p-group-summary">{summary.summary}</span>
+      <ChevronDown size={16} className="p-chevron" aria-hidden="true" />
+    </summary>
+    <div className="p-group-body">{children}</div>
+  </details>;
+}
+
+const bufferFields: [Exclude<keyof TripSpec["timing"], "airport_transfer_fallback_minutes">, string, number][] = [
+  ["connection_minutes", "Minimum change time (min)", 360],
+  ["flight_before_minutes", "At the airport before a flight (min)", 360],
+  ["flight_after_minutes", "After landing (min)", 360],
+  ["transit_before_minutes", "At the station before a train or bus (min)", 120],
+  ["transit_after_minutes", "After a train or bus (min)", 120],
+];
+
+/** More settings › Fixed appointments: times in the city's own time zone. */
+function Appointments({ draft, edit }: { draft: TripDraft; edit: (value: TripDraft) => void }) {
+  const [form, setForm] = useState({ place_id: "", start: "", end: "" });
+  const [error, setError] = useState("");
+  const cities = draft.visits.map(visit => visit.place);
+  const city = cities.find(place => place.id === form.place_id);
+  function add() {
+    try {
+      if (!city || !form.start || !form.end) throw new Error("Choose a city and both times.");
+      const start = localInputToISO(form.start, city.timezone), end = localInputToISO(form.end, city.timezone);
+      if (start >= end) throw new Error("The end must be after the start.");
+      edit({ ...draft, commitments: [...draft.commitments, { place_id: city.id, start, end }] });
+      setForm({ place_id: "", start: "", end: "" }); setError("");
+    } catch (err) { setError(err instanceof Error ? err.message : "This appointment can't be added."); }
+  }
+  return <>
+    {draft.commitments.length > 0 && <ul className="p-item-rows">{draft.commitments.map((item, i) => {
+      const place = cities.find(p => p.id === item.place_id);
+      const zone = place?.timezone ?? "UTC", name = place?.name ?? item.place_id;
+      const sameDay = formatLocal(item.start, zone, "date") === formatLocal(item.end, zone, "date");
+      const text = `${name} · ${formatLocal(item.start, zone)} – ${formatLocal(item.end, zone, sameDay ? "time" : "datetime")} (${name} time)`;
+      return <li key={`${item.place_id}:${item.start}`}><span>{text}</span>
+        <button type="button" className="p-text-button" aria-label={`Remove appointment: ${text}`} onClick={() => edit({ ...draft, commitments: draft.commitments.filter((_, j) => j !== i) })}>Remove</button>
+      </li>;
+    })}</ul>}
+    <div className="p-group-fields">
+      <Field label="City"><select value={form.place_id} onChange={e => setForm(f => ({ ...f, place_id: e.target.value }))}>
+        <option value="">Choose a city</option>{cities.map(place => <option value={place.id} key={place.id}>{place.name}</option>)}
+      </select></Field>
+      <Field label={`Starts (${city?.name ?? "city"} time)`}><input type="datetime-local" value={form.start} onChange={e => setForm(f => ({ ...f, start: e.target.value }))} /></Field>
+      <Field label="Ends"><input type="datetime-local" value={form.end} min={form.start || undefined} onChange={e => setForm(f => ({ ...f, end: e.target.value }))} /></Field>
+    </div>
+    <div className="p-form-actions">
+      <Button type="button" size="sm" variant="secondary" disabled={!cities.length} onClick={add}>Add appointment</Button>
+      {!cities.length ? <p className="p-hint">Add a city to visit first.</p> : error && <p className="p-field-error" role="alert">{error}</p>}
+    </div>
+  </>;
+}
+
+/** More settings › Cars. The fields of a toggle show only while it is on; their values are kept. */
+function Cars({ draft, edit, places }: { draft: TripDraft; edit: (value: TripDraft) => void; places: Place[] }) {
+  const car = draft.cars;
+  const set = <K extends keyof TripSpec["cars"]>(key: K, value: TripSpec["cars"][K]) => edit({ ...draft, cars: { ...car, [key]: value } });
+  return <>
+    <label className="p-check"><input type="checkbox" checked={car.own_enabled} onChange={e => set("own_enabled", e.target.checked)} />Use my car (it starts and ends at home)</label>
+    {car.own_enabled && <div className="p-group-fields">
+      <NumberField label="Seats" value={car.own_capacity} min={1} max={9} integer onChange={n => { if (n !== null) set("own_capacity", n); }} />
+      <NumberField label="Cost per km (MYR)" value={car.own_cost_per_km} onChange={n => { if (n !== null) set("own_cost_per_km", n); }} />
+    </div>}
+    <label className="p-check"><input type="checkbox" checked={car.rental_enabled} onChange={e => set("rental_enabled", e.target.checked)} />Allow rental cars</label>
+    {car.rental_enabled && <>
+      <div className="p-group-fields">
+        <NumberField label="Seats per car" value={car.rental_capacity} min={1} max={9} integer onChange={n => { if (n !== null) set("rental_capacity", n); }} />
+        <NumberField label="Price per day (MYR, optional)" value={car.rental_daily_myr} optional onChange={n => set("rental_daily_myr", n)} />
+        <NumberField label="Pickup fee per car (MYR)" value={car.rental_pickup_myr} onChange={n => { if (n !== null) set("rental_pickup_myr", n); }} />
+        <NumberField label="One-way fee per car (MYR, optional)" value={car.rental_one_way_myr} optional onChange={n => set("rental_one_way_myr", n)} />
+        <NumberField label="Driving cost per km per car (MYR, optional)" value={car.rental_cost_per_km} optional onChange={n => set("rental_cost_per_km", n)} />
+      </div>
+      <div className="p-group-columns">{(["rental_pickups", "rental_dropoffs"] as const).map(key => <fieldset key={key} className="p-place-checks">
+        <legend>{key === "rental_pickups" ? "Pick up at" : "Drop off at"}</legend>
+        {places.map(place => <label key={place.id} className="p-check"><input type="checkbox" checked={car[key].includes(place.id)}
+          onChange={e => set(key, e.target.checked ? [...car[key], place.id] : car[key].filter(id => id !== place.id))} />{place.name}</label>)}
+      </fieldset>)}</div>
+    </>}
+    {(car.own_enabled || car.rental_enabled) && !draft.modes.includes("car") && <p className="p-notice">Turn on Car in Transport to use cars.</p>}
+  </>;
+}
+
+/** More settings › Prices and currencies › Exchange rates. MYR is always 1 and can't be removed. */
+function ExchangeRates({ draft, edit }: { draft: TripDraft; edit: (value: TripDraft) => void }) {
+  const [form, setForm] = useState({ currency: "", rate: "" });
+  const [error, setError] = useState("");
+  const [status, setStatus] = useState("");
+  const rates = draft.exchange_rates;
+  function add() {
+    const rate = Number(form.rate);
+    const problem = !/^[A-Z]{3}$/.test(form.currency) ? "Enter a 3-letter currency code."
+      : form.currency === "MYR" ? "MYR is always 1."
+      : form.rate.trim() === "" || !Number.isFinite(rate) || rate <= 0 ? "Enter a rate above 0." : "";
+    setError(problem); setStatus("");
+    if (problem) return;
+    edit({ ...draft, exchange_rates: { ...rates, [form.currency]: rate } });
+    setStatus(rates[form.currency] !== undefined ? "Rate updated." : "");
+    setForm({ currency: "", rate: "" });
+  }
+  return <>
+    <h3 className="p-group-heading">Exchange rates (MYR for 1 unit)</h3>
+    <div className="p-chips">{Object.entries(rates).map(([currency, rate]) => <span className="p-tag" key={currency}>{currency} {rate}
+      {currency !== "MYR" && <button type="button" aria-label={`Remove ${currency} exchange rate`} onClick={() => edit({ ...draft, exchange_rates: Object.fromEntries(Object.entries(rates).filter(([code]) => code !== currency)) })}>×</button>}
+    </span>)}</div>
+    <div className="p-group-fields">
+      <Field label="Currency"><input maxLength={3} value={form.currency} onChange={e => setForm(f => ({ ...f, currency: e.target.value.toUpperCase() }))} /></Field>
+      <Field label="MYR for 1 unit"><input inputMode="decimal" value={form.rate} onChange={e => setForm(f => ({ ...f, rate: e.target.value }))} /></Field>
+    </div>
+    <div className="p-form-actions">
+      <Button type="button" size="sm" variant="secondary" onClick={add}>Add rate</Button>
+      {error && <p className="p-field-error" role="alert">{error}</p>}
+      <p className="p-field-status" aria-live="polite">{status}</p>
+    </div>
+  </>;
+}

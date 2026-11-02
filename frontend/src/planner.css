@@ -20,7 +20,7 @@
 .p-field > span, .p-field > label { font-weight: 650; }
 .p-field small { font-weight: normal; }
 .p-place-picker { position: relative; }
-.p-suggestions { position: absolute; z-index: 20; top: 62px; left: 0; right: 0; background: var(--card); border: 1px solid var(--line); border-radius: 9px; box-shadow: 0 10px 30px var(--shadow-color); max-height: 290px; overflow-y: auto; }
+.p-suggestions { position: absolute; z-index: 20; left: 0; right: 0; margin-top: 4px; background: var(--card); border: 1px solid var(--line); border-radius: 9px; box-shadow: 0 10px 30px var(--shadow-color); max-height: 290px; overflow-y: auto; }
 .p-suggestions button { display: flex; flex-direction: column; align-items: flex-start; width: 100%; background: var(--card); border: 0; border-bottom: 1px solid var(--border); padding: 10px 12px; text-align: left; }
 .p-suggestions button:hover, .p-suggestions button[aria-selected=true] { background: var(--muted-surface); }
 .p-text-button { border: 0; padding: 4px 0; background: none; color: var(--teal); font-size: 11px !important; text-align: left; text-decoration: underline; text-underline-offset: 3px; }
@@ -168,7 +168,7 @@
 .dark .planner-map .maplibregl-canvas { filter: invert(1) hue-rotate(180deg) brightness(.82) saturate(.65); }
 .dark .maplibregl-ctrl-group { filter: invert(.9); }
 .dark .maplibregl-ctrl-attrib { background: var(--card); color: var(--foreground); }
-@media(max-width: 600px) { .p-panel { padding: 16px; } .p-panel-heading h2 { font-size: 15px; } .p-visit-list > div { flex-wrap: wrap; } .p-rule-list > div { flex-wrap: wrap; } }
+@media(max-width: 600px) { .p-panel { padding: 16px; } .p-settings-footer { margin: 16px -16px -16px; padding: 12px 16px; } .p-panel-heading h2 { font-size: 15px; } .p-visit-list > div { flex-wrap: wrap; } .p-rule-list > div { flex-wrap: wrap; } }
 /* One run, so an infinite spinner stops instead of flickering. */
 @media(prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; } }
 
@@ -261,13 +261,102 @@ html { scroll-padding-top: calc(var(--header-h) + var(--tabs-h, 0px) + 8px); scr
 .optimizer .p-strip-details-body p { margin: 0 0 4px; }
 .optimizer .p-strip-details-body .p-strip-subhead { margin-top: 8px; color: var(--foreground); font-weight: 600; }
 .p-strip-details-body ul { margin: 0 0 4px; padding-left: 18px; list-style: disc; color: var(--muted-foreground); line-height: 1.6; }
+/* A strip tip opens across the row, so it never runs off a narrow screen. */
+.p-strip .p-tip-body { top: calc(100% - 4px); left: 8px; right: 8px; width: auto; max-width: none; }
+
+/* Tips (C11). The bubble opens under the row that holds the tip (a positioned ancestor), from its start or, with
+   align="end", from its end, so it stays on screen at 360 px. */
+.p-tip { display: inline-flex; vertical-align: middle; }
 .p-tip > summary { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; list-style: none; cursor: pointer; color: var(--muted-foreground); }
 .p-tip > summary::-webkit-details-marker { display: none; }
 .p-tip > summary:hover, .p-tip[open] > summary { background: var(--muted-surface); color: var(--foreground); }
-/* Above the sticky tab bar (30), below the header (40). */
-.p-tip-body { position: absolute; z-index: 35; padding: 8px 10px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 24px var(--shadow-color); color: var(--foreground); font-size: 12px; line-height: 1.5; }
-/* A strip tip opens across the row, so it never runs off a narrow screen. */
-.p-strip .p-tip-body { top: calc(100% - 4px); left: 8px; right: 8px; }
+/* Above the sticky tab bar (30) and the settings footer (20), below the header (40). */
+.p-tip-body { position: absolute; z-index: 35; top: calc(100% + 4px); left: 0; width: max-content; max-width: min(300px, calc(100vw - 32px)); padding: 8px 10px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 24px var(--shadow-color); color: var(--foreground); font-size: 12px; font-weight: 400; line-height: 1.5; text-align: left; }
+.p-tip[data-align=end] .p-tip-body { left: auto; right: 0; }
+.p-field-label, .p-modes legend, .p-notice, .p-panel-heading > div, .p-footer-button { position: relative; }
+
+/* Fields (C11) */
+.p-field-label { display: flex; align-items: center; gap: 4px; min-height: 24px; }
+.p-field-label label, .p-field-label .p-label { color: var(--foreground); font-weight: 500; }
+.p-field-aside { margin-left: auto; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+.p-field-unit { display: flex; align-items: center; gap: 6px; }
+.optimizer .p-field-status { margin: 4px 0 0; font-size: 12px; }
+.optimizer .p-field-status:empty { margin: 0; }
+.p-icon-button { display: grid; place-items: center; width: 32px; height: 32px; flex-shrink: 0; border: 0; border-radius: 6px; background: none; color: var(--muted-foreground); font-size: 18px; }
+.p-icon-button:hover { background: var(--border); color: var(--foreground); }
+
+/* Trip settings (C4): 2 columns of core fields from 600 px, More settings, and the footer sticky at the bottom. */
+.p-settings > h2 { margin-bottom: 16px; }
+.p-settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 24px; align-items: start; }
+.p-setting { min-width: 0; }
+.p-setting-wide { grid-column: 1 / -1; }
+.optimizer .p-settings-grid > .p-notice { margin: 0; }
+.optimizer .p-setting .p-notice { margin: 8px 0 0; }
+.optimizer div.p-notice { display: flex; align-items: flex-start; gap: 8px; }
+.optimizer div.p-notice p { flex: 1; margin: 0; color: inherit; }
+.p-home-chip { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-height: 36px; color: var(--foreground); }
+.p-visit-rows { display: grid; gap: 6px; margin: 10px 0 0; padding: 0; list-style: none; }
+.p-visit-rows li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 6px 6px 6px 12px; border-radius: 6px; background: var(--muted-surface); }
+/* The name keeps at least 8rem; on a narrow row the stay field wraps under it. */
+.p-visit-name { flex: 1 1 8rem; min-width: 0; color: var(--foreground); font-weight: 500; overflow-wrap: anywhere; }
+.optimizer .p-stay-field { display: grid; grid-template-columns: auto auto; align-items: center; gap: 2px 8px; }
+.optimizer .p-stay-field input { width: 76px; }
+.p-stay-field > small { grid-column: 2; }
+.p-stay-field > .p-field-error { grid-column: 1 / -1; }
+.p-date-range { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; max-width: 520px; }
+.p-date-range .p-field { flex: 1 1 160px; }
+.p-date-to { padding-bottom: 8px; color: var(--muted-foreground); }
+.p-radio-group { display: flex; flex-wrap: wrap; gap: 0 16px; margin: 10px 0 0; padding: 0; border: 0; }
+.optimizer .p-dates .p-hint { margin: 2px 0 0; }
+.optimizer .p-departure-text { margin: 0; color: var(--foreground); }
+.optimizer .p-settings .p-modes { display: block; margin: 0; padding: 0; }
+.optimizer .p-settings .p-modes legend { display: flex; align-items: center; gap: 4px; margin-bottom: 7px; color: var(--foreground); font-size: 12px; font-weight: 500; }
+.p-mode-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.p-more { margin-top: 24px; border-top: 1px solid var(--border); }
+.p-more > summary { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; min-height: 44px; padding: 8px 0; cursor: pointer; color: var(--foreground); font-weight: 500; }
+.p-more-summary { margin-left: auto; color: var(--muted-foreground); font-size: 12px; font-weight: 400; text-align: right; }
+.p-more-body { padding-bottom: 8px; }
+.p-more > summary, .p-group > summary, .p-subgroup > summary { list-style: none; }
+.p-more > summary::-webkit-details-marker, .p-group > summary::-webkit-details-marker, .p-subgroup > summary::-webkit-details-marker { display: none; }
+
+/* More settings groups (G): one disclosure per group, with a changed dot and a summary line. */
+.p-group { border-top: 1px solid var(--border); }
+.p-group > summary, .p-subgroup > summary { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 12px; min-height: 44px; padding: 8px 0; cursor: pointer; }
+.p-group-title { display: inline-flex; align-items: center; gap: 6px; color: var(--foreground); font-weight: 500; }
+.p-dot { width: 7px; height: 7px; flex-shrink: 0; border-radius: 50%; background: var(--primary); }
+.p-group-summary { flex: 1 1 220px; color: var(--muted-foreground); font-size: 12px; text-align: right; overflow-wrap: anywhere; }
+.p-group-body, .p-subgroup-body { display: grid; gap: 14px; padding: 4px 0 20px; }
+.optimizer .p-group-body .p-notice, .optimizer .p-group-body .p-hint, .optimizer .p-form-actions p { margin: 0; }
+.p-group-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px 24px; align-items: start; }
+.p-group-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 24px; align-items: start; }
+.p-endpoints, .p-place-checks, .p-time-range { min-width: 0; margin: 0; padding: 0; border: 0; }
+.p-endpoints legend, .p-place-checks legend, .p-time-range legend { display: flex; align-items: center; gap: 4px; margin-bottom: 6px; color: var(--foreground); font-size: 12px; font-weight: 500; }
+.p-endpoints > .p-check, .p-place-checks > .p-check { display: flex; }
+.p-endpoint-hint { display: block; margin-bottom: 4px; }
+.p-time-inputs { display: flex; align-items: center; gap: 8px; max-width: 360px; }
+.p-time-inputs > span { color: var(--muted-foreground); }
+.p-check-row, .p-subhead { display: flex; align-items: center; gap: 2px; }
+.p-check-row .p-check { margin: 0; }
+.p-check-row, .p-subhead, .p-time-range legend { position: relative; }
+.optimizer .p-subhead h3, .optimizer .p-subhead h4, .optimizer .p-subgroup-body h4, .optimizer .p-group-heading { margin: 0; color: var(--foreground); font-size: 12px; font-weight: 600; }
+.p-subgroup { border: 1px solid var(--border); border-radius: 8px; padding: 0 12px; }
+.p-subgroup-title { color: var(--foreground); font-weight: 500; }
+.p-subgroup-body { padding-top: 0; padding-bottom: 14px; }
+.p-add-form > summary { padding: 6px 0; cursor: pointer; color: var(--foreground); font-weight: 500; }
+.p-add-form[open] > summary { margin-bottom: 10px; }
+.p-add-form .p-form-actions { margin-top: 14px; }
+.p-item-rows { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.p-item-rows li { display: flex; align-items: center; justify-content: space-between; gap: 4px 12px; padding: 6px 8px 6px 12px; border-radius: 6px; background: var(--muted-surface); color: var(--foreground); }
+.p-item-rows li > span { min-width: 0; overflow-wrap: anywhere; }
+.p-item-rows .p-text-button { flex-shrink: 0; }
+.p-form-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.p-group .p-chips { margin: 0; }
+.p-settings-footer { position: sticky; bottom: var(--apply-h, 0px); z-index: 20; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin: 16px -24px -24px; padding: 12px 24px; border-top: 1px solid var(--border); border-radius: 0 0 9px 9px; background: var(--card); }
+.optimizer .p-footer-reason { flex: 1 1 240px; margin: 0; color: var(--foreground); }
+.p-footer-buttons { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
+.p-footer-button { display: inline-flex; align-items: center; gap: 2px; }
+/* The footer sticks to the bottom of the screen, so its tip opens upward. */
+.p-settings-footer .p-tip-body { top: auto; bottom: calc(100% + 4px); }
 
 /* Workspace (B2, C5): the Options column beside the side panel at 1100 px and more; below, one tab bar and one panel. */
 .p-workspace { transition: opacity .2s; }
@@ -327,6 +416,16 @@ html { scroll-padding-top: calc(var(--header-h) + var(--tabs-h, 0px) + 8px); scr
   /* 16 px text keeps iOS from zooming into a focused field; targets are at least 44 px. */
   .optimizer select, .optimizer input:not([type=checkbox], [type=radio]) { min-height: 44px; font-size: 16px; }
   .optimizer .p-workspace button, .optimizer .p-workspace summary, .optimizer .p-workspace .p-check { min-height: 44px; }
+  .optimizer .p-settings button, .optimizer .p-settings .p-check { min-height: 44px; }
+  .p-add-form > summary { padding: 12px 0; }
+  /* Settings groups indent their content, so a 300 px tip bubble could pass the screen edge. */
+  .p-group-body .p-tip-body { max-width: calc(100vw - 80px); }
+  .p-icon-button { width: 44px; height: 44px; }
+  .p-settings-grid, .p-group-columns { grid-template-columns: minmax(0, 1fr); }
+  .p-group-summary { text-align: left; }
+  .p-footer-buttons, .p-footer-button { flex: 1 1 100%; }
+  .p-footer-buttons { flex-direction: column; align-items: stretch; }
+  .p-footer-button > button { flex: 1; }
   .p-tab { padding: 0 8px; }
   .p-side-panel { padding: 16px; }
 }

@@ -1,19 +1,20 @@
 import { AirportTransferTable } from "./components/AirportTransferTable";
 import { AppHeader } from "./components/AppHeader";
+import { InfoTip } from "./components/InfoTip";
 import { ErrorBanner } from "./components/ErrorBanner";
 import { StatusStrip } from "./components/StatusStrip";
 import { Tabs, type TabItem } from "./components/Tabs";
 import { TripBar } from "./components/TripBar";
+import { TripSettings } from "./components/TripSettings";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, CircleCheck, LoaderCircle, Play } from "lucide-react";
+import { ArrowLeft, ArrowRight, CircleCheck, LoaderCircle } from "lucide-react";
 import { Button } from "./components/ui/button";
-import { AdvancedSettings, FareEditor, Field, NumberField, PlaceChips, PlacePicker, RulesEditor } from "./components/PlannerForms";
-import { PositioningSettings } from "./components/PositioningSettings";
+import { FareEditor, Field, RulesEditor } from "./components/PlannerForms";
 import { MissingFaresTable, type AppliedSharedFareGroup } from "./components/MissingFaresTable";
 import { groupMissingFares } from "./lib/missingFares";
 import { storedOfferId, type SharedFare } from "./lib/drafts";
-import { airportChangeRows, appError, assumedConnections, cityGaps, needsInputCount, searchDetails, searchState, splitGroups, transferDirections, unresolvedAccessJourneys, validateDraft, type AirportChangeRow, type AppError } from "./lib/present";
-import { api, blankTrip, cityHourCost, defaultBatchSize, localTime, modes, money, routeCost, type AirportTransferMode, type Job, type Movement, type Offer, type Place, type PricingRule, type Result, type Route, type SavedSummary, type SavedTrip, type TripDraft, type TripSpec } from "./lib/planner";
+import { airportChangeRows, appError, assumedConnections, cityGaps, needsInputCount, partySizeNotice, searchDetails, searchState, settingsFooter, splitGroups, transferDirections, unresolvedAccessJourneys, validateDraft, type AirportChangeRow, type AppError } from "./lib/present";
+import { api, blankTrip, cityHourCost, defaultBatchSize, localTime, modes, money, routeCost, type AirportTransferMode, type Job, type Movement, type Offer, type Place, type PricingRule, type Result, type Route, type SavedSummary, type SavedTrip, type TripDraft } from "./lib/planner";
 import { useMediaQuery } from "./lib/useMediaQuery";
 import "./planner.css";
 
@@ -154,7 +155,8 @@ export default function Planner() {
   const [ranking, setRanking] = useState("cheapest");
   const [routePage, setRoutePage] = useState(0);
   const [showDominated, setShowDominated] = useState(false);
-  const [budget, setBudget] = useState(defaultBatchSize);
+  // Requests per search batch (G › Search size): memory only, sent as the search request's budget.
+  const [batchSize, setBatchSize] = useState(defaultBatchSize);
   // The action that act() runs. Its button shows the spinner; the other action buttons wait.
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const busy = busyAction !== null;
@@ -183,6 +185,9 @@ export default function Planner() {
   const places = useMemo(() => [...new Map([...(draft.home ? [draft.home] : []), ...draft.departures, ...draft.arrivals, ...draft.visits.map(v => v.place)].map(p => [p.id, p])).values()], [draft]);
   const byId = useMemo(() => new Map(places.map(p => [p.id, p])), [places]);
   const placeName = (id: string) => byId.get(id)?.name ?? (id.startsWith("airport:") ? `${id.slice(8)} airport` : id);
+  // Errors that keep the draft from saving (C4). They show at their fields; autosave waits until they are fixed (I6 item 7).
+  const errors = useMemo(() => validateDraft(draft), [draft]);
+  const invalid = Object.keys(errors).length > 0;
 
   function edit(value: TripDraft) {
     const validPositioning = (item: { direction: "outbound" | "return"; gateway_id: string }) =>
@@ -293,7 +298,7 @@ export default function Planner() {
     });
   }
   useEffect(() => {
-    if (!dirty || !saved || !draft.home || !draft.visits.length) return;
+    if (!dirty || !saved || invalid) return;
     const timer = setTimeout(autosave, 650);
     return () => clearTimeout(timer);
     // The draft change starts the debounce; saveSpec reads current refs.
@@ -340,13 +345,17 @@ export default function Planner() {
   async function search(continuation = false) {
     await act(async () => {
       const record = await saveSpec();
-      const status = await api<Job>(continuation && job ? `/searches/${job.id}/continue` : `/trips/${record.id}/searches`, "POST", { budget });
+      const status = await api<Job>(continuation && job ? `/searches/${job.id}/continue` : `/trips/${record.id}/searches`, "POST", { budget: batchSize });
       setJob(status);
       // The status strip follows the search, and the options update while it runs (B3, C4).
       setSettingsOpen(false);
       if (!isWide) setPanel("options");
       setFocusTarget("options-title");
     }, continuation ? "continue" : "search");
+  }
+  // Settings footer › Save without searching (new trip). Once saved, the trip has the workspace and its options heading.
+  function saveOnly() {
+    void act(async () => { await saveSpec(); setFocusTarget("options-title"); }, "save");
   }
   // Header › New trip: saves pending changes of the current trip, then starts a blank trip that is not saved.
   async function newTrip() {
@@ -512,14 +521,17 @@ export default function Planner() {
   // "Nothing missing" needs search data: until the first search stores some, there is nothing to check yet.
   const allClear = !!saved?.snapshot && !needs;
 
-  const invalid = Object.keys(validateDraft(draft)).length > 0;
   // C3.1 row 2 ("Updating options…") is for a save in progress. After a refused save nothing runs until the next
   // edit or Retry save, so the strip shows the search state; the header ("Not saved") and the banner report it (C13).
   const strip = searchState({ invalid, dirty: dirty && saveStatus !== "Not saved", saved, result, job });
   const details = searchDetails({ saved, job, result });
+  // A saved trip with marked fields does not save until they are fixed. A new trip saves only with
+  // Save without searching or Search transport, so its edits keep "Not saved yet" (C13).
+  const status = saved && invalid ? "Fix the marked fields to save" : !saved && saveStatus === "Unsaved changes" ? "Not saved yet" : saveStatus;
   // A saved, valid trip saves itself 650 ms after an edit, so its unsaved changes are pending, not at risk.
-  const statusTone = saveStatus === "Saving…" || (saveStatus === "Unsaved changes" && saved && !invalid) ? "busy"
-    : saveStatus === "Not saved" || saveStatus === "Not saved yet" || saveStatus === "Unsaved changes" ? "warn" : "ok";
+  const statusTone = status === "Saving…" || (status === "Unsaved changes" && saved) ? "busy"
+    : ["Not saved", "Not saved yet", "Unsaved changes", "Fix the marked fields to save"].includes(status) ? "warn" : "ok";
+  const footer = settingsFooter({ errors, isNew: !saved, searched, active, stale: !!result?.discovery_required || job?.status === "superseded" });
   // A new trip is missing from the trip list until its first save finishes.
   const trips = saved && !summaries.some(trip => trip.id === saved.id) ? [...summaries, { id: saved.id, name: saved.spec.name, revision: saved.revision, start_date: saved.spec.start_date, end_date: saved.spec.end_date }] : summaries;
   // Trip settings are always open for a trip that is not saved.
@@ -569,7 +581,7 @@ export default function Planner() {
       if (!isWide) setPanel("options");
       setFocusTarget("options-title");
     }}>{workspace ? "Skip to options" : "Skip to trip settings"}</a>
-    <AppHeader trips={trips} currentId={saved?.id ?? null} unsaved={!saved} status={saveStatus} statusTone={statusTone} disabled={busy} menuBusy={busyAction === "recalculate" || busyAction === "copy"}
+    <AppHeader trips={trips} currentId={saved?.id ?? null} unsaved={!saved} status={status} statusTone={statusTone} disabled={busy} menuBusy={busyAction === "recalculate" || busyAction === "copy"}
       onOpen={id => void act(() => openTrip(id), "open")} onNew={() => void act(newTrip, "new")} onCopy={() => void act(duplicateTrip, "copy")} onRecalculate={recalculate}
       canCopy={!!saved && !busy} canRecalculate={!!saved && !busy} />
     <div className="p-container">
@@ -578,28 +590,9 @@ export default function Planner() {
     <TripBar draft={draft} edit={edit} saved={saved} settingsOpen={settingsShown} onToggleSettings={() => setSettingsOpen(open => !open)}>
       {saved && <StatusStrip state={strip} details={details} busyAction={busyAction} settingsOpen={settingsShown} onStop={stopSearch} onSearch={continuation => void search(continuation)} onCheckMore={checkMore} />}
     </TripBar>
-    {settingsShown && <section id="trip-settings" className="p-panel" aria-labelledby="settings-title"><h2 id="settings-title">Trip settings</h2>
-      <div className="p-grid p-main-fields"><Field label="Start date"><input type="date" value={draft.start_date} onChange={e => edit({ ...draft, start_date: e.target.value })} /></Field><Field label="End date"><input type="date" min={draft.start_date} value={draft.end_date} onChange={e => edit({ ...draft, end_date: e.target.value })} /></Field><Field label="Date mode"><select value={draft.date_mode} onChange={e => edit({ ...draft, date_mode: e.target.value as TripSpec["date_mode"] })}><option value="fixed">Fixed outward and return dates</option><option value="flexible">Optimize within this date window</option></select></Field></div>
-      <p className="p-hint">{draft.date_mode === "fixed" ? "Leave home on the start date and arrive back on the end date, including positioning journeys." : "The optimizer can choose outward and return days anywhere inside this window."}</p>
-      <div className="p-grid p-places-grid"><div><PlacePicker inputId="home-city" label="Home / base city" onSelect={p => edit({ ...draft, home: p, visits: draft.visits.filter(v => v.place.id !== p.id) })} />{draft.home && <PlaceChips places={[draft.home]} remove={() => edit({ ...draft, home: null })} />}</div>
-        <div><PlacePicker label={`Possible departure cities (${draft.departures.length}/3)`} disabledIds={draft.departures.map(p => p.id)} onSelect={p => { if (draft.departures.length < 3) edit({ ...draft, departures: [...draft.departures, p] }); }} /><PlaceChips places={draft.departures} remove={id => edit({ ...draft, departures: draft.departures.filter(p => p.id !== id) })} /><small>Leave empty to use home.</small></div>
-        <div><PlacePicker label={`Possible arrival cities (${draft.arrivals.length}/3)`} disabledIds={draft.arrivals.map(p => p.id)} onSelect={p => { if (draft.arrivals.length < 3) edit({ ...draft, arrivals: [...draft.arrivals, p] }); }} /><PlaceChips places={draft.arrivals} remove={id => edit({ ...draft, arrivals: draft.arrivals.filter(p => p.id !== id) })} /><small>Leave empty to return directly to home.</small></div></div>
-      <div className="p-visits"><PlacePicker label={`Required cities (${draft.visits.length}/4) · visit order is flexible`} disabledIds={[draft.home?.id ?? "", ...draft.visits.map(v => v.place.id)]} onSelect={p => { if (draft.visits.length < 4) edit({ ...draft, visits: [...draft.visits, { place: p, min_stay_hours: 0 }] }); }} />
-        <div className="p-visit-list">{draft.visits.map((v, i) => <div key={v.place.id}><strong>{v.place.name}<small>{v.place.timezone}</small></strong><NumberField label={`Minimum stay in ${v.place.name} · hours`} value={v.min_stay_hours} onChange={n => edit({ ...draft, visits: draft.visits.map((x, j) => j === i ? { ...x, min_stay_hours: n ?? 0 } : x) })} /><button type="button" aria-label={`Remove required city ${v.place.name}`} onClick={() => edit({ ...draft, visits: draft.visits.filter(x => x.place.id !== v.place.id), commitments: draft.commitments.filter(c => c.place_id !== v.place.id) })}>×</button></div>)}</div>
-        {draft.visits.length > 1 && <button type="button" className="p-text-button" onClick={() => edit({ ...draft, visits: draft.visits.map(v => ({ ...v, min_stay_hours: draft.visits[0].min_stay_hours })) })}>Apply the first city's minimum to all cities</button>}</div>
-      <div className="p-grid"><NumberField label="Adult travelers" value={draft.adults} min={1} max={9} step={1} onChange={n => edit({ ...draft, adults: n ?? 1 })} /><NumberField label="Total party budget · MYR" value={draft.budget_myr} optional onChange={n => edit({ ...draft, budget_myr: n })} /><NumberField label="Maximum transfers per intercity journey" value={draft.max_transfers} optional step={1} max={10} onChange={n => edit({ ...draft, max_transfers: n })} /><Field label="Local departure window starts"><input type="time" value={draft.departure_start} onChange={e => edit({ ...draft, departure_start: e.target.value })} /></Field><Field label="Local departure window ends"><input type="time" value={draft.departure_end} onChange={e => edit({ ...draft, departure_end: e.target.value })} /></Field></div>
-      <fieldset className="p-modes"><legend>Allowed intercity transportation</legend>{modes.map(mode => <label className="p-check" key={mode}><input type="checkbox" checked={draft.modes.includes(mode)} onChange={e => edit({ ...draft, modes: e.target.checked ? [...draft.modes, mode] : draft.modes.filter(m => m !== mode) })} />{mode}</label>)}<label className="p-check"><input type="checkbox" checked={draft.allow_overnight} onChange={e => edit({ ...draft, allow_overnight: e.target.checked })} />Allow overnight travel</label></fieldset>
-      <label className="p-check"><input type="checkbox" checked={draft.rail_fallback?.enabled ?? false} onChange={e => edit({ ...draft, rail_fallback: { reference_date: null, max_shift_days: 180, station_radius_km: 25, ...draft.rail_fallback, enabled: e.target.checked } })} />Allow estimated rail timetables when actual-date searches find no journey</label>
-      {draft.rail_fallback?.enabled && <div className="p-grid"><p className="p-hint">Search nearby stations, then sample up to three matching weekdays for trips more than two weeks away. Copied timetables are estimates; holidays, fares and seat availability need verification. Station access uses walking times. Start a new discovery after changing these settings.</p><Field label="Reference week starting · blank uses today"><input type="date" value={draft.rail_fallback.reference_date ?? ""} onChange={e => edit({ ...draft, rail_fallback: { ...draft.rail_fallback!, reference_date: e.target.value || null } })} /></Field><Field label="Maximum timetable shift · days"><input type="number" min="7" max="365" value={draft.rail_fallback.max_shift_days} onChange={e => edit({ ...draft, rail_fallback: { ...draft.rail_fallback!, max_shift_days: Number(e.target.value) } })} /></Field><Field label="Station search radius · km"><input type="number" min="1" max="50" value={draft.rail_fallback.station_radius_km} onChange={e => edit({ ...draft, rail_fallback: { ...draft.rail_fallback!, station_radius_km: Number(e.target.value) } })} /></Field></div>}
-      <label className="p-check"><input type="checkbox" checked={draft.exclude_unpriced_flights ?? false} onChange={e => edit({ ...draft, exclude_unpriced_flights: e.target.checked })} />Ignore flights with unknown fares</label>
-      <p className="p-hint">Excludes itineraries with unpriced flights after applying ticket bundles, manual fares, and pricing rules. Saved flight schedules are retained; other transport and transfer fares may still be unknown.</p>
-      {!transitConfigured && draft.modes.some(m => ["rail", "bus", "coach", "subway", "tram"].includes(m)) && <p className="p-notice">Scheduled transit is currently disabled. Configure the Transitous contact URL and coordinate routing use to enable it.</p>}
-      <PositioningSettings draft={draft} edit={edit} report={report} />
-      <AdvancedSettings draft={draft} edit={edit} places={places} report={report} />
-      <div className="p-actions p-search-actions"><NumberField label="Provider requests per batch" value={budget} min={1} max={500} step={1} onChange={n => setBudget(n ?? 100)} />
-        {/* Once saved, the trip has the workspace and this button goes away, so focus moves to the options. */}
-        {!saved && <Button type="button" variant="ghost" disabled={busy || !draft.home || !draft.visits.length} onClick={() => void act(async () => { await saveSpec(); setFocusTarget("options-title"); }, "save")}>{busyAction === "save" && <LoaderCircle size={15} className="p-spin" />}Save without searching</Button>}<Button type="button" disabled={busy || active || !draft.home || !draft.visits.length} onClick={() => void search()}>{busyAction === "search" ? <LoaderCircle size={15} className="p-spin" /> : <Play size={15} />}Discover transport</Button></div>
-    </section>}
+    {settingsShown && <TripSettings draft={draft} edit={edit} places={places} errors={errors} transitConfigured={transitConfigured} searchActive={active}
+      partyNotice={partySizeNotice(saved, draft.adults)} isNew={!saved} footer={footer} busyAction={busyAction}
+      batchSize={batchSize} onBatchSize={setBatchSize} onSearch={() => void search()} onSaveOnly={saveOnly} />}
 
     {saved && <div id="workspace" className="p-workspace" aria-busy={strip.id === "updating" || undefined}>
       {!isWide && <Tabs id="workspace-tabs" className="p-tabs p-tabs-bar" label="Workspace" tabs={[optionsTab, itineraryTab, missingTab]} selected={tab} onSelect={chooseTab} />}
@@ -647,7 +640,7 @@ export default function Planner() {
           </section>}
         </>}</div>
         <div id="panel-missing" className="p-side-panel" role="tabpanel" aria-labelledby="tab-missing" tabIndex={0} hidden={tab !== "missing"}>{visited.includes("missing") && <>
-          <div className="p-panel-heading"><h2 id="missing-title" tabIndex={-1}>Missing info</h2><span className="p-missing-status">{allClear && <CircleCheck size={15} aria-hidden="true" />}{searched && needs ? needsText : allClear ? "Nothing missing" : "Nothing to check yet"}</span></div>
+          <div className="p-panel-heading"><div><h2 id="missing-title" tabIndex={-1}>Missing info</h2><InfoTip topic="Missing info">Information the search could not find.</InfoTip></div><span className="p-missing-status">{allClear && <CircleCheck size={15} aria-hidden="true" />}{searched && needs ? needsText : allClear ? "Nothing missing" : "Nothing to check yet"}</span></div>
           {!searched && <p>Unknown prices and gaps appear here after a search. You can enter airport transfers now.</p>}
           {searched && result && <AirportConnectionsTable key={`airport-connections:${saved.id}`} tripId={saved.id} rows={airportChanges} report={report} onSaved={(record, updated) => { accept(record); acceptResult(updated, record.id); setSaveStatus("Airport connections saved · frontier recalculated"); }} />}
           <AirportTransferTable key={saved.id} trip={saved} save={async estimates => {

@@ -564,6 +564,65 @@ export function validateDraft(draft: TripDraft): Record<string, string> {
   return errors;
 }
 
+// A trip date (YYYY-MM-DD) as day parts, or null for a cleared or invalid date.
+function dayParts(value: string) {
+  const date = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return null;
+  const parts = Object.fromEntries(dateFormat("UTC", "year").formatToParts(date).map(part => [part.type, part.value]));
+  return { time: date.getTime(), day: parts.day, month: parts.month, year: parts.year };
+}
+
+/** The helper line under the date mode (C4): "Leave home on 4 Dec. Be back home on 14 Dec." or "Leave and come back on any days from 4 to 14 Dec." */
+export function dateModeText(draft: Pick<TripDraft, "start_date" | "end_date" | "date_mode">) {
+  const start = dayParts(draft.start_date), end = dayParts(draft.end_date);
+  if (!start || !end) return "";
+  if (draft.date_mode === "fixed") return `Leave home on ${start.day} ${start.month}. Be back home on ${end.day} ${end.month}.`;
+  const from = start.month === end.month && start.year === end.year ? start.day : `${start.day} ${start.month}`;
+  return `Leave and come back on any days from ${from} to ${end.day} ${end.month}.`;
+}
+
+/** The notice when the minimum stays need more hours than the trip dates have (C4). Null when they fit or the dates are invalid. */
+export function staySumWarning(draft: Pick<TripDraft, "start_date" | "end_date" | "visits">) {
+  const start = dayParts(draft.start_date), end = dayParts(draft.end_date);
+  if (!start || !end || end.time < start.time) return null;
+  const sum = draft.visits.reduce((total, visit) => total + visit.min_stay_hours, 0);
+  const allowed = ((end.time - start.time) / 86_400_000 + 1) * 24;
+  return sum > allowed ? `Minimum stays add up to ${amount(sum)} h, but these dates allow at most ${whole(allowed)} h.` : null;
+}
+
+/**
+ * The notice next to Adults (A2 row 12, C4). Your prices and airport transfer prices are saved for the
+ * number of adults at that time, and the server uses only those for the trip's number of adults.
+ */
+export function partySizeNotice(saved: Pick<SavedTrip, "offers" | "airport_transfer_estimates"> | null, adults: number) {
+  const others = [...(saved?.offers ?? []).filter(offer => offer.source === "user"), ...(saved?.airport_transfer_estimates ?? [])]
+    .flatMap(item => item.adults != null && item.adults !== adults ? [item.adults] : []);
+  if (!others.length) return null;
+  const counts = [...new Set(others)].sort((a, b) => a - b);
+  const one = others.length === 1;
+  return `${plural(others.length, "price")} you entered ${one ? "is" : "are"} for ${counts.join(" or ")} ${counts.length === 1 && counts[0] === 1 ? "adult" : "adults"}. ${one ? "It is" : "They are"} not used for ${plural(adults, "adult")}.`;
+}
+
+/** A button of the trip settings footer: "save" saves without searching, "search" starts a new search. */
+export type FooterButton = { label: string; run: "save" | "search"; variant: "default" | "secondary" | "ghost"; tip?: string };
+export type FooterState = { text: string; buttons: FooterButton[]; disabled: boolean };
+/** The sticky footer of the trip settings (C4). `errors` is validateDraft(); its first error is the reason the buttons are disabled. */
+export function settingsFooter({ errors, isNew, searched, active, stale }: {
+  errors: Record<string, string>; isNew: boolean; searched: boolean; active: boolean; stale: boolean;
+}): FooterState {
+  const ready = "Ready. The search can take a few minutes.";
+  const search: FooterButton = { label: "Search transport", run: "search", variant: "default" };
+  const restart: FooterButton = { label: "Start a new search", run: "search", variant: "secondary" };
+  const state: FooterState = active ? { text: "Searching…", buttons: [restart], disabled: true }
+    : isNew ? { text: ready, buttons: [{ label: "Save without searching", run: "save", variant: "ghost" }, search], disabled: false }
+    // Before the stale check, as in searchState: the result of a trip that was never searched is marked discovery_required.
+    : !searched ? { text: ready, buttons: [search], disabled: false }
+    : stale ? { text: "Your changes need a new search.", buttons: [{ ...search, label: "Search again" }], disabled: false }
+    : { text: "", buttons: [{ ...restart, tip: "Starts the search again from the beginning. Saved provider responses are reused." }], disabled: false };
+  const first = Object.values(errors)[0];
+  return first ? { ...state, text: first, disabled: true } : state;
+}
+
 // ---------------------------------------------------------------- refinement
 
 export type AirportChangeRow = {

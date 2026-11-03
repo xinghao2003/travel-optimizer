@@ -1,28 +1,24 @@
 import { AirportTransferTable } from "./components/AirportTransferTable";
 import { AppHeader } from "./components/AppHeader";
 import { InfoTip } from "./components/InfoTip";
+import { ItineraryPanel } from "./components/ItineraryPanel";
 import { OptionsPanel } from "./components/OptionsPanel";
 import { ErrorBanner } from "./components/ErrorBanner";
 import { StatusStrip } from "./components/StatusStrip";
 import { Tabs, type TabItem } from "./components/Tabs";
 import { TripBar } from "./components/TripBar";
 import { TripSettings } from "./components/TripSettings";
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, CircleCheck, LoaderCircle } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { CircleCheck, LoaderCircle } from "lucide-react";
 import { Button } from "./components/ui/button";
-import { FareEditor, Field, RulesEditor } from "./components/PlannerForms";
+import { Field, RulesEditor } from "./components/PlannerForms";
 import { MissingFaresTable, type AppliedSharedFareGroup } from "./components/MissingFaresTable";
 import { groupMissingFares } from "./lib/missingFares";
-import { storedOfferId, type SharedFare } from "./lib/drafts";
+import type { SharedFare } from "./lib/drafts";
 import { airportChangeRows, appError, assumedConnections, buildNextSteps, cityGaps, needsInputCount, optionNumber, optionsEmptyState, partySizeNotice, routeSignature, searchDetails, searchState, settingsFooter, sortRoutes, splitGroups, staySumWarning, transferDirections, transitSearchModes, unresolvedAccessJourneys, validateDraft, type AirportChangeRow, type AppError, type OptionsTarget } from "./lib/present";
-import { api, blankTrip, defaultBatchSize, localTime, modes, money, routeCost, type AirportTransferMode, type Job, type Movement, type Offer, type Place, type PricingRule, type Result, type Route, type SavedSummary, type SavedTrip, type TripDraft } from "./lib/planner";
+import { api, blankTrip, defaultBatchSize, localTime, modes, type AirportTransferMode, type Job, type Movement, type Offer, type Place, type PricingRule, type Result, type Route, type SavedSummary, type SavedTrip, type TripDraft } from "./lib/planner";
 import { useMediaQuery } from "./lib/useMediaQuery";
 import "./planner.css";
-
-const LazyMap = lazy(() => import("./components/PlannerMap").then(m => ({ default: m.PlannerMap })));
-function PlannerMap(props: { places: Place[]; route: Route | null }) {
-  return <Suspense fallback={<div className="p-empty">Loading the itinerary map…</div>}><LazyMap {...props} /></Suspense>;
-}
 
 const airportTransferModes: AirportTransferMode[] = modes.filter((mode): mode is AirportTransferMode => mode !== "flight");
 /** A failed poll of the search status (C2). The next successful poll removes this error, so it is compared by identity. */
@@ -97,34 +93,6 @@ function AirportConnectionsTable({ tripId, rows: savedRows, onSaved, report }: {
   </section>;
 }
 
-function BundleEntry({ route, placeName, save, report }: { route: Route; placeName: (id: string) => string; save: (offer: Offer) => Promise<void>; report: (s: string) => void }) {
-  const flights = route.movements.filter(m => m.mode === "flight");
-  // A combined ticket covers template ids: the server checks it against the saved flights,
-  // and transfer estimates give route flights variant ids.
-  const ticketId = (m: Movement) => m.template_id ?? m.id;
-  const [selected, setSelected] = useState<string[]>(flights.map(ticketId));
-  const [kind, setKind] = useState<"round-trip" | "multi-city">("multi-city");
-  const [low, setLow] = useState("");
-  const [high, setHigh] = useState("");
-  const [currency, setCurrency] = useState("MYR");
-  const [busy, setBusy] = useState(false);
-  useEffect(() => { setSelected(route.movements.filter(m => m.mode === "flight").map(ticketId)); }, [route.id]);
-  if (flights.length < 2) return null;
-  async function submit() {
-    setBusy(true);
-    try {
-      if (selected.length < 2 || low === "" || Number(low) < 0 || (high !== "" && Number(high) < Number(low))) throw new Error("Choose at least two flights and a valid combined fare.");
-      await save({ id: `bundle:${crypto.randomUUID()}`, movement_ids: selected, kind, low: Number(low), high: high === "" ? Number(low) : Number(high), currency, source: "user", estimated: true, label: "Manually entered whole-ticket party fare", validated: true });
-      setLow(""); setHigh("");
-    } catch (err) { report(err instanceof Error ? err.message : "Bundle could not be saved."); }
-    finally { setBusy(false); }
-  }
-  return <details className="p-details"><summary>Enter a combined flight ticket price</summary><p>Choose the exact journeys covered by your quote. Enter the total for the whole party; airport transfers remain separate. The optimizer compares this purchase with separate tickets.</p>
-    <div>{flights.map(m => <label className="p-check" key={m.id}><input type="checkbox" checked={selected.includes(ticketId(m))} onChange={e => setSelected(ids => e.target.checked ? [...ids, ticketId(m)] : ids.filter(id => id !== ticketId(m)))} />{placeName(m.from_id)} → {placeName(m.to_id)} · {m.departure?.slice(0, 10)}</label>)}</div>
-    <div className="p-inline"><Field label="Ticket type"><select value={kind} onChange={e => setKind(e.target.value as typeof kind)}><option value="multi-city">Multi-city / open-jaw</option><option value="round-trip">Round trip</option></select></Field><Field label="Combined party fare"><input type="number" min="0" step="0.01" value={low} onChange={e => setLow(e.target.value)} /></Field><Field label="Maximum (blank = fixed)"><input type="number" min={low || 0} step="0.01" value={high} onChange={e => setHigh(e.target.value)} /></Field><Field label="Bundle currency"><input maxLength={3} value={currency} onChange={e => setCurrency(e.target.value.toUpperCase())} /></Field><Button type="button" size="sm" disabled={busy} onClick={() => void submit()}>Save bundle</Button></div>
-  </details>;
-}
-
 function AssumedConnection({ places, gaps, add, report }: { gaps: { from_id: string; to_id: string }[]; places: Place[]; add: (m: Movement) => Promise<void>; report: (s: string) => void }) {
   const [form, setForm] = useState({ from: "", to: "", mode: "bus", hours: "", distance: "", departure: "", arrival: "" });
   const [busy, setBusy] = useState(false);
@@ -189,6 +157,7 @@ export default function Planner() {
   const places = useMemo(() => [...new Map([...(draft.home ? [draft.home] : []), ...draft.departures, ...draft.arrivals, ...draft.visits.map(v => v.place)].map(p => [p.id, p])).values()], [draft]);
   const byId = useMemo(() => new Map(places.map(p => [p.id, p])), [places]);
   const placeName = (id: string) => byId.get(id)?.name ?? (id.startsWith("airport:") ? `${id.slice(8)} airport` : id);
+  const zoneOf = (id: string) => byId.get(id)?.timezone ?? "UTC";
   // Errors that keep the draft from saving (C4). They show at their fields; autosave waits until they are fixed (I6 item 7).
   const errors = useMemo(() => validateDraft(draft), [draft]);
   const invalid = Object.keys(errors).length > 0;
@@ -543,7 +512,6 @@ export default function Planner() {
     ...movement,
     assumptions: movement.assumptions.filter(assumption => !assumption.startsWith("Airport change ") && !assumption.startsWith("Airport connection ")),
   }));
-  const extras = selected?.extra_charges ?? [];
   // The result was calculated with the saved trip's adults and exchange rates.
   const directions = useMemo(() => saved ? transferDirections(saved.airport_transfer_rows ?? [],
     [...(result?.routes ?? []), ...(result?.dominated_routes ?? []), ...(result?.refinement_routes ?? [])], saved.spec.adults, saved.spec.exchange_rates) : [], [saved, result]);
@@ -639,6 +607,7 @@ export default function Planner() {
     }
     else if (target === "exchange-rate") showMissing(["missing-fares-title"]);
     else if (target === "add-connection") showMissing(["add-connection"]);
+    else if (target === "transfer-times") showMissing(["airport-transfers-title"]);
     else if (target === "airport-fallback") { setSettingsOpen(true); setFocusTarget("setting-airport-fallback"); }
     else if (target === "edit-trip") { setSettingsOpen(true); setFocusTarget("settings-title"); }
     else if (target === "over-budget") setFocusTarget("over-budget-summary");
@@ -685,20 +654,14 @@ export default function Planner() {
       </section>
       <div id="side-panel" className="p-side">
         {isWide && <Tabs className="p-tabs p-tabs-side" label="Workspace" tabs={[itineraryTab, missingTab]} selected={tab} onSelect={chooseTab} />}
-        <div id="panel-itinerary" className="p-side-panel" role="tabpanel" aria-labelledby="tab-itinerary" tabIndex={0} hidden={tab !== "itinerary"}>{visited.includes("itinerary") && <>
-          {!isWide && searched && selected && <Button type="button" variant="ghost" size="sm" className="p-back" onClick={backToOptions}><ArrowLeft size={15} aria-hidden="true" /><span className="sr-only">Back to </span>Options</Button>}
-          {selected && displayRoutes.length > 1 && <div className="p-comparison"><Field label="Compare selected itinerary with"><select value={comparisonId ?? ""} onChange={e => setComparisonId(e.target.value || null)}><option value="">Choose another alternative</option>{displayRoutes.filter(r => r.id !== selected.id).map(r => <option value={r.id} key={r.id}>{routeCost(r)} · {r.stay_hours.toFixed(1)} city hours</option>)}</select></Field>{compare && compare.id !== selected.id && <p>Selected itinerary: <strong>{(selected.stay_hours - compare.stay_hours).toFixed(1)} additional city hours</strong>{selected.total_cost_myr !== null && compare.total_cost_myr !== null && <> for <strong>{money(selected.total_cost_myr - compare.total_cost_myr)} additional cost</strong>{selected.stay_hours > compare.stay_hours && ` · ${money((selected.total_cost_myr - compare.total_cost_myr) / (selected.stay_hours - compare.stay_hours))} per additional hour`}</>}{(selected.provisional || compare.provisional) && " · resolve fare ranges to compare an exact additional cost"}.</p>}</div>}
-          {!searched ? <p className="p-empty">Options appear here after a search.</p> : !selected ? <p className="p-empty">No option to show.</p> : <section className="p-panel" aria-labelledby="itinerary-title"><div className="p-panel-heading"><div><span className="p-step">05</span><h2 id="itinerary-title" tabIndex={-1}>Itinerary details</h2>{selected.budget_status === "over" && <span className="p-tag uncertain">Outside budget · fare refinement only</span>}</div><strong>{routeCost(selected)}</strong></div><div className="p-detail-layout"><div><PlannerMap places={places} route={selected} /><p className="p-hint">City reference points and schematic connections; lines do not show road or track geometry.</p></div><div className="p-timeline"><h3>Time in each required city</h3>{selected.stays.map((s, i) => <div key={`${s.place_id}:${i}`}><span className="p-timeline-dot" /><strong>{placeName(s.place_id)} <span>{s.hours.toFixed(1)} h</span></strong><small>{localTime(s.arrival, byId.get(s.place_id)?.timezone ?? "UTC")}<ArrowRight size={13} />{localTime(s.departure, byId.get(s.place_id)?.timezone ?? "UTC")}</small><progress max={selected.stay_hours || 1} value={s.hours} /></div>)}<p className="p-hint">City-stay hours include nights, exclude all transportation and terminal overhead, and do not count time at home or other positioning cities.</p></div></div>
-            <div className="p-leg-details">{selected.movements.map((m, i) => <details key={`${m.id}:${i}`} open={i === 0}><summary><span className="p-leg-index">{i + 1}</span><strong>{placeName(m.from_id)} → {placeName(m.to_id)}</strong><span className="p-tag">{m.mode}{m.vehicle_kind ? ` · ${m.vehicle_kind}` : ""}</span><span>{(m.duration_minutes / 60).toFixed(1)} h</span></summary><div className="p-leg-content"><p>{localTime(m.departure, byId.get(m.from_id)?.timezone ?? "UTC", "Flexible departure")} → {localTime(m.arrival, byId.get(m.to_id)?.timezone ?? "UTC", "Flexible departure")}<br /><small>{m.source} · {m.transfers} transfers{m.distance_km !== null ? ` · ${m.distance_km.toFixed(1)} km` : ""}</small></p>{m.assumptions.map(a => <p className="p-notice" key={a}>{a}</p>)}
-              {m.schedule_estimated && <p className="p-notice">Estimated rail timetable{m.schedule_reference_date ? ` · based on ${m.schedule_reference_date}` : " · provider extended calendar"}. Verify the actual travel date before booking.</p>}
-              {m.segments.length > 0 && <ul className="p-segments">{m.segments.map((s, j) => <li key={j}><strong>{s.mode}: {s.from_name} → {s.to_name}</strong><small>{s.departure && `${localTime(s.departure, s.from_timezone ?? "UTC")} (${s.from_timezone ?? "UTC"}) → ${localTime(s.arrival, s.to_timezone ?? "UTC", "Flexible departure")} (${s.to_timezone ?? "UTC"}) · `}{s.service} {s.operator}{s.source ? ` · ${s.source}` : ""}{s.assumed ? " · assumed" : ""}{s.duration_minutes !== null ? ` · ${s.duration_minutes.toFixed(0)} min` : ""}</small></li>)}</ul>}
-              <FareEditor componentId={m.template_id ?? m.id} label={`Standalone ${m.mode} fare`} offer={offerFor(m.id)} onSave={updatePrice} onRemove={removePrice} />{m.charges.filter(c => !c.kind.startsWith("Airport transfer ")).map(c => <FareEditor key={c.id} componentId={c.id} label={c.kind} offer={offerFor(c.id)} onSave={updatePrice} onRemove={removePrice} />)}{m.search_url && <a href={m.search_url} target="_blank" rel="noreferrer">Open flight search ↗</a>}</div></details>)}</div>
-            {extras.map(c => <FareEditor key={c.id} componentId={c.id} label={c.kind} offer={offerFor(c.id)} onSave={updatePrice} onRemove={removePrice} />)}
-            <h3>Ticket purchases and cost breakdown</h3><div className="p-purchases">{selected.purchases.map(o => <div key={o.id}><strong>{o.label || o.kind}<small>{o.kind} · {o.movement_ids.length} component(s) · {o.source}{o.estimated ? " estimate" : ""}</small></strong><span>{o.low === o.high ? money(o.low, o.currency) : `${money(o.low, o.currency)} – ${money(o.high, o.currency)}`}</span>{o.source === "user" && <button type="button" aria-label={`Remove fare ${o.label}`} onClick={() => void act(() => removePrice(storedOfferId(o)), "price")}>×</button>}</div>)}</div>
-            <p className="p-hint">Each ticket is charged once. Combined flight tickets do not include separately listed airport transfers. Average fare per stay hour: {money(selected.cost_per_stay_hour_myr)}. Prices are quotes or assumptions, not booking guarantees.</p>
-            <BundleEntry route={selected} placeName={placeName} save={updatePrice} report={report} />
-          </section>}
-        </>}</div>
+        <div id="panel-itinerary" className="p-side-panel" role="tabpanel" aria-labelledby="tab-itinerary" tabIndex={0} hidden={tab !== "itinerary"}>{visited.includes("itinerary") &&
+          <ItineraryPanel isWide={isWide} searched={searched} route={selected} displayRoutes={displayRoutes} numbers={numbers} refinement={refinement}
+            weaker={showDominated && !!selected && !!result?.dominated_routes?.some(route => route.id === selected.id)}
+            comparedId={compare?.id ?? null} onCompare={setComparisonId} places={places} zoneOf={zoneOf} placeName={placeName}
+            minStays={Object.fromEntries(saved.spec.visits.map(visit => [visit.place.id, visit.min_stay_hours]))}
+            budget={budget} adults={saved.spec.adults} rates={rates} offerFor={offerFor} onSavePrice={updatePrice}
+            onRemovePrice={id => void act(() => removePrice(id), "price")} busy={busy} bundleLinks={job?.bundle_links ?? coverage?.bundle_links ?? []}
+            onAction={runAction} onBack={backToOptions} />}</div>
         <div id="panel-missing" className="p-side-panel" role="tabpanel" aria-labelledby="tab-missing" tabIndex={0} hidden={tab !== "missing"}>{visited.includes("missing") && <>
           <div className="p-panel-heading"><div><h2 id="missing-title" tabIndex={-1}>Missing info</h2><InfoTip topic="Missing info">Information the search could not find.</InfoTip></div><span className="p-missing-status">{allClear && <CircleCheck size={15} aria-hidden="true" />}{searched && needs ? needsText : allClear ? "Nothing missing" : "Nothing to check yet"}</span></div>
           {!searched && <p>Unknown prices and gaps appear here after a search. You can enter airport transfers now.</p>}

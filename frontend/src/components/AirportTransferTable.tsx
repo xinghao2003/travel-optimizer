@@ -38,7 +38,7 @@ export function AirportTransferTable({ trip, save, report }: { trip: SavedTrip; 
     } catch (error) { report(error instanceof Error ? error.message : String(error)); }
     finally { setBusy(false); }
   }
-  return <section className="p-panel"><div className="p-panel-heading"><h2>Airport ↔ city transfers</h2><span className="p-tag">{rows.length} directions · {adults} travelers</span></div>
+  return <section className="p-panel"><div className="p-panel-heading"><h2 id="airport-transfers-title" tabIndex={-1}>Airport ↔ city transfers</h2><span className="p-tag">{rows.length} directions · {adults} travelers</span></div>
     <p>Add transfer methods with travel times and whole-party fares. The optimizer compares these options for current and future journeys in this trip. Each direction is separate; individual fare overrides take priority.</p>
     <div className="p-airport-table-wrap"><table className="p-airport-table"><thead><tr><th>Transfer</th><th>Method</th><th>Time · min</th><th>Party fare</th><th>Maximum (optional)</th><th>Currency</th><th /></tr></thead><tbody>{rows.flatMap(row => {
       const key = keyFor(row.from_id, row.to_id), entries = values(row.from_id, row.to_id);

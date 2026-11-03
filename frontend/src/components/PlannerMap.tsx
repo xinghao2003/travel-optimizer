@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { FeatureCollection } from "geojson";
@@ -8,6 +8,7 @@ export function PlannerMap({ places, route }: { places: Place[]; route: Route | 
   const container = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map>(null);
   const ready = useRef(false);
+  const [failed, setFailed] = useState(false);
   const data = useMemo<FeatureCollection>(() => ({ type: "FeatureCollection", features: [
     ...places.map(p => ({ type: "Feature" as const, geometry: { type: "Point" as const, coordinates: [p.longitude, p.latitude] }, properties: { name: p.name } })),
     ...(route?.movements ?? []).flatMap(m => { const a = places.find(p => p.id === m.from_id), b = places.find(p => p.id === m.to_id); return a && b ? [{ type: "Feature" as const, geometry: { type: "LineString" as const, coordinates: [[a.longitude, a.latitude], [b.longitude, b.latitude]] }, properties: { mode: m.mode } }] : []; }),
@@ -33,7 +34,16 @@ export function PlannerMap({ places, route }: { places: Place[]; route: Route | 
       const points = latest.current.features.filter(f => f.geometry.type === "Point").map(f => (f.geometry as GeoJSON.Point).coordinates);
       if (points.length) instance.fitBounds([[Math.min(...points.map(p => p[0])), Math.min(...points.map(p => p[1]))], [Math.max(...points.map(p => p[0])), Math.max(...points.map(p => p[1]))]], { padding: 50, maxZoom: 7 });
     }
-    const observer = new ResizeObserver(() => instance.resize());
+    // Tile or style requests that fail, for example offline (C12).
+    instance.on("error", () => setFailed(true));
+    // In a hidden tab the container has no size, so the map fits again when it gets one (I2).
+    let empty = true;
+    const observer = new ResizeObserver(([entry]) => {
+      instance.resize();
+      const nowEmpty = entry.contentRect.width === 0 || entry.contentRect.height === 0;
+      if (empty && !nowEmpty && ready.current) fit();
+      empty = nowEmpty;
+    });
     observer.observe(container.current);
     return () => { observer.disconnect(); ready.current = false; instance.remove(); map.current = null; };
   }, []);
@@ -42,5 +52,8 @@ export function PlannerMap({ places, route }: { places: Place[]; route: Route | 
     (map.current.getSource("trip") as maplibregl.GeoJSONSource).setData(data);
     if (places.length) map.current.fitBounds([[Math.min(...places.map(p => p.longitude)), Math.min(...places.map(p => p.latitude))], [Math.max(...places.map(p => p.longitude)), Math.max(...places.map(p => p.latitude))]], { padding: 50, maxZoom: 7 });
   }, [data, places]);
-  return <div ref={container} className="planner-map" aria-label="Selected itinerary map" />;
+  return <div className="p-map">
+    <div ref={container} className="planner-map" aria-label="Selected itinerary map" />
+    {failed && <p className="p-map-error" role="status">Map unavailable. Check your connection.</p>}
+  </div>;
 }

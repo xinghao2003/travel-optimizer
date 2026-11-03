@@ -483,6 +483,192 @@ export function assumptionNotes(route: Pick<Route, "movements" | "purchases">, p
   return [...notes.values()];
 }
 
+// ---------------------------------------------------------------- itinerary
+
+/** One row of Day by day (E9.3): a journey, a stay in a city to visit, or time at a place that does not count. */
+export type DayEntry =
+  | { kind: "journey"; movement: Movement }
+  /** `minimum`: the city's minimum stay, on its first visit only (null when it has none). */
+  | { kind: "stay"; stay: Route["stays"][number]; minimum: number | null }
+  | { kind: "gap"; placeId: string; minutes: number };
+/**
+ * The option as one chronological list (E9.3): its journeys, a stay before the journey that ends it, and, between two
+ * journeys with no stay, the time at that place when it is 30 min or more. `minStays`: minimum hours by city to visit.
+ */
+export function dayByDay(route: Pick<Route, "movements" | "stays">, minStays: Record<string, number>): DayEntry[] {
+  const stays = [...route.stays].sort((a, b) => Date.parse(a.arrival) - Date.parse(b.arrival));
+  const visited = new Set<string>();
+  const entries: DayEntry[] = [];
+  let next = 0;
+  // Adds the stays that start by `until`; true when it added one.
+  const addStays = (until: number) => {
+    const first = next;
+    for (; next < stays.length && Date.parse(stays[next].arrival) <= until; next++) {
+      const stay = stays[next];
+      entries.push({ kind: "stay", stay, minimum: !visited.has(stay.place_id) && minStays[stay.place_id] ? minStays[stay.place_id] : null });
+      visited.add(stay.place_id);
+    }
+    return next > first;
+  };
+  route.movements.forEach((movement, index) => {
+    const departure = movement.departure ? Date.parse(movement.departure) : null;
+    const previous = route.movements[index - 1];
+    if (departure !== null && !addStays(departure) && previous?.arrival) {
+      const minutes = (departure - Date.parse(previous.arrival)) / 60000;
+      if (minutes >= 30) entries.push({ kind: "gap", placeId: movement.from_id, minutes });
+    }
+    entries.push({ kind: "journey", movement });
+  });
+  addStays(Infinity);
+  return entries;
+}
+
+/** The times of a journey, each in its place's time: "Fri 4 Dec · 08:00 → 18:54", with the arrival date when it differs. */
+export function journeyWhen(movement: Pick<Movement, "departure" | "arrival">, fromZone: string, toZone: string) {
+  if (!movement.departure || !movement.arrival) return "";
+  const date = formatLocal(movement.departure, fromZone, "date"), arrivalDate = formatLocal(movement.arrival, toZone, "date");
+  return `${date} · ${formatLocal(movement.departure, fromZone, "time")} → ${arrivalDate === date ? "" : `${arrivalDate} `}${formatLocal(movement.arrival, toZone, "time")}`;
+}
+
+// Airport transfers and airport changes are steps of a journey, not its service.
+const transferSources = /^(User-estimated airport|Airport) (access|egress)$|^User-verified airport transfer$/;
+/** The operator and service of a journey with one main service ("AirAsia X D7530"); null with several or none. */
+export function mainService(movement: Pick<Movement, "segments">) {
+  const main = movement.segments.filter(segment => !passiveModes.has(segment.mode) && !transferSources.test(segment.source ?? ""));
+  return main.length === 1 ? [main[0].operator, main[0].service].filter(Boolean).join(" ") || null : null;
+}
+
+const journeySources: Record<string, string> = { "Google Flights / fast-flights": "Google Flights", "Transitous / MOTIS": "Transitous", OSRM: "Road estimate", "User-defined connection": "Your connection", "User-supplied positioning": "Your journey" };
+/**
+ * The source line of a journey (E9.3): "Google Flights · 1 change · 1,234 km". Journeys without scheduled steps
+ * (road estimates, your connections) leave out the changes; the distance shows when it is known.
+ */
+export function journeySource(movement: Pick<Movement, "source" | "transfers" | "distance_km" | "segments">) {
+  return [
+    journeySources[movement.source] ?? movement.source,
+    ...(movement.segments.length ? [plural(movement.transfers, "change")] : []),
+    ...(movement.distance_km !== null ? [`${whole(movement.distance_km)} km`] : []),
+  ].join(" · ");
+}
+
+/** The chips of a journey row (E9.3): estimated timetable, your connection or journey, and its items that are not priced. */
+export function journeyChips(route: Pick<Route, "purchases">, movement: Movement, rates: Record<string, number>): OptionChip[] {
+  const items = new Set([movement.id, ...movement.charges.map(charge => charge.id)]);
+  const unpriced = route.purchases.filter(offer => items.has(offer.movement_ids[0]) && !isPriced(offer, rates)).length;
+  return [
+    ...(movement.schedule_estimated ? [{ text: "Estimated timetable", tone: "warn" as const }] : []),
+    ...(movement.source === "User-defined connection" ? [{ text: "Your connection", tone: "plain" as const }] : []),
+    ...(movement.source === "User-supplied positioning" ? [{ text: "Your journey", tone: "plain" as const }] : []),
+    ...(unpriced ? [{ text: `${unpriced} not priced`, tone: "warn" as const }] : []),
+  ];
+}
+
+// ---------------------------------------------------------------- tickets and prices
+
+const ticketKinds: Record<string, string> = { "round-trip": "Round trip", "multi-city": "Multi-city" };
+/** A combined ticket kind in words ("round-trip" → "Round trip"). Other values show as they are. */
+export function ticketKindLabel(kind: string) {
+  return ticketKinds[kind] ?? kind;
+}
+
+/** The departure a ticket shows: the first flight's, else the journey's (door to door). */
+function ticketDeparture(movement: Pick<Movement, "segments" | "departure">) {
+  return movement.segments.find(segment => segment.mode === "flight" && segment.departure)?.departure ?? movement.departure;
+}
+
+/** A journey as its ticket names it, with the local departure date: "Kuala Lumpur → Busan · 4 Dec". */
+export function ticketJourney(movement: Pick<Movement, "from_id" | "to_id" | "segments" | "departure">, placeName: (id: string) => string, zoneOf: (id: string) => string) {
+  const departure = ticketDeparture(movement);
+  return `${placeName(movement.from_id)} → ${placeName(movement.to_id)}${departure ? ` · ${formatLocal(departure, zoneOf(movement.from_id), "day")}` : ""}`;
+}
+
+/** The amount of one purchase (E9.4): "RM 2,180", "RM 210 – 250", "RM 900 or more", "JPY 12,000 · needs an exchange rate" or "Not priced". */
+export function purchaseAmount(offer: Pick<Offer, "low" | "high" | "currency">, rates: Record<string, number>) {
+  const text = offerAmount(offer);
+  return offer.low !== null && !hasRate(offer.currency, rates) ? `${text} · needs an exchange rate` : text;
+}
+
+/**
+ * One row of Tickets and prices (E9.4). `kind`: a journey's ticket, an airport access or egress charge ("transfer"),
+ * an airport change, another charge (rental) or a combined ticket. `componentId` is the id that Set price saves on
+ * (the template id for a journey, the charge id for a charge); null when the row has no Set price. `removable`: a price
+ * the user set here, which Remove my price deletes.
+ */
+export type TicketRow = {
+  key: string; kind: "journey" | "transfer" | "change" | "charge" | "combined"; label: string;
+  offer: Offer; movement: Movement | null; charge: Charge | null; flights: Movement[];
+  amount: string; source: string | null; priced: boolean; componentId: string | null; removable: boolean;
+};
+const chargeRank = (charge: Charge) => charge.kind === "Airport access" ? 1 : charge.kind === "Airport egress" ? 2 : charge.kind.startsWith("Airport transfer ") ? 3 : 4;
+/**
+ * The option's purchases in itinerary order (E9.4): each journey's ticket, then its access, egress and airport-change
+ * charges, then extra charges (rental). A combined ticket takes the place of its first flight. Purchases name route ids;
+ * combined tickets can also name template ids.
+ */
+export function ticketRows(route: Pick<Route, "movements" | "purchases" | "extra_charges">, rates: Record<string, number>, placeName: (id: string) => string, zoneOf: (id: string) => string): TicketRow[] {
+  type Slot = { order: number; movement: Movement | null; charge: Charge | null };
+  const slots = new Map<string, Slot>();
+  route.movements.forEach((movement, index) => {
+    const slot = { order: index * 10, movement, charge: null };
+    slots.set(movement.id, slot);
+    if (movement.template_id && !slots.has(movement.template_id)) slots.set(movement.template_id, slot);
+    for (const charge of movement.charges) slots.set(charge.id, { order: index * 10 + chargeRank(charge), movement, charge });
+  });
+  for (const charge of route.extra_charges) slots.set(charge.id, { order: route.movements.length * 10, movement: null, charge });
+
+  const rows = route.purchases.map((offer, index) => {
+    const covered = offer.movement_ids.map(id => slots.get(id));
+    const order = Math.min(...covered.map(slot => slot?.order ?? Infinity));
+    const base = { key: offer.id, offer, movement: null, charge: null, flights: [], amount: purchaseAmount(offer, rates),
+      source: offer.source === "unknown" ? null : sourceLabel(offer), priced: isPriced(offer, rates), componentId: null, removable: offer.source === "user" };
+    let row: TicketRow;
+    if (offer.movement_ids.length > 1) {
+      const flights = covered.flatMap(slot => slot?.movement && !slot.charge ? [slot.movement] : []).sort((a, b) => route.movements.indexOf(a) - route.movements.indexOf(b));
+      row = { ...base, kind: "combined", flights, label: `Combined ticket · ${ticketKindLabel(offer.kind)} · ${plural(offer.movement_ids.length, "flight")}` };
+    } else {
+      const { movement = null, charge = null } = covered[0] ?? {};
+      if (charge && charge.kind.startsWith("Airport transfer ")) {
+        // An airport change is priced in Missing info › Airport changes.
+        row = { ...base, kind: "change", movement, charge, removable: false, label: `${charge.kind.replace(/^Airport transfer /, "Airport change ")} · ${modeLabel(charge.mode)}` };
+      } else if (charge && (charge.kind === "Airport access" || charge.kind === "Airport egress")) {
+        row = { ...base, kind: "transfer", movement, charge, componentId: charge.id,
+          label: `${modeLabel(charge.mode)} ${placeName(charge.from_id ?? movement?.from_id ?? "")} → ${placeName(charge.to_id ?? movement?.to_id ?? "")}` };
+      } else if (charge) {
+        const rental = /^Rental: (\d+) day\(s\), (.+)$/.exec(charge.kind);
+        row = { ...base, kind: "charge", movement, charge, componentId: charge.id, label: rental ? `Rental car · ${plural(Number(rental[1]), "day")}, ${rental[2]}` : charge.kind };
+      } else if (movement) {
+        const service = mainService(movement);
+        // A price for your journey comes from Trip settings › your journeys, not from the trip's prices.
+        row = { ...base, kind: "journey", movement, componentId: movement.template_id ?? movement.id, removable: base.removable && !offer.id.startsWith("positioning-fare:"),
+          label: `${modeLabel(movement.mode)} ${ticketJourney(movement, placeName, zoneOf)}${service ? ` · ${service}` : ""}` };
+      } else {
+        row = { ...base, kind: "charge", label: offer.label || offer.kind };
+      }
+    }
+    return { row, order, index };
+  });
+  return rows.sort((a, b) => a.order - b.order || a.index - b.index).map(item => item.row);
+}
+
+/** A combined-ticket search (E9.5): "Round trip: Kuala Lumpur → Seoul (4 Dec) · Seoul → Kuala Lumpur (14 Dec)". Leg dates are local dates. */
+export function quoteLinkText(link: { kind: string; legs: { from_id: string; to_id: string; date: string }[] }, placeName: (id: string) => string) {
+  const day = (date: string) => Number.isNaN(Date.parse(`${date}T00:00:00Z`)) ? date : formatLocal(`${date}T00:00:00Z`, "UTC", "day");
+  return `${ticketKindLabel(link.kind)}: ${link.legs.map(leg => `${placeName(leg.from_id)} → ${placeName(leg.to_id)} (${day(leg.date)})`).join(" · ")}`;
+}
+
+/**
+ * Errors of a typed price (E9.4, E9.5), by field: `low` is required and 0 or more, `high` (blank for none) at least `low`,
+ * and the currency 3 letters. Empty when the price is valid.
+ */
+export function priceInputErrors(low: string, high: string, currency: string): Partial<Record<"low" | "high" | "currency", string>> {
+  const errors: Partial<Record<"low" | "high" | "currency", string>> = {};
+  const lowest = Number(low), highest = Number(high);
+  if (low.trim() === "" || !Number.isFinite(lowest) || lowest < 0) errors.low = "Enter a price of 0 or more.";
+  else if (high.trim() !== "" && (!Number.isFinite(highest) || highest < lowest)) errors.high = "The highest price must be at least the lowest.";
+  if (!/^[A-Za-z]{3}$/.test(currency.trim())) errors.currency = "Enter a 3-letter currency code.";
+  return errors;
+}
+
 // ---------------------------------------------------------------- trip
 
 const placeNames = (places: { name: string }[], home: { name: string } | null) => (places.length ? places : home ? [home] : []).map(place => place.name).join(" or ") || "home";
@@ -804,7 +990,7 @@ export function splitGroups(groups: MissingFareGroup[], rows: AirportTransferRow
  */
 export function matchingQuoteLinks<L extends { legs: { from_id: string; to_id: string; date: string }[] }>(links: L[], route: Pick<Route, "movements">, zoneOf: (placeId: string) => string): L[] {
   const flights = new Set(route.movements.filter(movement => movement.mode === "flight").map(movement => {
-    const departure = movement.segments.find(segment => segment.mode === "flight" && segment.departure)?.departure ?? movement.departure;
+    const departure = ticketDeparture(movement);
     return `${movement.from_id}>${movement.to_id}>${departure ? dateFormat(zoneOf(movement.from_id), "iso").format(new Date(departure)) : ""}`;
   }));
   return links.filter(link => link.legs.length > 0 && link.legs.every(leg => flights.has(`${leg.from_id}>${leg.to_id}>${leg.date}`)));
@@ -889,8 +1075,11 @@ export function buildNextSteps(state: RefinementState & {
   return steps;
 }
 
-/** Where an Options action goes: a next step's target, the trip settings, the connection form or the Over budget group. */
-export type OptionsTarget = NextStepTarget | "edit-trip" | "add-connection" | "over-budget";
+/**
+ * Where an Options or Itinerary action goes: a next step's target, the trip settings, the connection form, the Over budget
+ * group or Missing info › Airport transfers (Check before booking › Set transfer times).
+ */
+export type OptionsTarget = NextStepTarget | "edit-trip" | "add-connection" | "over-budget" | "transfer-times";
 export type OptionsAction = { label: string; target: OptionsTarget };
 /** The Options panel when it has no best option (C12): a title (only for "no-itinerary") and lines, each with at most one action. */
 export type EmptyState = {

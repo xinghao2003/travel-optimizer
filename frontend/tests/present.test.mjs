@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { loadTs } from "./loadTs.mjs";
 const {
-  airportChangeRows, appError, assumedConnections, assumptionNotes, buildNextSteps, bundleStatusLabel, cityGaps, compareText, dateModeText, dateRange, formatDuration,
-  formatLocal, hoursText, matchingQuoteLinks, modeLabel, moneyShort, needsInputCount, optionChips, optionsEmptyState, partySizeNotice, perCityHourText, priceEstimated, priceText, routeChain, routeSignature,
-  searchDetails, searchState, settingsFooter, settingsSummaries, sortRoutes, sourceLabel, splitGroups, stepLabel, staySumWarning, transferDirections, tripSummary,
-  unpricedSummary, unresolvedAccessJourneys, validateDraft,
+  airportChangeRows, appError, assumedConnections, assumptionNotes, buildNextSteps, bundleStatusLabel, cityGaps, compareText, dateModeText, dateRange, dayByDay, formatDuration,
+  formatLocal, hoursText, journeyChips, journeySource, journeyWhen, mainService, matchingQuoteLinks, modeLabel, moneyShort, needsInputCount, optionChips, optionsEmptyState, partySizeNotice, perCityHourText, priceEstimated, priceText, routeChain, routeSignature,
+  priceInputErrors, purchaseAmount, quoteLinkText, searchDetails, searchState, settingsFooter, settingsSummaries, sortRoutes, sourceLabel, splitGroups, stepLabel, staySumWarning, ticketJourney, ticketRows,
+  transferDirections, tripSummary, unpricedSummary, unresolvedAccessJourneys, validateDraft,
 } = await loadTs("../src/lib/present.ts");
 const { blankTrip } = await loadTs("../src/lib/planner.ts");
 
@@ -383,6 +383,50 @@ test("assumption notes are plain sentences, each listed once", () => {
   ]);
 });
 
+test("day by day lists journeys, stays and time at places that does not count, in order", () => {
+  const stay = (place_id, arrival, departure, hours) => ({ place_id, arrival, departure, hours });
+  const route = option("r", {
+    movements: [
+      flightTo("f1", "KUL", "SIN", { departure: "2026-12-04T00:00:00Z", arrival: "2026-12-04T02:00:00Z" }),
+      flightTo("f2", "SIN", "PUS", { departure: "2026-12-04T07:00:00Z", arrival: "2026-12-04T09:54:00Z" }),
+      flightTo("f3", "PUS", "HND", { departure: "2026-12-08T02:15:00Z", arrival: "2026-12-08T07:57:00Z" }),
+      flightTo("f4", "HND", "PUS", { departure: "2026-12-10T23:45:00Z", arrival: "2026-12-11T02:00:00Z" }),
+      flightTo("f5", "PUS", "ICN", { departure: "2026-12-11T02:20:00Z", arrival: "2026-12-11T03:00:00Z" }),
+    ],
+    // Stays write their instants with "+00:00", movements with "Z".
+    stays: [stay("PUS", "2026-12-04T09:54:00+00:00", "2026-12-08T02:15:00+00:00", 88.35), stay("HND", "2026-12-08T07:57:00+00:00", "2026-12-10T23:45:00+00:00", 63.8), stay("PUS", "2026-12-11T02:00:00+00:00", "2026-12-11T02:20:00+00:00", 0.33)],
+  });
+  const rows = dayByDay(route, { PUS: 24, HND: 0 }).map(entry => entry.kind === "journey" ? entry.movement.id : entry.kind === "stay" ? `${entry.stay.place_id}:${entry.minimum}` : `gap:${entry.placeId}:${entry.minutes}`);
+  // 5 h in Singapore do not count; the second stay in Busan has no minimum; 0 h is no minimum.
+  assert.deepEqual(rows, ["f1", "gap:SIN:300", "f2", "PUS:24", "f3", "HND:null", "f4", "PUS:null", "f5"]);
+  // A gap under 30 min is not listed.
+  assert.deepEqual(dayByDay({ ...route, stays: [] }, {}).filter(entry => entry.kind === "gap").map(entry => entry.minutes), [300, 5301, 3828]);
+  assert.deepEqual(dayByDay({ movements: [flightTo("a", "KUL", "SIN", { departure: "2026-12-04T00:00:00Z", arrival: "2026-12-04T02:00:00Z" }), flightTo("b", "SIN", "KUL", { departure: "2026-12-04T02:29:00Z", arrival: "2026-12-04T05:00:00Z" })], stays: [] }, {}).map(entry => entry.kind), ["journey", "journey"]);
+});
+
+test("journey rows: times, main service, source line and chips", () => {
+  const flight = { departure: "2026-12-04T00:00:00Z", arrival: "2026-12-04T09:54:00Z" };
+  assert.equal(journeyWhen(flight, "Asia/Kuala_Lumpur", "Asia/Seoul"), "Fri 4 Dec · 08:00 → 18:54");
+  assert.equal(journeyWhen({ departure: "2026-12-04T14:00:00Z", arrival: "2026-12-04T22:00:00Z" }, "Asia/Kuala_Lumpur", "Asia/Seoul"), "Fri 4 Dec · 22:00 → Sat 5 Dec 07:00");
+  assert.equal(journeyWhen({ departure: null, arrival: null }, "UTC", "UTC"), "");
+  const segment = (mode, source, extra = {}) => ({ mode, source, operator: null, service: null, ...extra });
+  const access = [segment("taxi", "User-estimated airport access"), segment("wait", "Flight readiness buffer")];
+  assert.equal(mainService({ segments: [...access, segment("flight", "Google Flights", { operator: "AirAsia X", service: "D7530" }), segment("transfer", "Airport egress")] }), "AirAsia X D7530");
+  assert.equal(mainService({ segments: [segment("flight", "Google Flights", { operator: "Asiana", service: "OZ1" }), segment("rail", "User-verified airport transfer"), segment("flight", "Google Flights", { operator: "Asiana", service: "OZ2" })] }), null);
+  assert.equal(mainService({ segments: [] }), null);
+  assert.equal(journeySource({ source: "Google Flights / fast-flights", transfers: 1, distance_km: null, segments: [{}] }), "Google Flights · 1 change");
+  assert.equal(journeySource({ source: "Transitous / MOTIS", transfers: 0, distance_km: 324.6, segments: [{}] }), "Transitous · 0 changes · 325 km");
+  assert.equal(journeySource({ source: "OSRM", transfers: 0, distance_km: 1234, segments: [] }), "Road estimate · 1,234 km");
+  assert.equal(journeySource({ source: "User-defined connection", transfers: 0, distance_km: null, segments: [] }), "Your connection");
+  const movement = flightTo("f1", "KUL", "PUS");
+  const route = option("r", { purchases: [noFare("f1"), noFare("f1:access", "Airport access"), fare("f1:egress", 144), fare("f2", 9000, 9000, { currency: "JPY" })] });
+  const chips = (m, rates = { MYR: 1 }) => journeyChips(route, m, rates).map(chip => `${chip.tone}:${chip.text}`);
+  assert.deepEqual(chips(movement), ["warn:2 not priced"]);
+  assert.deepEqual(chips({ ...flightTo("f2", "PUS", "HND"), schedule_estimated: true }), ["warn:Estimated timetable", "warn:1 not priced"]);
+  assert.deepEqual(chips({ ...flightTo("f2", "PUS", "HND"), source: "User-defined connection" }, { MYR: 1, JPY: 0.03 }), ["plain:Your connection"]);
+  assert.deepEqual(chips({ ...flightTo("x", "PUS", "HND"), source: "User-supplied positioning" }), ["plain:Your journey"]);
+});
+
 test("trip summary lines", () => {
   const summary = tripSummary(draftTrip({ departures: [kualaLumpur, place("SIN", "Singapore")], arrivals: [kualaLumpur], adults: 2, budget_myr: 12000, departure_start: "09:00:00", departure_end: "17:00:00", modes: ["coach", "flight", "rail", "bus"] }));
   assert.equal(summary.route, "Kuala Lumpur or Singapore → Seoul 48 h+, Busan 24 h+, Tokyo 48 h+ (any order) → Kuala Lumpur");
@@ -618,4 +662,61 @@ test("price sources and combined-ticket statuses in plain words", () => {
     "Not priced",
   ]);
   assert.deepEqual(["requires_manual_quote", "success", "empty", "failed", "unsupported", "other"].map(bundleStatusLabel), ["Check the price yourself", "Quote found", "No results", "Search failed", "Not supported", "other"]);
+});
+
+test("purchase amounts state ranges, open-ended prices, missing rates and missing prices", () => {
+  const amount = (low, high, currency = "MYR") => plain(purchaseAmount({ low, high, currency }, { USD: 4.5 }));
+  assert.deepEqual([amount(2180, 2180), amount(210, 250), amount(900, null), amount(12000, 12000, "JPY"), amount(100, 120, "USD"), amount(null, null)],
+    ["RM 2,180", "RM 210 – 250", "RM 900 or more", "JPY 12,000 · needs an exchange rate", "USD 100 – 120", "Not priced"]);
+});
+
+test("tickets and prices follow the itinerary: ticket, access, egress, airport change, then extra charges", () => {
+  const names = { KUL: "Kuala Lumpur", PUS: "Busan", GMP: "Seoul", HND: "Tokyo" };
+  const placeName = id => names[id] ?? (id.startsWith("airport:") ? `${id.slice(8)} airport` : id);
+  const zoneOf = () => "Asia/Kuala_Lumpur";
+  const f1 = flightTo("f1:transfer:h", "KUL", "PUS", { template_id: "f1", departure: "2026-12-04T00:00:00Z", segments: [{ mode: "transfer", departure: "2026-12-04T00:00:00Z" }, { mode: "flight", operator: "AirAsia X", service: "D7530", departure: "2026-12-04T01:30:00Z" }] });
+  const f2 = flightTo("f2", "PUS", "HND", { departure: "2026-12-08T02:15:00Z" });
+  f2.charges.push({ ...charge("f2:airport-transfer:1", "Airport transfer GMP → ICN", "airport:GMP", "airport:ICN"), mode: "rail", source: "user", low: 60, high: 60 });
+  const f3 = flightTo("f3", "HND", "KUL", { departure: "2026-12-13T23:30:00Z" });
+  const rental = { ...charge("rental:1", "Rental: 3 day(s), pickup and drop-off", "PUS", "PUS"), mode: "rental" };
+  const route = option("r", {
+    movements: [f1, f2, f3], extra_charges: [rental],
+    purchases: [
+      fare("rental:1", 300, 300, { id: "charge:rental:1", source: "rule", label: rental.kind }),
+      { ...fare("f2", 900, 1000), id: "bundle:b1", movement_ids: ["f3", "f2"], kind: "round-trip", source: "user", label: "Manually entered whole-ticket party fare" },
+      fare("f2:airport-transfer:1", 60, 60, { id: "charge:f2:airport-transfer:1", source: "user", label: "Airport transfer GMP → ICN" }),
+      noFare("f1:transfer:h:egress", "Airport egress"),
+      fare("f1:transfer:h", 2180, 2180, { id: "user:f1:f1:transfer:h", source: "user", label: "Standalone flight fare" }),
+      noFare("f1:transfer:h:access", "Airport access"),
+      fare("f2:access", 12000, 12000, { currency: "JPY", source: "rule", label: "Trip airport transfer estimate" }),
+    ],
+  });
+  const rows = ticketRows(route, {}, placeName, zoneOf);
+  assert.deepEqual(rows.map(row => [row.kind, plain(row.label), plain(row.amount), row.source, row.priced, row.componentId, row.removable]), [
+    ["journey", "Flight Kuala Lumpur → Busan · 4 Dec · AirAsia X D7530", "RM 2,180", "Your price", true, "f1", true],
+    ["transfer", "Taxi Kuala Lumpur → KUL airport", "Not priced", null, false, "f1:transfer:h:access", false],
+    ["transfer", "Taxi PUS airport → Busan", "Not priced", null, false, "f1:transfer:h:egress", false],
+    ["combined", "Combined ticket · Round trip · 2 flights", "RM 900 – 1,000", "Your combined ticket price", true, null, true],
+    ["transfer", "Taxi Busan → PUS airport", "JPY 12,000 · needs an exchange rate", "Your airport transfer price", false, "f2:access", false],
+    ["change", "Airport change GMP → ICN · Train", "RM 60", "Your price", true, null, false],
+    ["charge", "Rental car · 3 days, pickup and drop-off", "RM 300", "Rental settings", true, "rental:1", false],
+  ]);
+  // A combined ticket lists its flights in itinerary order.
+  assert.deepEqual(rows[3].flights.map(flight => flight.id), ["f2", "f3"]);
+  assert.equal(ticketJourney(f3, placeName, () => "Asia/Tokyo"), "Tokyo → Kuala Lumpur · 14 Dec");
+  // A combined ticket on template ids takes the place of its first flight.
+  const templates = ticketRows(option("t", { movements: [f1, f2], purchases: [{ ...fare("x", 1500), id: "bundle:b2", movement_ids: ["f1", "f2"], kind: "multi-city", source: "user", label: "Manually entered whole-ticket party fare" }, noFare("f1:transfer:h:access", "Airport access")] }), {}, placeName, zoneOf);
+  assert.deepEqual(templates.map(row => row.label), ["Combined ticket · Multi-city · 2 flights", "Taxi Kuala Lumpur → KUL airport"]);
+});
+
+test("combined-ticket searches and typed prices in plain words", () => {
+  const placeName = id => ({ KUL: "Kuala Lumpur", GMP: "Seoul" })[id] ?? id;
+  assert.equal(quoteLinkText({ kind: "round-trip", legs: [{ from_id: "KUL", to_id: "GMP", date: "2026-12-04" }, { from_id: "GMP", to_id: "KUL", date: "2026-12-14" }] }, placeName),
+    "Round trip: Kuala Lumpur → Seoul (4 Dec) · Seoul → Kuala Lumpur (14 Dec)");
+  assert.deepEqual(priceInputErrors("120", "", "myr"), {});
+  assert.deepEqual(priceInputErrors("0", "0", "MYR"), {});
+  assert.deepEqual(priceInputErrors("", "", "MY"), { low: "Enter a price of 0 or more.", currency: "Enter a 3-letter currency code." });
+  assert.deepEqual(priceInputErrors("-1", "", "MYR"), { low: "Enter a price of 0 or more." });
+  assert.deepEqual(priceInputErrors("200", "150", "MYR"), { high: "The highest price must be at least the lowest." });
+  assert.deepEqual(priceInputErrors("200", "abc", "MYR"), { high: "The highest price must be at least the lowest." });
 });

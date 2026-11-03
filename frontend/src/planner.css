@@ -433,6 +433,92 @@ html { scroll-padding-top: calc(var(--header-h) + var(--tabs-h, 0px) + 8px); scr
 .p-options-empty-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .optimizer .p-options-empty-line p { flex: 1 1 240px; margin: 0; color: var(--foreground); }
 
+/* Itinerary (C7, E9): the header with Compare, the map, Day by day, Tickets and prices, and Check before booking. */
+.p-itin-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.optimizer .p-itin-head h2 { margin-right: auto; }
+.p-itin-compare { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.p-itin-compare label { color: var(--muted-foreground); white-space: nowrap; }
+.optimizer .p-itin-compare select { width: auto; max-width: 280px; height: 32px; padding-top: 4px; padding-bottom: 4px; }
+.p-itin-price { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-top: 8px; }
+.p-itin-total { color: var(--foreground); font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.optimizer .p-itin-warning { display: flex; align-items: flex-start; gap: 6px; margin: 6px 0 0; color: var(--warning); line-height: 1.5; }
+.p-itin-warning > svg { flex-shrink: 0; margin-top: 3px; }
+.p-link-button { padding: 0; border: 0; background: none; color: inherit; font-weight: 500; text-decoration: underline; text-underline-offset: 3px; }
+.p-itin-metrics { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 2px; margin-top: 6px; color: var(--foreground); font-variant-numeric: tabular-nums; }
+.optimizer .p-itin-compare-text { margin: 8px 0 0; padding: 8px 12px; border-radius: 8px; background: var(--muted-surface); color: var(--foreground); line-height: 1.5; }
+.p-itin-map { position: relative; margin-top: 16px; border-top: 1px solid var(--border); }
+.p-itin-map > details > summary { display: flex; align-items: center; gap: 6px; min-height: 44px; padding: 10px 36px 10px 0; list-style: none; cursor: pointer; color: var(--foreground); font-weight: 500; }
+.p-itin-map > .p-tip { position: absolute; top: 10px; right: 0; }
+.p-itin-map > details > summary::-webkit-details-marker, .p-journey > summary::-webkit-details-marker { display: none; }
+.p-map { position: relative; }
+.p-map-loading { display: grid; place-items: center; height: 330px; border-radius: 10px; background: var(--muted-surface); color: var(--muted-foreground); }
+.optimizer .p-map-error { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; padding: 16px; border-radius: 10px; background: var(--muted-surface); color: var(--foreground); text-align: center; }
+.p-itin-section-head { position: relative; display: flex; align-items: center; gap: 4px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
+.optimizer .p-itin-section-head h3 { margin: 0; font-size: 13px; }
+.optimizer .p-itin-section-title { margin: 16px 0 8px; padding-top: 16px; border-top: 1px solid var(--border); font-size: 13px; }
+.p-day-list { margin: 4px 0 0; padding: 0; list-style: none; }
+.p-day-list > li + li { border-top: 1px solid var(--border); }
+.p-journey > summary { display: flex; align-items: flex-start; gap: 6px; padding: 10px 0; list-style: none; cursor: pointer; }
+.p-journey > summary > .p-chevron { margin-top: 2px; color: var(--muted-foreground); }
+.p-journey-head { display: grid; flex: 1; gap: 2px; min-width: 0; }
+.p-journey-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.p-journey-when { color: var(--foreground); font-weight: 500; font-variant-numeric: tabular-nums; }
+.p-journey-duration { margin-left: auto; color: var(--muted-foreground); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.p-journey-route { color: var(--foreground); }
+.p-journey-service { display: inline-flex; align-items: center; gap: 4px; color: var(--muted-foreground); }
+.p-journey-body { padding: 0 0 12px 22px; }
+.p-steps { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.p-steps > li { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 8px; color: var(--foreground); line-height: 1.5; overflow-wrap: anywhere; }
+.p-steps > li[data-warning] { color: var(--warning); }
+.p-step-time { color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+.p-step-icon { display: inline; margin-right: 4px; vertical-align: -2px; }
+.optimizer .p-journey-body .p-notice { margin: 8px 0 0; }
+.optimizer .p-journey-source { margin: 8px 0 0; font-size: 12px; }
+.p-day-stay { display: grid; gap: 2px; padding: 10px 0 10px 22px; color: var(--foreground); }
+.p-day-times { color: var(--muted-foreground); font-size: 12px; font-variant-numeric: tabular-nums; }
+.p-day-stay progress { width: 100%; height: 6px; margin-top: 4px; accent-color: var(--chart); }
+.p-day-gap { padding: 10px 0 10px 22px; color: var(--muted-foreground); font-size: 12px; }
+/* Tickets and prices (E9.4): one row per purchase, with Set price opening an editor under the row. */
+.p-tickets-total { margin-left: auto; color: var(--foreground); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.p-tickets { margin: 4px 0 0; padding: 0; list-style: none; }
+.p-tickets > li + li { border-top: 1px solid var(--border); }
+.p-ticket { padding: 10px 0; }
+.p-ticket-line { display: flex; align-items: baseline; gap: 4px 12px; }
+.p-ticket-label { flex: 1; min-width: 0; color: var(--foreground); overflow-wrap: anywhere; }
+.p-ticket-amount { color: var(--foreground); font-weight: 500; font-variant-numeric: tabular-nums; text-align: right; }
+.p-ticket-amount[data-tone=warn] { color: var(--warning); }
+.optimizer .p-ticket-flights { display: block; margin-top: 2px; color: var(--muted-foreground); font-size: 12px; }
+.p-ticket-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 12px; margin-top: 2px; color: var(--muted-foreground); font-size: 12px; }
+.p-ticket-meta .p-link-button { color: var(--foreground); }
+.p-ticket-meta .p-link-button:disabled { opacity: .5; }
+.p-price-editor { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 12px; margin-top: 8px; padding: 12px; border-radius: 8px; background: var(--muted-surface); }
+.p-price-editor > .p-field { flex: 0 1 140px; min-width: 0; }
+.p-price-editor > .p-field.p-price-currency, .p-combined-fields > .p-price-currency { flex-basis: 80px; }
+.optimizer .p-price-editor > .p-check { margin: 0 0 9px; }
+.p-price-actions { display: flex; gap: 8px; }
+.optimizer .p-price-editor > .p-field-error { flex-basis: 100%; margin: 0; }
+.p-ticket-separate { margin-top: 4px; }
+.p-ticket-separate > summary, .p-combined > summary { display: flex; align-items: center; gap: 6px; list-style: none; cursor: pointer; color: var(--foreground); }
+.p-ticket-separate > summary { padding: 4px 0; font-size: 12px; }
+.p-ticket-separate > summary::-webkit-details-marker, .p-combined > summary::-webkit-details-marker { display: none; }
+.p-ticket-separate > div { margin-top: 8px; }
+.optimizer .p-ticket-separate p { margin: 0; color: var(--foreground); font-size: 12px; }
+/* Add a combined ticket price (E9.5) and the combined-ticket searches that match the option. */
+.p-combined { margin-top: 8px; border-top: 1px solid var(--border); }
+.p-combined > summary { min-height: 44px; padding: 10px 0; font-weight: 500; }
+.p-combined-body { display: grid; gap: 12px; padding-bottom: 4px; }
+.optimizer .p-combined-body p { margin: 0; color: var(--foreground); }
+.p-combined fieldset { display: grid; gap: 2px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.optimizer .p-combined fieldset .p-check { margin: 0; font-size: 13px; }
+.p-combined-fields { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 12px; }
+.p-combined-fields > .p-field { flex: 1 1 140px; min-width: 0; }
+.p-combined-body > button { justify-self: start; }
+.optimizer .p-quote-links h4 { margin: 0 0 4px; color: var(--foreground); font-size: 12px; font-weight: 600; }
+.p-quote-links ul { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; color: var(--foreground); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.p-check-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.p-check-list > li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.optimizer .p-check-list p { flex: 1 1 240px; margin: 0; color: var(--foreground); line-height: 1.5; }
+
 /* Tabs (C5, C11) */
 .p-tabs { display: flex; gap: 4px; }
 .p-tab { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 44px; padding: 0 12px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--muted-foreground); font-weight: 500; white-space: nowrap; }
@@ -498,4 +584,16 @@ html { scroll-padding-top: calc(var(--header-h) + var(--tabs-h, 0px) + 8px); scr
   .optimizer .p-options-sort select { flex: 1; height: 44px; }
   .p-over-budget > .p-tip { right: 10px; }
   .p-over-budget > details > summary { padding-right: 48px; }
+  .p-itin-compare { flex: 1 1 100%; }
+  .optimizer .p-itin-compare select { flex: 1; max-width: none; height: 44px; }
+  .p-itin-map > .p-tip { right: 10px; }
+  .p-itin-map > details > summary { padding-right: 48px; }
+  .planner-map, .p-map-loading { height: 260px; }
+  .p-journey-body { padding-left: 0; }
+  .p-steps > li { grid-template-columns: 40px minmax(0, 1fr); }
+  .p-ticket-line { flex-wrap: wrap; }
+  .p-price-editor > .p-field, .p-combined-fields > .p-field { flex: 1 1 100%; }
+  .p-price-actions { flex: 1 1 100%; }
+  .p-price-actions > button { flex: 1; }
+  .p-combined-body > button { justify-self: stretch; }
 }

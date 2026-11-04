@@ -1,6 +1,6 @@
 # UI/UX redesign: status and next steps
 
-Status on 2 November 2026: steps 1–4 of spec I1 are implemented on branch `ux-redesign`. The branch is not pushed. Steps 5–8 remain.
+Status on 4 November 2026: steps 1–6 of spec I1 are implemented on branch `ux-redesign`. The branch is not pushed. Steps 7 (cleanup) and 8 (full verification) remain.
 
 ## Goal
 
@@ -46,8 +46,8 @@ On 2 November 2026 the user adopted all 7 behavior changes (the "Change" column,
 | 2 Shell | 7cca420 | AppHeader with the ⋯ menu, ErrorBanner, TripBar, StatusStrip, Tabs, workspace grid. Old sections moved into the panels unchanged. |
 | 3 Trip settings | 1ed3277 | TripSettings (core fields, More settings groups, sticky footer), PositioningSettings, InfoTip, Field, NumberField, PlacePicker, autosave guard, party-size notice. |
 | 4 Options | 1048207 | OptionsPanel (Next steps, rows, sort, weaker, Over budget, empty states, show more, selection by signature), ModeIcon, ParetoExplorer rewrite with the pure chart logic in `lib/chartView.ts`. |
-| 5 Itinerary | — | Header, compare, Day by day, Tickets and prices, combined ticket, map disclosure. |
-| 6 Drafts and Missing info | — | `useTripDrafts`, the 7 sections, itinerary PriceEditor, ApplyBar. Largest step. |
+| 5 Itinerary | 6692cf3 | Header, compare, Day by day, Tickets and prices, combined ticket, map disclosure. |
+| 6 Drafts and Missing info | 0f32e36 | `useTripDrafts`, the 7 sections, itinerary PriceEditor, ApplyBar. Largest step. |
 | 7 Cleanup | — | CSS rewrite, legacy deletion, `index.html`, README labels. |
 | 8 Full verification | — | All of spec J. |
 
@@ -55,11 +55,10 @@ On 2 November 2026 the user adopted all 7 behavior changes (the "Change" column,
 
 Continue in spec I1 order. These items were found during steps 1–3 and belong to later steps:
 
-- Step 5: rebuild Compare (E7) in the itinerary header; the old "Compare selected itinerary with" select sits at the top of the Itinerary panel for now. The itinerary heading "Option {n} of {k}" can use the `numbers` map and `refinement` from step 4. `FareEditor` still uses the old `p-error` style. `ModeIcon.tsx` exists.
-- Step 6: keep the focus ids that Next steps uses, or move them to the new sections: `airport-change-unresolved`, `transfer-price-{from}>{to}`, `missing-fare-first`, `add-connection`, `#missing-fares-title`. The `focusTarget` effect now opens closed `<details>` around its target and accepts a list of ids.
 - Chart polish: on the demo trip, the "×3" and "×2" stack labels at the right edge overlap.
+- Step 7: delete the legacy files (App.tsx, RouteMap.tsx, lib/types.ts, ui/badge.tsx, ui/card.tsx) and the unused CSS listed by the step 4–6 agents: `.p-comparison`, `.p-route-*`, `.p-leg-*`, `.p-visit*`, `.p-main-fields`, `.p-places-grid`, `.p-search-actions`, `.p-missing-list`, `.p-purchases*`, `.p-timeline*`, `.p-segments`, `.p-inline`, `.p-airport-*`, `.p-fare-editor`, `.p-fare-components`, the `!important` rules; check whether AirportTransferTable.tsx and MissingFaresTable.tsx are still needed; README labels (spec I2); `index.html`.
+- Steps 4, 5 and 6 had no agent review and no browser QA agent (skipped for speed). Step 8 must run the full spec J list.
 - Step 4 had no agent review and no browser QA agent (skipped for speed). It was checked with the build, 62 tests and the browser (wide and 360 px, light and dark, both demo trips, sort, selection, Next steps actions).
-- Step 6: the Apply bar sets `--apply-h` (the settings footer already uses it). Restore the full C8 tip on Missing info ("…a draft in this browser until you select Apply…"); step 3 shortened it because Apply does not exist yet. Rewrite the quote-links text "enter a complete ticket price above", which now points to another tab. The moved sections still use h2 and the "03"/"05" badges; I8 wants h3.
 - Step 7: remove the legacy CSS that is no longer used: `.p-main-fields`, `.p-visits`, `.p-search-actions`, `.p-places-grid`, `.p-details`, `.p-missing-list` and the `!important` rules. Delete App.tsx, RouteMap.tsx, lib/types.ts, ui/badge.tsx and ui/card.tsx.
 - To decide: when the draft has errors, opening another trip, New trip and Copy trip still try to save first. The server refuses, so the user must fix the fields first. This was already so before the redesign.
 
@@ -83,6 +82,14 @@ Step 4 deviations (details in the step 4 commit and the agents' notes):
 - Hours round half up (218.25 → "218.3"); spec examples show 218.2.
 - Hollow chart marks are circles with a `--card` fill (themeable), not `emptyCircle`. The budget line shows only when the budget is within 1.25 × the largest price.
 - "Add prices" focuses the first missing transfer in the current table order (Busan → PUS on the demo), not Kuala Lumpur → KUL.
+
+Step 5–6 deviations (details in the commits and agent notes):
+- Itinerary header chips leave out the not-priced, may-exceed and over-budget chips (the lines below say it).
+- The price editor keeps a Range checkbox so open-ended prices stay possible; an "All transfers" price cannot be open-ended.
+- `--apply-h` is the measured bar height. After Apply, focus goes to the heading of the panel in view.
+- Transfer and airport-change fields stage on every change (so "Fix {k} values" can find invalid text); Esc restores the value from when the field got focus.
+- Connections between cities shows after a search even without gaps, so a connection can always be added.
+- Focus ids are now built by `airportChangeFieldId()` and `transferFieldId()` in `lib/drafts.ts`.
 
 ## Spec inconsistencies found
 

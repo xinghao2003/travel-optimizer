@@ -676,6 +676,24 @@ class PersistenceAndJobsTests(unittest.IsolatedAsyncioTestCase):
         await manager.running[job["id"]]
         self.assertEqual(self.db.get("jobs", job["id"])["status"], "cancelled")
 
+    async def test_continue_after_transit_setup_queues_transit_and_drops_the_disabled_message(self):
+        class Fake(DiscoveryManager):
+            async def fetch(self, task, spec, snapshot):
+                return {"status": "empty"}, True
+        manager = Fake(self.db)
+        record = self.db.new_trip(trip(modes=["rail"]).model_dump(mode="json"))
+        with patch("app.planner_discovery.transitous.contact_url", ""):
+            job = manager.start(record["id"], 1)
+        await manager.running[job["id"]]
+        saved = self.db.get("jobs", job["id"])
+        self.assertTrue(any("Transitous is disabled" in message for message in saved["messages"]))
+        with patch("app.planner_discovery.transitous.contact_url", "https://example.test"):
+            manager.start(record["id"], 1, job["id"])
+            await manager.running[job["id"]]
+        saved = self.db.get("jobs", job["id"])
+        self.assertTrue(any(task["kind"] == "transit" for task in saved["queue"]))
+        self.assertFalse(any("Transitous is disabled" in message for message in saved["messages"]))
+
     async def test_v2_api_revision_and_fare_reoptimization(self):
         import app.planner_api as endpoints
         from app.main import app

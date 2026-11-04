@@ -728,10 +728,13 @@ class DiscoveryManager:
         self.separate_manual_quotes(job, spec)
         job.update(status="queued", batch_budget=budget, batch_requests=0)
         job["transit_configured"] = bool(transitous.contact_url)
+        message = "Transitous is disabled until its contact URL is configured and routing use coordinated. No transit requests were sent."
         if any(m in TRANSIT_MODES for m in spec.modes) and not transitous.contact_url:
-            message = "Transitous is disabled until its contact URL is configured and routing use coordinated. No transit requests were sent."
             if message not in job["messages"]:
                 job["messages"].append(message)
+        elif message in job["messages"]:
+            # A job continued after transit search was set up: its transit tasks were queued above.
+            job["messages"].remove(message)
         self.cancelled_jobs.discard(job["id"])
         self.live_jobs[job["id"]] = job
         self.store.put("jobs", job["id"], job)

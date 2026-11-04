@@ -24,8 +24,11 @@ logger = logging.getLogger("uvicorn.error")
 
 UTC = timezone.utc
 INF = float("inf")
+# The built-in id(): optimize uses `id` as a variable name.
+_object_key = id
 
 
+@lru_cache(maxsize=None)
 def cents(value: float) -> int:
     return int((Decimal(str(value))*100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
@@ -71,21 +74,26 @@ def _rule_offer(component: str, movement: Movement, distance, mode, spec, rules,
 
 
 def _fare_index(offers: list[FareOffer], spec: TripSpec):
+    """Single-journey offers by journey id, and the positions of multi-journey offers by each of their journey ids."""
     direct = defaultdict(list)
     bundles = []
+    bundles_by_id = defaultdict(list)
     for offer in offers:
         if not offer.validated or offer.adults is not None and offer.adults != spec.adults:
             continue
         if len(offer.movement_ids) == 1:
             direct[offer.movement_ids[0]].append(offer)
         elif len(offer.movement_ids) > 1:
+            for id in set(offer.movement_ids):
+                bundles_by_id[id].append(len(bundles))
             bundles.append(offer)
-    return direct, bundles
+    return direct, bundles, bundles_by_id
 
 
 def price_path(path: list[Movement], offers: list[FareOffer], spec: TripSpec,
-               rules: list[PricingRule], extra: list[Charge] | None = None, *, fare_index=None) -> dict:
-    direct_offers, bundle_offers = fare_index if fare_index is not None else _fare_index(offers, spec)
+               rules: list[PricingRule], extra: list[Charge] | None = None, *, fare_index=None, dump=True) -> dict:
+    # `dump=False` keeps the purchases as FareOffer objects: optimize converts only the routes it returns.
+    direct_offers, bundle_offers, bundles_by_id = fare_index if fare_index is not None else _fare_index(offers, spec)
     components: dict[str, tuple[Movement, Charge | None]] = {}
     for m in path:
         components[m.id] = (m, None)
@@ -134,7 +142,9 @@ def price_path(path: list[Movement], offers: list[FareOffer], spec: TripSpec,
                                 "currency": direct[0].currency,
                                 "reason": "exchange_rate" if direct[0].low is not None and direct[0].currency not in spec.exchange_rates else "missing_fare"})
     aliases = {m.template_id: m.id for m in path if m.template_id}
-    for offer in bundle_offers:
+    # Only an offer with one of the path's ids (or the template id of one) can cover the path; keep the offers' order.
+    nearby = sorted({position for id in (*indexes, *aliases) for position in bundles_by_id.get(id, ())})
+    for offer in (bundle_offers[position] for position in nearby):
         if any(id in aliases for id in offer.movement_ids):
             offer = offer.model_copy(update={"movement_ids": [aliases.get(id, id) for id in offer.movement_ids]})
         if not set(offer.movement_ids).issubset(indexes):
@@ -171,7 +181,7 @@ def price_path(path: list[Movement], offers: list[FareOffer], spec: TripSpec,
     return {"low_cents": lower, "high_cents": upper, "total_cost_myr": lower/100 if lower == upper else None,
             "cost_low_myr": lower/100, "cost_high_myr": upper/100 if upper != INF else None,
             "estimated": any(o.estimated or o.source == "rule" or o.currency != "MYR" for o in chosen),
-            "purchases": [o.model_dump(mode="json") for o in chosen],
+            "purchases": [o.model_dump(mode="json") for o in chosen] if dump else chosen,
             "missing": diagnostics if upper == INF else [], "uncertainty_key": unknown}
 
 
@@ -274,6 +284,20 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
                            departure_gateway=gateway.id))
     labels = defaultdict(list)
     completed = []
+    # Checks that depend only on a scheduled journey (and the search phase), computed once. Journeys without a
+    # schedule get new times for each label, so they are not cached.
+    allowed_cache = {}
+    timing_cache = {}
+
+    def timing(movement):
+        dep, arr = movement.departure.astimezone(UTC), movement.arrival.astimezone(UTC)
+        # Airport access is not the service departure, even when a trip
+        # transfer estimate relabels its segment with the chosen mode.
+        service = next((s.departure for s in movement.segments if s.mode not in {"transfer", "walk", "foot", "wait"}
+                        and not (s.source or "").startswith("User-estimated airport") and s.departure), dep)
+        local = service.astimezone(ZoneInfo(places[movement.from_id].timezone)).time().replace(tzinfo=None)
+        usable = not _overnight(movement, spec) and (movement.source == SUPPLIED_SOURCE or spec.departure_start <= local <= spec.departure_end)
+        return dep, arr, usable, dep.astimezone(ZoneInfo(spec.home.timezone)).date()
     expanded = 0
     pruned = 0
     price_calculations = 0
@@ -300,7 +324,7 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
         nonlocal price_calculations, price_reuses
         if label.price is None:
             price_calculations += 1
-            label.price = price_path(label.path, offers, spec, rules, list(label.charges), fare_index=fare_index)
+            label.price = price_path(label.path, offers, spec, rules, list(label.charges), fare_index=fare_index, dump=False)
         else:
             price_reuses += 1
         return label.price
@@ -396,7 +420,10 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
         ready = max([ready, *(c.end.astimezone(UTC) for c in commitments)])
         for target in targets:
             for template in edges[label.city, target]:
-                if not positioning_allowed(spec, template, label.phase):
+                allowed = allowed_cache.get((_object_key(template), label.phase))
+                if allowed is None:
+                    allowed = allowed_cache[_object_key(template), label.phase] = positioning_allowed(spec, template, label.phase)
+                if not allowed:
                     continue
                 if label.phase == 3 and label.own_used and label.own_location == label.city != spec.home.id and target == spec.home.id and template.vehicle_kind != "own":
                     continue
@@ -413,17 +440,16 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
                         times.add(_window(event-duration-timedelta(hours=required.get(target, (0, 0))[1]), places[label.city], spec, True))
                     candidates = [template.model_copy(update={"id": template.id+"@"+stable_id(t), "template_id": template.id, "departure": t, "arrival": t+duration}) for t in sorted(times) if t >= ready]
                 for movement in candidates:
-                    dep, arr = movement.departure.astimezone(UTC), movement.arrival.astimezone(UTC)
-                    if dep < ready or arr > end or dep < start or _overnight(movement, spec):
+                    if movement is template:
+                        cached = timing_cache.get(_object_key(template))
+                        if cached is None:
+                            cached = timing_cache[_object_key(template)] = timing(template)
+                        dep, arr, usable, home_date = cached
+                    else:
+                        dep, arr, usable, home_date = timing(movement)
+                    if not usable or dep < ready or arr > end or dep < start:
                         continue
-                    # Airport access is not the service departure, even when a trip
-                    # transfer estimate relabels its segment with the chosen mode.
-                    service = next((s.departure for s in movement.segments if s.mode not in {"transfer", "walk", "foot", "wait"}
-                                    and not (s.source or "").startswith("User-estimated airport") and s.departure), dep)
-                    local = service.astimezone(ZoneInfo(places[movement.from_id].timezone)).time().replace(tzinfo=None)
-                    if movement.source != SUPPLIED_SOURCE and not spec.departure_start <= local <= spec.departure_end:
-                        continue
-                    if not label.path and spec.date_mode == "fixed" and dep.astimezone(ZoneInfo(spec.home.timezone)).date() != spec.start_date:
+                    if not label.path and spec.date_mode == "fixed" and home_date != spec.start_date:
                         continue
                     current = label
                     if current.rental_pickup is not None and movement.vehicle_kind != "rental":
@@ -463,9 +489,9 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
         selectable = [x for x in completed if
             {m.id for m in x.path if m.mode == "flight"}.issubset({
                 id for offer in x.price["purchases"]
-                if offer["low"] is not None and offer["high"] is not None
-                and offer["currency"] in spec.exchange_rates
-                for id in offer["movement_ids"]
+                if offer.low is not None and offer.high is not None
+                and offer.currency in spec.exchange_rates
+                for id in offer.movement_ids
             })]
     eligible = [x for x in selectable if spec.budget_myr is None or x.price["low_cents"] <= cents(spec.budget_myr)]
     over_budget = sorted((x for x in selectable if spec.budget_myr is not None and x.price["low_cents"] > cents(spec.budget_myr)), key=lambda x: (x.price["low_cents"], -stay(x)))[:10]
@@ -523,7 +549,7 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
                         "total_cost_myr": price["total_cost_myr"], "cost_low_myr": price["cost_low_myr"],
                         "cost_high_myr": price["cost_high_myr"], "estimated": price["estimated"] or any(m.schedule_estimated for m in label.path),
                         "schedule_estimated": any(m.schedule_estimated for m in label.path),
-                        "purchases": price["purchases"], "extra_charges": [c.model_dump(mode="json") for c in label.charges],
+                        "purchases": [o.model_dump(mode="json") for o in price["purchases"]], "extra_charges": [c.model_dump(mode="json") for c in label.charges],
                         "budget_status": "over" if spec.budget_myr is not None and price["low_cents"] > cents(spec.budget_myr) else "uncertain" if spec.budget_myr is not None and (price["high_cents"] == INF or price["high_cents"] > cents(spec.budget_myr)) else "within",
                         "provisional": price["total_cost_myr"] is None,
                         "cost_per_stay_hour_myr": round(price["total_cost_myr"]/total_stay, 2) if price["total_cost_myr"] is not None and total_stay > 0 else None})

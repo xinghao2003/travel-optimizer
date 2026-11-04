@@ -156,8 +156,8 @@ Legend:
 +-------------------------------------------------+------------------------------------------------+
 | Next steps                                      | [Itinerary] [Missing info 13]                  |
 | [!] 1 flight journey can't be used until you    | Option 01 of 9          Compare with [None   v]|
-|     add the transfer from GMP to ICN airport.   | From RM 2,480                                  |
-|                         [Add airport transfer]  | [!] 10 not priced: 2 flights, 8 airport        |
+|     confirm the airport change GMP → ICN.       | From RM 2,480                                  |
+|                       [Confirm airport change]  | [!] 10 not priced: 2 flights, 8 airport        |
 | [!] No option has a complete price yet: 10      |     transfers · may exceed your budget  See    |
 |     airport transfer prices and 2 flight prices | 218.2 h in cities · 31.6 h travel (i)          |
 |     are missing. 6 options need only airport    | v Map (i)                                      |
@@ -254,7 +254,7 @@ Legend:
 | No itinerary fits these settings                                                               |
 | - Minimum stays add up to 240 h, but these dates allow at most 216 h.          [Edit trip]     |
 | - No direct journey found between Busan and Tokyo.                             [Add a connection] |
-| - 1 flight journey can't be used until you add the transfer from GMP to ICN.   [Add airport transfer] |
+| - 1 flight journey can't be used until you confirm the airport change GMP → ICN.  [Confirm airport change] |
 | - Or change the trip: fewer minimum hours, more days, more transport or wider departure times. [Edit trip] |
 | > Over budget (3) · from RM 13,200      (only when over-budget options exist)                    |
 ```
@@ -515,7 +515,7 @@ Text unchanged; it sits at the end of `<main>`.
 | Never searched | Options | "No options yet. Search transport to find options. They appear while the search runs." |
 | Searching, no options yet | Options | "Searching. The first options appear after a few searches." |
 | None yet, searches left | Options | "No complete itinerary yet. {pending} searches are left." (The strip has Search more.) |
-| None, nothing left | Options | h3 "No itinerary fits these settings", then only the reasons that apply, each with its action. Stay sum > date span → Edit trip. City gaps "No direct journey found between {A} and {B}." → Add a connection. Unresolved airport changes → Add airport transfer. Unresolved access time → Set default time. "Flights without a price are skipped." → Show them. Always last: "Or change the trip: fewer minimum hours, more days, more transport or wider departure times." → Edit trip. |
+| None, nothing left | Options | h3 "No itinerary fits these settings", then only the reasons that apply, each with its action. Stay sum > date span → Edit trip. City gaps "No direct journey found between {A} and {B}." → Add a connection. Unresolved airport changes → Confirm airport change. Unresolved access time → Set default time. "Flights without a price are skipped." → Show them. Always last: "Or change the trip: fewer minimum hours, more days, more transport or wider departure times." → Edit trip. |
 | Only over budget | Options | "No option fits your RM {budget} budget. {k} options cost more, from RM {x}." → **Show over-budget options** (opens the group) |
 | Weaker loading | List toolbar | "Loading weaker options…" (checkbox disabled) |
 | Missing info, before search | Missing info | "Unknown prices and gaps appear here after a search. You can enter airport transfers now." Then Airport transfers (all directions, collapsed) and Price rules. |
@@ -805,7 +805,7 @@ Each row: an icon, one sentence and at most one button. Rows appear in this prio
 
 | # | Shown when | Copy | Action → target |
 |---|---|---|---|
-| 1 | Σ `unresolved_journey_count` > 0 | "{1} flight journey can't be used until you add the transfer from {GMP} to {ICN} airport." (several pairs: "…until you add {k} airport transfers ({GMP → ICN}, …).") | **Add airport transfer** → Missing info › Airport changes; focus the first unresolved row's "Way" select |
+| 1 | Σ `unresolved_journey_count` > 0 | "{1} flight journey can't be used until you confirm the airport change {GMP} → {ICN}." (several pairs: "…until you confirm {k} airport changes ({GMP → ICN}, …).") | **Confirm airport change** (several: **Confirm airport changes**) → Missing info › Airport changes; focus the first unresolved row's "Way" select |
 | 2 | Movements whose assumption contains "airport access time is unresolved" | "{j} journeys can't be used: the airport transfer time is unknown in {Busan, Seoul}." | **Set default time** → open settings › Time buffers; focus `#setting-airport-fallback` |
 | 3 | A best option has `cost_high_myr === null` | "{No option has a complete price yet / {k} of {N} options are not fully priced}: {10} airport transfer prices and {2} flight prices are missing." + "{m} options need only airport transfer prices." (when m>0) + "Until then, options may exceed your RM {budget} budget." (when a budget is set) | **Add prices** → Missing info; focus the first missing price input (airport transfers first) |
 | 4 | Groups with reason `exchange_rate` | "Prices in {JPY} need an exchange rate." | **Add rate** → focus the inline rate field of the first such row |

@@ -1081,8 +1081,9 @@ export function buildNextSteps(state: RefinementState & {
   const blocked = state.airportChanges.filter(row => row.unresolved_journey_count > 0);
   if (blocked.length) {
     const journeys = plural(blocked.reduce((sum, row) => sum + row.unresolved_journey_count, 0), "flight journey");
-    const what = blocked.length === 1 ? `the transfer from ${blocked[0].from_airport} to ${blocked[0].to_airport} airport` : `${blocked.length} airport transfers (${blocked.map(row => `${row.from_airport} → ${row.to_airport}`).join(", ")})`;
-    steps.push({ id: "airport-changes", tone: "warn", text: `${journeys} can't be used until you add ${what}.`, action: { label: "Add airport transfer", target: "airport-changes" } });
+    // "Airport changes" is the Missing info section; "Airport transfers" is another one (city and airport).
+    const what = blocked.length === 1 ? `the airport change ${blocked[0].from_airport} → ${blocked[0].to_airport}` : `${blocked.length} airport changes (${blocked.map(row => `${row.from_airport} → ${row.to_airport}`).join(", ")})`;
+    steps.push({ id: "airport-changes", tone: "warn", text: `${journeys} can't be used until you confirm ${what}.`, action: { label: blocked.length === 1 ? "Confirm airport change" : "Confirm airport changes", target: "airport-changes" } });
   }
   if (state.unresolvedAccess.length) {
     const count = state.unresolvedAccess.length;

@@ -205,7 +205,7 @@ test("the options empty state follows the search and explains why nothing fits",
   assert.equal(state({ hasResult: false }), null);
 
   const steps = [
-    { id: "airport-changes", tone: "warn", text: "1 flight journey can't be used until you add the transfer from GMP to ICN airport.", action: { label: "Add airport transfer", target: "airport-changes" } },
+    { id: "airport-changes", tone: "warn", text: "1 flight journey can't be used until you confirm the airport change GMP → ICN.", action: { label: "Confirm airport change", target: "airport-changes" } },
     { id: "prices", tone: "warn", text: "No option has a complete price yet.", action: { label: "Add prices", target: "prices" } },
     { id: "access-time", tone: "warn", text: "2 journeys can't be used: the airport transfer time is unknown in Busan.", action: { label: "Set default time", target: "airport-fallback" } },
   ];
@@ -215,7 +215,7 @@ test("the options empty state follows the search and explains why nothing fits",
   assert.deepEqual(lines(none), [
     ["Minimum stays add up to 240 h, but these dates allow at most 216 h.", "edit-trip"],
     ["No direct journey found between Busan and Tokyo.", "add-connection"],
-    ["1 flight journey can't be used until you add the transfer from GMP to ICN airport.", "airport-changes"],
+    ["1 flight journey can't be used until you confirm the airport change GMP → ICN.", "airport-changes"],
     ["2 journeys can't be used: the airport transfer time is unknown in Busan.", "airport-fallback"],
     ["Flights without a price are skipped.", "show-unpriced-flights"],
     ["Or change the trip: fewer minimum hours, more days, more transport or wider departure times.", "edit-trip"],
@@ -637,7 +637,7 @@ test("next steps and the needs-input count follow the counting rules", () => {
   };
   const context = { searched: true, budget: 12000, rates: { MYR: 1 }, excludeUnpricedFlights: false, transitOff: false };
   assert.deepEqual(buildNextSteps({ ...state, ...context }).map(step => [step.id, plain(step.text), step.action?.label]), [
-    ["airport-changes", "1 flight journey can't be used until you add the transfer from GMP to ICN airport.", "Add airport transfer"],
+    ["airport-changes", "1 flight journey can't be used until you confirm the airport change GMP → ICN.", "Confirm airport change"],
     ["prices", "2 of 3 options are not fully priced: 2 airport transfer prices, 3 flight prices, 1 train price and 1 other price are missing. 1 option needs only airport transfer prices. Until then, options may exceed your RM 12,000 budget.", "Add prices"],
     ["exchange-rates", "Prices in KRW and JPY need exchange rates.", "Add rate"],
   ]);
@@ -653,7 +653,7 @@ test("next steps and the needs-input count follow the counting rules", () => {
   };
   const steps = buildNextSteps({ ...blocked, ...context, budget: null, excludeUnpricedFlights: true, transitOff: true });
   assert.deepEqual(steps.map(step => [step.text, step.action?.target ?? null]), [
-    ["3 flight journeys can't be used until you add 2 airport transfers (GMP → ICN, HND → NRT).", "airport-changes"],
+    ["3 flight journeys can't be used until you confirm 2 airport changes (GMP → ICN, HND → NRT).", "airport-changes"],
     ["2 journeys can't be used: the airport transfer time is unknown in Busan, Seoul.", "airport-fallback"],
     ["No option has a complete price yet: 1 flight price is missing.", "prices"],
     ["Options that need a flight without a price are hidden.", "show-unpriced-flights"],

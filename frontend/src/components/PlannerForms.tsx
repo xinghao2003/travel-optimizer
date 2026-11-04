@@ -1,5 +1,5 @@
 import { ChevronDown } from "lucide-react";
-import { cloneElement, isValidElement, useEffect, useId, useRef, useState, type ReactElement, type ReactNode } from "react";
+import { cloneElement, isValidElement, lazy, Suspense, useEffect, useId, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { Button } from "./ui/button";
 import { InfoTip } from "./InfoTip";
 import { sameFare, type PriceValue } from "../lib/drafts";
@@ -63,8 +63,10 @@ export function NumberField({ label, value, onChange, min = 0, max, integer = fa
   </Field>;
 }
 
+const LazyMapPicker = lazy(() => import("./PlaceMapPicker").then(m => ({ default: m.PlaceMapPicker })));
+
 /**
- * A place search box (combobox) with "Add a place by coordinates" (C11). `limitText` is right-aligned on the
+ * A place search box (combobox) with "Pick on map" and "Add a place by coordinates" (C11). `limitText` is right-aligned on the
  * label row ("2 of 4"); `hint` explains a disabled picker; `error` is a validation error of the trip (I8).
  */
 export function PlacePicker({ label, onSelect, disabledIds = [], inputId, disabled = false, limitText, placeholder = "City name or airport code", info, hint, error: fieldError }: {
@@ -78,7 +80,8 @@ export function PlacePicker({ label, onSelect, disabledIds = [], inputId, disabl
   const [active, setActive] = useState(0);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [manual, setManual] = useState(false);
+  // The open panel under the search box.
+  const [panel, setPanel] = useState<"" | "map" | "manual">("");
   const [custom, setCustom] = useState({ name: "", latitude: "", longitude: "", timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, airports: "" });
   const excluded = disabledIds.join("|");
   useEffect(() => {
@@ -98,7 +101,7 @@ export function PlacePicker({ label, onSelect, disabledIds = [], inputId, disabl
     }, 220);
     return () => { current = false; clearTimeout(timer); };
   }, [query, excluded]);
-  function choose(place: Place) { onSelect(place); setQuery(""); setItems([]); }
+  function choose(place: Place) { onSelect(place); setQuery(""); setItems([]); setPanel(""); }
   function addCustom() {
     try {
       new Intl.DateTimeFormat("en", { timeZone: custom.timezone });
@@ -107,7 +110,7 @@ export function PlacePicker({ label, onSelect, disabledIds = [], inputId, disabl
       const codes = custom.airports.split(",").map(s => s.trim().toUpperCase()).filter(Boolean);
       if (codes.some(c => !/^[A-Z]{3}$/.test(c))) throw new Error("Airport codes must contain three letters.");
       choose({ id: `custom:${crypto.randomUUID()}`, name: custom.name, latitude: lat, longitude: lon, timezone: custom.timezone, country_code: "", airport_codes: codes, flight_code: codes[0] ?? null });
-      setManual(false); setError("");
+      setError("");
     } catch (err) { setError(err instanceof Error ? err.message : "Invalid place."); }
   }
   return <div className="p-place-picker">
@@ -115,8 +118,12 @@ export function PlacePicker({ label, onSelect, disabledIds = [], inputId, disabl
       onChange={e => setQuery(e.target.value)} onKeyDown={e => { if (e.key === "ArrowDown") { e.preventDefault(); setActive(i => Math.min(items.length - 1, i + 1)); } if (e.key === "ArrowUp") { e.preventDefault(); setActive(i => Math.max(0, i - 1)); } if (e.key === "Enter" && items[active]) { e.preventDefault(); choose(items[active]); } if (e.key === "Escape") setItems([]); }} /></Field>
     {items.length > 0 && <div className="p-suggestions" role="listbox" id={`${id}-list`}>{items.map((p, i) => <button key={p.id} type="button" role="option" id={`${id}-${i}`} aria-selected={i === active} onClick={() => choose(p)}><strong>{p.name}</strong><small>{[p.country_code, p.airport_codes.length ? p.airport_codes.join(", ") : "No airport"].filter(Boolean).join(" · ")}</small></button>)}</div>}
     <div aria-live="polite">{loading ? <small>Searching…</small> : noMatch && <small>No matching places. Check the spelling, or add the place by coordinates.</small>}</div>
-    <button type="button" className="p-text-button" disabled={disabled} aria-expanded={manual} onClick={() => setManual(!manual)}>{manual ? "Close" : "Add a place by coordinates"}</button>
-    {manual && <div className="p-custom-place p-grid">
+    <div className="p-place-actions">
+      <button type="button" className="p-text-button" disabled={disabled} aria-expanded={panel === "map"} onClick={() => setPanel(panel === "map" ? "" : "map")}>{panel === "map" ? "Close map" : "Pick on map"}</button>
+      <button type="button" className="p-text-button" disabled={disabled} aria-expanded={panel === "manual"} onClick={() => setPanel(panel === "manual" ? "" : "manual")}>{panel === "manual" ? "Close" : "Add a place by coordinates"}</button>
+    </div>
+    {panel === "map" && !disabled && <Suspense fallback={<div className="p-map-loading" role="status">Loading map…</div>}><LazyMapPicker onSelect={choose} disabledIds={disabledIds} /></Suspense>}
+    {panel === "manual" && <div className="p-custom-place p-grid">
       {(Object.keys(customLabels) as (keyof typeof customLabels)[]).map(key => <Field key={key} label={customLabels[key]}><input value={custom[key]} onChange={e => setCustom(c => ({ ...c, [key]: e.target.value }))} /></Field>)}
       <Button type="button" size="sm" variant="secondary" onClick={addCustom}>Use this place</Button>
     </div>}

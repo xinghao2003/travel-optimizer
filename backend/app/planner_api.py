@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 from .planner_discovery import manager, required_airport_connections, airport_transfer_rows
 from .planner_models import AirportConnection, AirportTransferEstimate, FareOffer, Movement, PricingRule, TripSpec
-from .planner_places import search_places
+from .planner_places import nearest_places, search_places
 from .planner_store import store
 from .planner_results import compact_trip, compact_result, fare_component_ids
 
@@ -65,6 +65,11 @@ def get_trip(id):
 @router.get("/places")
 async def places(search: str = Query(min_length=2, max_length=80), limit: int = Query(default=16, ge=1, le=30)):
     return {"places": await asyncio.to_thread(search_places, search, limit)}
+
+
+@router.get("/places/nearest")
+async def places_nearest(latitude: float = Query(ge=-90, le=90), longitude: float = Query(ge=-180, le=180), limit: int = Query(default=5, ge=1, le=10)):
+    return {"places": await asyncio.to_thread(nearest_places, latitude, longitude, limit)}
 
 
 @router.get("/trips")

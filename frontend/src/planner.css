@@ -455,6 +455,12 @@ html { scroll-padding-top: calc(var(--header-h) + var(--tabs-h, 0px) + 8px); scr
 .p-suggestions button { display: flex; flex-direction: column; align-items: flex-start; width: 100%; background: var(--card); color: var(--foreground); border: 0; border-bottom: 1px solid var(--border); padding: 10px 12px; text-align: left; }
 .p-suggestions button:hover, .p-suggestions button[aria-selected=true] { background: var(--muted-surface); }
 .p-custom-place { position: relative; padding: 10px; background: var(--muted-surface); border-radius: 9px; }
+.p-place-actions { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.p-map-picker { display: grid; gap: 6px; margin-top: 6px; }
+.p-map-picks { margin: 0; padding: 0; list-style: none; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+.p-map-picks button { display: flex; flex-direction: column; align-items: flex-start; width: 100%; background: var(--card); color: var(--foreground); border: 0; padding: 8px 12px; text-align: left; }
+.p-map-picks li + li button { border-top: 1px solid var(--border); }
+.p-map-picks button:hover { background: var(--muted-surface); }
 .p-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
 .p-chips > span, .p-tag { display: inline-flex; align-items: center; gap: 7px; padding: 3px 7px; border: 1px solid var(--border); border-radius: 5px; background: var(--muted-surface); color: var(--foreground); font-size: 11px; }
 .p-chips button, .p-tag button { border: 0; background: none; color: var(--muted-foreground); font-size: 18px; padding: 0 3px; }

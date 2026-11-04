@@ -58,21 +58,6 @@ export async function api<T>(path: string, method = "GET", body?: unknown): Prom
   if (payload.result?._shared_route_data) payload.result = expandSharedResult(payload.result);
   return (payload._shared_route_data ? expandSharedResult(payload) : payload) as T;
 }
-export function money(value: number | null, currency = "MYR") {
-  return value === null ? "Unknown" : new Intl.NumberFormat("en-MY", { style: "currency", currency, maximumFractionDigits: 2 }).format(value);
-}
-export function routeCost(route: Route) {
-  return route.total_cost_myr !== null ? money(route.total_cost_myr) : route.cost_high_myr === null ? `${money(route.cost_low_myr)} + unknown` : `${money(route.cost_low_myr)} – ${money(route.cost_high_myr)}`;
-}
-export function cityHourCost(route: Route) {
-  if (route.stay_hours <= 0) return "Cost/city h unavailable";
-  if (route.cost_per_stay_hour_myr !== null) return `${money(route.cost_per_stay_hour_myr)}/city h`;
-  if (route.cost_high_myr !== null) return `${money(route.cost_low_myr/route.stay_hours)}–${money(route.cost_high_myr/route.stay_hours)}/city h`;
-  return "Cost/city h unknown";
-}
-export function localTime(value: string | null, zone: string, fallback = "Any time") {
-  return value ? new Intl.DateTimeFormat("en-MY", { dateStyle: "medium", timeStyle: "short", timeZone: zone }).format(new Date(value)) : fallback;
-}
 export function localInputToISO(value: string, zone: string) {
   const desired = new Date(`${value}:00Z`).getTime();
   let instant = desired;

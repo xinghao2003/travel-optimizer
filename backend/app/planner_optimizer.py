@@ -10,11 +10,12 @@ import math
 import logging
 import time as clock
 from collections import defaultdict, deque
-from bisect import bisect_right
-from dataclasses import dataclass, replace
+from bisect import bisect_left, bisect_right
+from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from functools import lru_cache
+from operator import itemgetter
 from zoneinfo import ZoneInfo
 
 from .planner_models import Charge, FareOffer, Movement, PricingRule, TripSpec, stable_id
@@ -74,9 +75,11 @@ def _rule_offer(component: str, movement: Movement, distance, mode, spec, rules,
 
 
 def _fare_index(offers: list[FareOffer], spec: TripSpec):
-    """Single-journey offers by journey id, and the positions of multi-journey offers by each of their journey ids."""
+    """Single-journey offers by journey id, the multi-journey offers with the positions of each by journey id, their
+    journey-id sets, and a cache of the priced choices per fare component."""
     direct = defaultdict(list)
     bundles = []
+    bundle_sets = []
     bundles_by_id = defaultdict(list)
     for offer in offers:
         if not offer.validated or offer.adults is not None and offer.adults != spec.adults:
@@ -84,100 +87,168 @@ def _fare_index(offers: list[FareOffer], spec: TripSpec):
         if len(offer.movement_ids) == 1:
             direct[offer.movement_ids[0]].append(offer)
         elif len(offer.movement_ids) > 1:
-            for id in set(offer.movement_ids):
+            ids = set(offer.movement_ids)
+            for id in ids:
                 bundles_by_id[id].append(len(bundles))
             bundles.append(offer)
-    return direct, bundles, bundles_by_id
+            bundle_sets.append(ids)
+    return direct, bundles, bundles_by_id, bundle_sets, {}
+
+
+def _component_choices(id, movement, charge, direct_offers, spec, rules):
+    """The priced choices of one fare component, its missing-fare diagnostic, its cheapest choice when the rest of the
+    cover is priced and when it is not, and the ids of its choices with a price range.
+
+    These depend on the component only, not on the itinerary, so price_path caches them."""
+    direct = list(direct_offers.get(id, ()))
+    if charge is None and movement.template_id:
+        direct += [o.model_copy(update={"id": o.id+":"+id, "movement_ids": [id]}) for o in direct_offers.get(movement.template_id, ())]
+    overrides = [o for o in direct if o.source == "user"]
+    if overrides:
+        direct = overrides[-1:]
+    elif not any(o.low is not None for o in direct):
+        rule = _rule_offer(id, movement, charge.distance_km if charge else movement.distance_km,
+                           charge.mode if charge else movement.mode, spec, rules, charge)
+        if charge and charge.source == "user" and charge.low is not None:
+            direct = [FareOffer(id="charge:"+id, movement_ids=[id], kind="charge", low=charge.low,
+                                high=charge.high, currency=charge.currency, source="user", estimated=True, label=charge.kind)]
+        elif rule:
+            direct = [rule]
+        elif charge and charge.low is not None:
+            direct = [FareOffer(id="charge:"+id, movement_ids=[id], kind="charge", low=charge.low,
+                                high=charge.high, currency=charge.currency, source="rule", estimated=True, label=charge.kind)]
+        elif movement.mode == "car" and charge is None:
+            car = spec.cars
+            rate = car.own_cost_per_km if movement.vehicle_kind == "own" else car.rental_cost_per_km
+            count = 1 if movement.vehicle_kind == "own" else math.ceil(spec.adults/car.rental_capacity)
+            if rate is not None and movement.distance_km is not None:
+                value = round(rate*movement.distance_km*count, 2)
+                direct = [FareOffer(id="driving:"+id, movement_ids=[id], low=value, high=value,
+                                    source="rule", estimated=True, label="Configured driving cost")]
+    if not direct:
+        direct = [FareOffer(id="unknown:"+id, movement_ids=[id], source="unknown", label=charge.kind if charge else movement.mode)]
+    choices = [(offer, *_amount(offer, spec)) for offer in direct]
+    diagnostic = None
+    if all(hi == INF for _, _, hi in choices):
+        diagnostic = {"component_id": id, "movement_id": movement.id,
+                      "label": charge.kind if charge else movement.mode,
+                      "from_id": movement.from_id, "to_id": movement.to_id,
+                      "currency": direct[0].currency,
+                      "reason": "exchange_rate" if direct[0].low is not None and direct[0].currency not in spec.exchange_rates else "missing_fare"}
+    # The same keys as cover() below: an unpriced rest of the cover makes every upper bound infinite.
+    priced_rest = min(choices, key=lambda c: (c[2], c[1], c[0].id))
+    unpriced_rest = min(choices, key=lambda c: (c[1], c[0].id))
+    uncertain = tuple(offer.id for offer, lo, hi in choices if lo != hi)
+    return choices, diagnostic, priced_rest, unpriced_rest, uncertain
+
+
+# Both bounds must describe the same selected non-overlapping ticket cover. An
+# unpriced alternative must not reduce a priced bundle's lower bound to zero or
+# create a range the purchases do not support.
+_cover_key = itemgetter(1, 0, 2)
 
 
 def price_path(path: list[Movement], offers: list[FareOffer], spec: TripSpec,
                rules: list[PricingRule], extra: list[Charge] | None = None, *, fare_index=None, dump=True) -> dict:
     # `dump=False` keeps the purchases as FareOffer objects: optimize converts only the routes it returns.
-    direct_offers, bundle_offers, bundles_by_id = fare_index if fare_index is not None else _fare_index(offers, spec)
+    direct_offers, bundle_offers, bundles_by_id, bundle_sets, resolved = fare_index if fare_index is not None else _fare_index(offers, spec)
     components: dict[str, tuple[Movement, Charge | None]] = {}
     for m in path:
         components[m.id] = (m, None)
-        components.update({c.id: (m, c) for c in m.charges})
-    if path:
-        components.update({c.id: (path[-1], c) for c in extra or []})
+        for c in m.charges:
+            components[c.id] = (m, c)
+    extra_ids = set()
+    if path and extra:
+        for c in extra:
+            components[c.id] = (path[-1], c)
+            extra_ids.add(c.id)
     keys = list(components)
-    indexes = {id: i for i, id in enumerate(keys)}
-    choices: list[tuple[int, FareOffer, int, float]] = []
+    entries = []
     diagnostics = []
     for id, (movement, charge) in components.items():
-        direct = list(direct_offers.get(id, ()))
-        if charge is None and movement.template_id:
-            direct += [o.model_copy(update={"id": o.id+":"+id, "movement_ids": [id]}) for o in direct_offers.get(movement.template_id, ())]
-        overrides = [o for o in direct if o.source == "user"]
-        if overrides:
-            direct = overrides[-1:]
-        elif not any(o.low is not None for o in direct):
-            rule = _rule_offer(id, movement, charge.distance_km if charge else movement.distance_km,
-                               charge.mode if charge else movement.mode, spec, rules, charge)
-            if charge and charge.source == "user" and charge.low is not None:
-                direct = [FareOffer(id="charge:"+id, movement_ids=[id], kind="charge", low=charge.low,
-                                    high=charge.high, currency=charge.currency, source="user", estimated=True, label=charge.kind)]
-            elif rule:
-                direct = [rule]
-            elif charge and charge.low is not None:
-                direct = [FareOffer(id="charge:"+id, movement_ids=[id], kind="charge", low=charge.low,
-                                    high=charge.high, currency=charge.currency, source="rule", estimated=True, label=charge.kind)]
-            elif movement.mode == "car" and charge is None:
-                car = spec.cars
-                rate = car.own_cost_per_km if movement.vehicle_kind == "own" else car.rental_cost_per_km
-                count = 1 if movement.vehicle_kind == "own" else math.ceil(spec.adults/car.rental_capacity)
-                if rate is not None and movement.distance_km is not None:
-                    value = round(rate*movement.distance_km*count, 2)
-                    direct = [FareOffer(id="driving:"+id, movement_ids=[id], low=value, high=value,
-                                        source="rule", estimated=True, label="Configured driving cost")]
-        if not direct:
-            direct = [FareOffer(id="unknown:"+id, movement_ids=[id], source="unknown", label=charge.kind if charge else movement.mode)]
-        for offer in direct:
-            lo, hi = _amount(offer, spec)
-            choices.append((1 << indexes[id], offer, lo, hi))
-        if all(_amount(o, spec)[1] == INF for o in direct):
-            diagnostics.append({"component_id": id, "movement_id": movement.id,
-                                "label": charge.kind if charge else movement.mode,
-                                "from_id": movement.from_id, "to_id": movement.to_id,
-                                "currency": direct[0].currency,
-                                "reason": "exchange_rate" if direct[0].low is not None and direct[0].currency not in spec.exchange_rates else "missing_fare"})
+        # A rental charge belongs to the label, and its rule match depends on the last journey.
+        key = (id, movement.id) if id in extra_ids else id
+        entry = resolved.get(key)
+        if entry is None:
+            entry = resolved[key] = _component_choices(id, movement, charge, direct_offers, spec, rules)
+        entries.append(entry)
+        if entry[1] is not None:
+            diagnostics.append(entry[1])
+    # Only an offer whose journeys are all in the path (or the template of one) can cover it; keep the offers' order.
     aliases = {m.template_id: m.id for m in path if m.template_id}
-    # Only an offer with one of the path's ids (or the template id of one) can cover the path; keep the offers' order.
-    nearby = sorted({position for id in (*indexes, *aliases) for position in bundles_by_id.get(id, ())})
-    for offer in (bundle_offers[position] for position in nearby):
-        if any(id in aliases for id in offer.movement_ids):
-            offer = offer.model_copy(update={"movement_ids": [aliases.get(id, id) for id in offer.movement_ids]})
-        if not set(offer.movement_ids).issubset(indexes):
-            continue
-        mask = sum(1 << indexes[id] for id in offer.movement_ids)
-        lo, hi = _amount(offer, spec)
-        choices.append((mask, offer, lo, hi))
-    by_bit = defaultdict(list)
-    for option in choices:
-        for i in range(len(keys)):
-            if option[0] & (1 << i):
-                by_bit[i].append(option)
+    if aliases:
+        indexes = {id: i for i, id in enumerate(keys)}
+        positions = set()
+        for id in (*keys, *aliases):
+            positions.update(bundles_by_id.get(id, ()))
+        bundled = []
+        for position in sorted(positions):
+            offer = bundle_offers[position]
+            if any(id in aliases for id in offer.movement_ids):
+                offer = offer.model_copy(update={"movement_ids": [aliases.get(id, id) for id in offer.movement_ids]})
+            if set(offer.movement_ids).issubset(indexes):
+                bundled.append(offer)
+    else:
+        hits = {}
+        for id in keys:
+            for position in bundles_by_id.get(id, ()):
+                hits[position] = hits.get(position, 0)+1
+        bundled = [bundle_offers[position] for position in sorted(position for position, count in hits.items() if count == len(bundle_sets[position]))]
+    if not bundled:
+        # Every choice covers one component: choose per component from the last one back, with the keys of cover().
+        lower = upper = 0
+        selected = []
+        uncertain = set()
+        for entry in reversed(entries):
+            offer, lo, hi = entry[3] if upper == INF else entry[2]
+            lower += lo
+            upper += hi
+            selected.append(offer.id)
+            uncertain.update(entry[4])
+        chosen_ids = set(selected)
+        chosen = [offer for entry in entries for offer, _, _ in entry[0] if offer.id in chosen_ids]
+    else:
+        indexes = {id: i for i, id in enumerate(keys)}
+        # The choices that cover each component: its own offers, then the combined tickets that include it.
+        by_bit: list[list[tuple[int, FareOffer, int, float]]] = []
+        choices: list[tuple[int, FareOffer, int, float]] = []
+        for i, entry in enumerate(entries):
+            bit = 1 << i
+            own = [(bit, offer, lo, hi) for offer, lo, hi in entry[0]]
+            choices.extend(own)
+            by_bit.append(own)
+        for offer in bundled:
+            mask = sum(1 << indexes[id] for id in offer.movement_ids)
+            lo, hi = _amount(offer, spec)
+            option = (mask, offer, lo, hi)
+            choices.append(option)
+            for i in range(len(keys)):
+                if mask & (1 << i):
+                    by_bit[i].append(option)
+        full = (1 << len(keys))-1
+        memo = {}
 
-    @lru_cache(None)
-    def cover(mask):
-        if mask == (1 << len(keys))-1:
-            return 0, 0, ()
-        bit = next(i for i in range(len(keys)) if not mask & (1 << i))
-        candidates = []
-        for covered, offer, lo, hi in by_bit[bit]:
-            if mask & covered:
-                continue
-            lower, upper, selected = cover(mask | covered)
-            candidates.append((lo+lower, hi+upper, (offer.id, *selected)))
-        # Both bounds must describe the same selected non-overlapping ticket
-        # cover. An unpriced alternative must not reduce a priced bundle's
-        # lower bound to zero or create a range the purchases do not support.
-        return min(candidates, key=lambda x: (x[1], x[0], x[2]))
+        def cover(mask):
+            if mask == full:
+                return 0, 0, ()
+            known = memo.get(mask)
+            if known is not None:
+                return known
+            bit = ((mask+1) & ~mask).bit_length()-1
+            candidates = []
+            for covered, offer, lo, hi in by_bit[bit]:
+                if mask & covered:
+                    continue
+                lower, upper, selected = cover(mask | covered)
+                candidates.append((lo+lower, hi+upper, (offer.id, *selected)))
+            known = memo[mask] = min(candidates, key=_cover_key)
+            return known
 
-    lower, upper, selected = cover(0)
-    chosen = [o for _, o, _, _ in choices if o.id in selected]
-    unknown = tuple(sorted({id for id in keys if any(d["component_id"] == id for d in diagnostics)} |
-                           {o.id for _, o, lo, hi in choices if lo != hi}))
+        lower, upper, selected = cover(0)
+        chosen_ids = set(selected)
+        chosen = [o for _, o, _, _ in choices if o.id in chosen_ids]
+        uncertain = {o.id for _, o, lo, hi in choices if lo != hi}
+    unknown = tuple(sorted({d["component_id"] for d in diagnostics} | uncertain))
     return {"low_cents": lower, "high_cents": upper, "total_cost_myr": lower/100 if lower == upper else None,
             "cost_low_myr": lower/100, "cost_high_myr": upper/100 if upper != INF else None,
             "estimated": any(o.estimated or o.source == "rule" or o.currency != "MYR" for o in chosen),
@@ -231,6 +302,15 @@ class Label:
     price: dict | None = None
     return_mask: int = 0  # Cities already used on the return path; prevents loops.
     revisiting: bool = False  # Credit city time without repeating first-visit requirements.
+    history: tuple = ()  # Per flight: endpoints, local date, combined-ticket id. Different histories are never compared.
+    stay_hours: float = 0.0  # The sum of the hours of `stays`.
+
+    def but(self, **changes):
+        """A copy with these fields changed; dataclasses.replace is too slow for the search loop."""
+        copy = object.__new__(Label)
+        copy.__dict__.update(self.__dict__)
+        copy.__dict__.update(changes)
+        return copy
 
 
 def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer], rules: list[PricingRule],
@@ -284,10 +364,15 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
                            departure_gateway=gateway.id))
     labels = defaultdict(list)
     completed = []
-    # Checks that depend only on a scheduled journey (and the search phase), computed once. Journeys without a
-    # schedule get new times for each label, so they are not cached.
-    allowed_cache = {}
+    expanded = 0
+    pruned = 0
+    price_calculations = 0
+    price_reuses = 0
+    # Checks that depend only on a scheduled journey (and the search phase) are computed once per journey. Journeys
+    # without a schedule get new times for each label, so they are checked per label.
     timing_cache = {}
+    prepared = {}
+    history_cache = {}
 
     def timing(movement):
         dep, arr = movement.departure.astimezone(UTC), movement.arrival.astimezone(UTC)
@@ -298,10 +383,49 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
         local = service.astimezone(ZoneInfo(places[movement.from_id].timezone)).time().replace(tzinfo=None)
         usable = not _overnight(movement, spec) and (movement.source == SUPPLIED_SOURCE or spec.departure_start <= local <= spec.departure_end)
         return dep, arr, usable, dep.astimezone(ZoneInfo(spec.home.timezone)).date()
-    expanded = 0
-    pruned = 0
-    price_calculations = 0
-    price_reuses = 0
+
+    def prepare(city, target, phase):
+        """The journeys from city to target that a label in this phase can take, in the order of the journeys, with
+        the sorted departures of the scheduled ones. Per label, only the journeys that depart once it is ready
+        remain; `ready_entries` lists them per sorted departure position, in the order of the journeys."""
+        entries = []
+        for template in edges[city, target]:
+            if not positioning_allowed(spec, template, phase):
+                continue
+            if template.vehicle_kind == "rental" and not spec.cars.rental_enabled:
+                continue
+            if template.departure is None:
+                entries.append((template, None, None, None))
+                continue
+            cached = timing_cache.get(_object_key(template))
+            if cached is None:
+                cached = timing_cache[_object_key(template)] = timing(template)
+            dep, arr, usable, home_date = cached
+            if usable and start <= dep and arr <= end:
+                entries.append((template, dep, arr, home_date))
+        return entries, sorted(entry[1] for entry in entries if entry[1] is not None), {}
+
+    def ready_entries(city, target, phase, ready):
+        edge = prepared.get((city, target, phase))
+        if edge is None:
+            edge = prepared[city, target, phase] = prepare(city, target, phase)
+        entries, departures, by_position = edge
+        position = bisect_left(departures, ready)
+        usable = by_position.get(position)
+        if usable is None:
+            # The smallest departure at or after `ready` admits exactly the journeys that depart at or after `ready`.
+            threshold = departures[position] if position < len(departures) else None
+            usable = by_position[position] = [entry for entry in entries if entry[1] is None or (threshold is not None and entry[1] >= threshold)]
+        return usable
+
+    def flight_entry(movement):
+        """A flight's part of a label's bundle history: endpoints, local flight date, and its combined-ticket id."""
+        entry = history_cache.get(movement.id)
+        if entry is None:
+            departure = next((s.departure for s in movement.segments if s.mode == "flight" and s.departure), movement.departure)
+            id = movement.template_id or movement.id
+            entry = history_cache[movement.id] = (movement.from_id, movement.to_id, departure.astimezone(ZoneInfo(places[movement.from_id].timezone)).date().isoformat(), id if id in bundle_ids else None)
+        return entry
 
     def rental_close(label, at):
         if label.rental_pickup is None:
@@ -316,7 +440,7 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
         charge = Charge(id="rental:"+stable_id(label.rental_pickup, label.rental_start, label.city, at),
                         kind=f"Rental: {days} day(s), pickup and drop-off", mode="rental", low=value, high=value, source="rule",
                         from_id=label.rental_pickup, to_id=label.city, country_code=places[label.rental_pickup].country_code)
-        return replace(label, rental_pickup=None, rental_start=None, charges=(*label.charges, charge), price=None)
+        return label.but(rental_pickup=None, rental_start=None, charges=(*label.charges, charge), price=None)
 
     def quote(label):
         # Phase changes and completing a route do not change its ticket cover.
@@ -329,39 +453,68 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
             price_reuses += 1
         return label.price
 
+    def dominates(a, b):
+        if a.arrival > b.arrival:
+            return False
+        # An earlier arrival can wait to imitate a later one. City time
+        # is credited on exit, so compare both at b's arrival instant.
+        sa = a.stay_hours+(b.arrival-a.arrival).total_seconds()/3600*int(a.reward)
+        sb = b.stay_hours
+        same_uncertain = a.price["uncertainty_key"] == b.price["uncertainty_key"] and bool(a.price["uncertainty_key"])
+        cost_ok = (a.price["low_cents"] <= b.price["low_cents"] and a.price["high_cents"] <= b.price["high_cents"]) if same_uncertain else a.price["high_cents"] <= b.price["low_cents"]
+        # Finite ranges on different offers are not interchangeable.
+        if not same_uncertain and (a.price["low_cents"] != a.price["high_cents"] or b.price["low_cents"] != b.price["high_cents"]):
+            cost_ok = a.price["high_cents"] <= b.price["low_cents"]
+        return cost_ok and sa >= sb-1e-8
+
     def add(label):
         nonlocal pruned
         quote(label)
         if "flight" not in spec.modes and not bundle_ids and spec.budget_myr is not None and label.price["low_cents"] > cents(spec.budget_myr):
             return
-        bundle_history = tuple((m.from_id, m.to_id, next((s.departure for s in m.segments if s.mode == "flight" and s.departure), m.departure).astimezone(ZoneInfo(places[m.from_id].timezone)).date().isoformat(), (m.template_id or m.id) if (m.template_id or m.id) in bundle_ids else None)
-                               for m in label.path if m.mode == "flight")
         # Rental timing is part of future eligibility, not just a display field.
         key = (label.city, label.phase, label.mask, label.reward, label.own_location, label.own_used,
                label.rental_pickup, label.rental_start, label.departure_gateway, label.arrival_gateway,
-               bundle_history, label.price["uncertainty_key"], label.return_mask, label.revisiting)
+               label.history, label.price["uncertainty_key"], label.return_mask, label.revisiting)
         bucket = labels[key]
-
-        def dominates(a, b):
-            if a.arrival > b.arrival:
-                return False
-            # An earlier arrival can wait to imitate a later one. City time
-            # is credited on exit, so compare both at b's arrival instant.
-            sa = sum(s["hours"] for s in a.stays)+(b.arrival-a.arrival).total_seconds()/3600*int(a.reward)
-            sb = sum(s["hours"] for s in b.stays)
-            same_uncertain = a.price["uncertainty_key"] == b.price["uncertainty_key"] and bool(a.price["uncertainty_key"])
-            cost_ok = (a.price["low_cents"] <= b.price["low_cents"] and a.price["high_cents"] <= b.price["high_cents"]) if same_uncertain else a.price["high_cents"] <= b.price["low_cents"]
-            # Finite ranges on different offers are not interchangeable.
-            if not same_uncertain and (a.price["low_cents"] != a.price["high_cents"] or b.price["low_cents"] != b.price["high_cents"]):
-                cost_ok = a.price["high_cents"] <= b.price["low_cents"]
-            return cost_ok and sa >= sb-1e-8
-
         if any(dominates(old, label) for old in bucket):
             pruned += 1
             return
         bucket[:] = [old for old in bucket if not dominates(label, old)]
         bucket.append(label)
         queue.appendleft(label)
+
+    def expand(current, target, movement, dep, arr, home_date):
+        """Add the label that takes this journey, which departs at `dep` when the label is ready."""
+        if not current.path and spec.date_mode == "fixed" and home_date != spec.start_date:
+            return
+        if current.rental_pickup is not None and movement.vehicle_kind != "rental":
+            current = rental_close(current, dep)
+            if current is None:
+                return
+        rental_pickup, rental_start = current.rental_pickup, current.rental_start
+        if movement.vehicle_kind == "rental" and rental_pickup is None:
+            if current.city not in spec.cars.rental_pickups:
+                return
+            rental_pickup, rental_start = current.city, dep
+        stays = current.stays
+        stay_hours = current.stay_hours
+        if current.reward:
+            hours = (dep-current.arrival).total_seconds()/3600
+            stays = [*stays, {"place_id": current.city, "arrival": current.arrival.isoformat(),
+                              "departure": dep.isoformat(), "hours": hours}]
+            stay_hours += hours
+        reward = current.phase in {1, 2} and target in required
+        mask = current.mask | ((1 << required[target][0]) if reward else 0)
+        add(Label(target, current.phase, mask, arr, [*current.path, movement], stays,
+                  reward=reward, own_location=target if movement.vehicle_kind == "own" else current.own_location,
+                  own_used=current.own_used or movement.vehicle_kind == "own", rental_pickup=rental_pickup,
+                  rental_start=rental_start, charges=current.charges,
+                  departure_gateway=current.departure_gateway, arrival_gateway=current.arrival_gateway,
+                  return_mask=current.return_mask | ((1 << required[target][0]) if current.phase == 2 and target in required else 0),
+                  revisiting=current.phase == 2 and target in required,
+                  history=(*current.history, flight_entry(movement)) if movement.mode == "flight" else current.history,
+                  stay_hours=stay_hours))
 
     while queue:
         if (cancelled and cancelled()) or (label_limit is not None and expanded >= label_limit):
@@ -373,7 +526,7 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
             next_progress = clock.monotonic()+5
         if label.phase == 0 and label.city == label.departure_gateway:
             mask = label.mask | ((1 << required[label.city][0]) if label.city in required else 0)
-            add(replace(label, phase=1, mask=mask, reward=label.city in required))
+            add(label.but(phase=1, mask=mask, reward=label.city in required))
             continue
         if label.phase == 1 and label.mask == full_mask:
             if not finish_at_home:
@@ -382,17 +535,17 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
                 if label.arrival+timedelta(hours=minimum) > end or any(label.arrival > c.start.astimezone(UTC) or end < c.end.astimezone(UTC) for c in commitments):
                     continue
                 stays = [*label.stays, {"place_id": label.city, "arrival": label.arrival.isoformat(), "departure": end.isoformat(), "hours": (end-label.arrival).total_seconds()/3600}]
-                closed = rental_close(replace(label, stays=stays, reward=False, arrival=end), end)
+                closed = rental_close(label.but(stays=stays, reward=False, arrival=end), end)
                 if closed is not None and (not closed.own_used or closed.own_location == spec.home.id):
                     quote(closed)
                     completed.append(closed)
                 continue
             for gateway in spec.arrivals:
-                add(replace(label, phase=2, arrival_gateway=gateway.id,
-                            return_mask=(1 << required[label.city][0]) if label.city in required else 0))
+                add(label.but(phase=2, arrival_gateway=gateway.id,
+                              return_mask=(1 << required[label.city][0]) if label.city in required else 0))
             continue
         if label.phase == 2 and label.city == label.arrival_gateway:
-            add(replace(label, phase=3))
+            add(label.but(phase=3))
             continue
         if label.phase == 3 and label.city == spec.home.id and (not label.own_used or label.own_location == spec.home.id):
             if not label.path:
@@ -419,61 +572,26 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
             continue
         ready = max([ready, *(c.end.astimezone(UTC) for c in commitments)])
         for target in targets:
-            for template in edges[label.city, target]:
-                allowed = allowed_cache.get((_object_key(template), label.phase))
-                if allowed is None:
-                    allowed = allowed_cache[_object_key(template), label.phase] = positioning_allowed(spec, template, label.phase)
-                if not allowed:
-                    continue
+            for template, dep, arr, home_date in ready_entries(label.city, target, label.phase, ready):
                 if label.phase == 3 and label.own_used and label.own_location == label.city != spec.home.id and target == spec.home.id and template.vehicle_kind != "own":
                     continue
                 if template.vehicle_kind == "own" and (not spec.cars.own_enabled or label.own_location != label.city or spec.adults > spec.cars.own_capacity):
                     continue
-                if template.vehicle_kind == "rental" and not spec.cars.rental_enabled:
+                if dep is not None:
+                    expand(label, target, template, dep, arr, home_date)
                     continue
-                if template.departure:
-                    candidates = [template]
-                else:
-                    duration = timedelta(minutes=template.duration_minutes)
-                    times = {_window(ready, places[label.city], spec), _window(end-duration, places[label.city], spec, True)}
-                    for event in events[target]:
-                        times.add(_window(event-duration-timedelta(hours=required.get(target, (0, 0))[1]), places[label.city], spec, True))
-                    candidates = [template.model_copy(update={"id": template.id+"@"+stable_id(t), "template_id": template.id, "departure": t, "arrival": t+duration}) for t in sorted(times) if t >= ready]
-                for movement in candidates:
-                    if movement is template:
-                        cached = timing_cache.get(_object_key(template))
-                        if cached is None:
-                            cached = timing_cache[_object_key(template)] = timing(template)
-                        dep, arr, usable, home_date = cached
-                    else:
-                        dep, arr, usable, home_date = timing(movement)
+                duration = timedelta(minutes=template.duration_minutes)
+                times = {_window(ready, places[label.city], spec), _window(end-duration, places[label.city], spec, True)}
+                for event in events[target]:
+                    times.add(_window(event-duration-timedelta(hours=required.get(target, (0, 0))[1]), places[label.city], spec, True))
+                for t in sorted(times):
+                    if t < ready:
+                        continue
+                    movement = template.model_copy(update={"id": template.id+"@"+stable_id(t), "template_id": template.id, "departure": t, "arrival": t+duration})
+                    dep, arr, usable, home_date = timing(movement)
                     if not usable or dep < ready or arr > end or dep < start:
                         continue
-                    if not label.path and spec.date_mode == "fixed" and home_date != spec.start_date:
-                        continue
-                    current = label
-                    if current.rental_pickup is not None and movement.vehicle_kind != "rental":
-                        current = rental_close(current, dep)
-                        if current is None:
-                            continue
-                    rental_pickup, rental_start = current.rental_pickup, current.rental_start
-                    if movement.vehicle_kind == "rental" and rental_pickup is None:
-                        if current.city not in spec.cars.rental_pickups:
-                            continue
-                        rental_pickup, rental_start = current.city, dep
-                    stays = current.stays
-                    if current.reward:
-                        stays = [*stays, {"place_id": current.city, "arrival": current.arrival.isoformat(),
-                                         "departure": dep.isoformat(), "hours": (dep-current.arrival).total_seconds()/3600}]
-                    reward = current.phase in {1, 2} and target in required
-                    mask = current.mask | ((1 << required[target][0]) if reward else 0)
-                    add(Label(target, current.phase, mask, arr, [*current.path, movement], stays,
-                              reward=reward, own_location=target if movement.vehicle_kind == "own" else current.own_location,
-                              own_used=current.own_used or movement.vehicle_kind == "own", rental_pickup=rental_pickup,
-                              rental_start=rental_start, charges=current.charges,
-                              departure_gateway=current.departure_gateway, arrival_gateway=current.arrival_gateway,
-                              return_mask=current.return_mask | ((1 << required[target][0]) if current.phase == 2 and target in required else 0),
-                              revisiting=current.phase == 2 and target in required))
+                    expand(label, target, movement, dep, arr, home_date)
 
     logger.debug("planner dp.search.done expanded=%d pending=%d completed=%d prices=%d price_reuses=%d elapsed=%.2fs", expanded, len(queue), len(completed), price_calculations, price_reuses, clock.monotonic()-started)
 

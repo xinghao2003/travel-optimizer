@@ -71,7 +71,13 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --app-dir backend --env
 
 Open <http://127.0.0.1:8000>. Health: `/api/health`; API documentation: `/docs`.
 
-For development with backend hot reload, stop the existing backend and run:
+For development, start the API and the frontend, both with hot reload, in one console, then open <http://127.0.0.1:5173>. Ctrl+C stops both. Use `-Port` and `-WebPort` for other ports. A port in use is replaced by the next free one, and the console shows the address to open. When `TRANSITOUS_CONTACT_URL` is set in neither the environment nor `.env`, the script uses the git remote URL, without credentials. It also sets `PLANNER_DEBUG=1` unless the environment or `.env` sets it.
+
+```powershell
+.\start-dev.ps1
+```
+
+For development with backend hot reload only, stop the existing backend and run:
 
 ```powershell
 .\dev-backend.ps1

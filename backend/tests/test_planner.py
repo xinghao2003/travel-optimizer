@@ -603,8 +603,8 @@ class PersistenceAndJobsTests(unittest.IsolatedAsyncioTestCase):
                 snapshot["offers"][0].update(low=value, high=value)
                 await manager.publish(job, spec)
             self.assertEqual(manager.recalculate.await_count, 1)
-            job["status"] = "paused"
-            await manager.publish(job, spec)
+            # The last publish of a batch always solves; the job is still running then.
+            await manager.publish(job, spec, final=True)
             self.assertEqual(manager.recalculate.await_count, 2)
             self.assertEqual(self.db.get("trips", record["id"])["result"]["routes"][0]["total_cost_myr"], 50)
             job["status"] = "running"
@@ -675,6 +675,26 @@ class PersistenceAndJobsTests(unittest.IsolatedAsyncioTestCase):
         manager.cancel(job["id"])
         await manager.running[job["id"]]
         self.assertEqual(self.db.get("jobs", job["id"])["status"], "cancelled")
+
+    async def test_job_stays_running_until_its_last_publish_is_done(self):
+        # Search more is refused while a job is running, so paused must not show before the last options are ready.
+        class Fake(DiscoveryManager):
+            async def fetch(self, task, spec, snapshot):
+                return {"status": "empty"}, True
+        manager = Fake(self.db)
+        record = self.db.new_trip(trip(modes=["rail"]).model_dump(mode="json"))
+        seen = []
+        original = manager.publish
+        async def publish(job, spec, final=False):
+            if final:
+                seen.append((job["status"], self.db.get("jobs", job["id"])["status"]))
+            await original(job, spec, final)
+        manager.publish = publish
+        with patch("app.planner_discovery.transitous.contact_url", "https://example.test"):
+            job = manager.start(record["id"], 1)
+            await manager.running[job["id"]]
+        self.assertEqual(seen, [("running", "running")])
+        self.assertEqual(self.db.get("jobs", job["id"])["status"], "paused")
 
     async def test_continue_after_transit_setup_queues_transit_and_drops_the_disabled_message(self):
         class Fake(DiscoveryManager):

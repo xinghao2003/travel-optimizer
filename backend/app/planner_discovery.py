@@ -916,7 +916,7 @@ class DiscoveryManager:
         snapshot.update(movements=list(movements.values()), offers=list(offers.values()), revision=snapshot["revision"]+1)
         return new_movements
 
-    async def publish(self, job, spec):
+    async def publish(self, job, spec, final=False):
         started = clock.monotonic()
         self.separate_manual_quotes(job, spec)
         logger.debug("planner publish.start job=%s cursor=%d queue=%d", job["id"], job["cursor"], len(job["queue"]))
@@ -961,7 +961,7 @@ class DiscoveryManager:
                            snapshot.get("roads", {}), snapshot.get("label_limit"))
         cadence = self.optimization_cadence.get(job["id"])
         controls = (trip["revision"], pricing_rules, snapshot.get("label_limit"))
-        if (job.get("status") == "running" and cadence and cadence["seconds"] >= 5
+        if (not final and job.get("status") == "running" and cadence and cadence["seconds"] >= 5
                 and cadence["controls"] == controls and trip.get("result")
                 and self.published_inputs.get(job["id"]) != inputs
                 and job["cursor"]-cadence["cursor"] < 16):
@@ -1118,11 +1118,11 @@ class DiscoveryManager:
                 if job["status"] in {"cancelled", "superseded"}:
                     break
                 await asyncio.sleep(0)
+            # The job stays running until the last options are calculated: Search more can't start before.
+            await self.publish(job, spec, final=True)
             if job["status"] == "running":
+                # The last publish can add combined-ticket searches.
                 job["status"] = "complete" if job["cursor"] == len(job["queue"]) else "paused"
-            await self.publish(job, spec)
-            if job["status"] == "complete" and job["cursor"] < len(job["queue"]):
-                job["status"] = "paused"
             self.store.put("jobs", job["id"], job)
         except asyncio.CancelledError:
             job["status"] = "interrupted"

@@ -106,7 +106,8 @@ async def read_trip(id: str, include_graph: bool = False, compact: bool = False)
         if trip is None:
             raise HTTPException(404, "Trip not found.")
         trip["airport_transfer_rows"] = airport_transfer_rows(TripSpec.model_validate(trip["spec"]), (trip.get("snapshot") or {}).get("movements", []))
-        trip["airport_connections_required"] = required_airport_connections((trip.get("snapshot") or {}).get("movements", []))
+        connections = {(c.from_airport, c.to_airport): c for c in (AirportConnection.model_validate(item) for item in trip.get("airport_connections", []))}
+        trip["airport_connections_required"] = required_airport_connections((trip.get("snapshot") or {}).get("movements", []), connections)
         trip["assumed_connections"] = [m for m in (trip.get("snapshot") or {}).get("movements", [])
                                        if m.get("source") == "User-defined connection"]
         movements = (trip.get("snapshot") or {}).get("movements", [])

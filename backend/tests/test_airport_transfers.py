@@ -3,8 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 from datetime import date, datetime, timezone
-from app.planner_models import Place, Visit, TripSpec, Segment, FareOffer, AirportTransferEstimate
-from app.planner_discovery import flight_movement, airport_transfer_variants, airport_transfer_rules, airport_transfer_rows
+from app.planner_models import Place, Visit, TripSpec, Segment, FareOffer, AirportTransferEstimate, AirportConnection
+from app.planner_discovery import flight_movement, airport_transfer_variants, airport_transfer_rules, airport_transfer_rows, required_airport_connections
 from app.planner_optimizer import optimize, price_path
 from app.planner_store import PlannerStore
 
@@ -42,6 +42,20 @@ class AirportTransferTests(unittest.TestCase):
         other = self.flight.model_copy(deep=True, update={'id': 'other', 'charges': []})
         bundle = FareOffer(id='return-ticket', movement_ids=[self.flight.id, 'other'], kind='round-trip', low=90, high=90)
         self.assertEqual(price_path([rail, other], [bundle], self.spec, airport_transfer_rules(trip, self.spec))['cost_high_myr'], 120)
+
+    def test_blocked_airport_changes_use_the_current_connections(self):
+        # A journey found during a search is built without the trip's connections; its count must not depend on that.
+        legs = [Segment(mode="flight", from_id="KUL", to_id="GMP", from_name="KUL", to_name="GMP", departure=datetime(2027, 2, 10, 1, tzinfo=timezone.utc), arrival=datetime(2027, 2, 10, 7, tzinfo=timezone.utc)),
+                Segment(mode="flight", from_id="ICN", to_id="PUS", from_name="ICN", to_name="PUS", departure=datetime(2027, 2, 10, 9, tzinfo=timezone.utc), arrival=datetime(2027, 2, 10, 10, tzinfo=timezone.utc))]
+        busan = Place(id="pus", name="Busan", latitude=35, longitude=129, timezone="UTC", airport_codes=["PUS"], flight_code="PUS")
+        raw = flight_movement(self.home, busan, [leg.model_dump(mode="json") for leg in legs], self.spec, self.roads).model_dump(mode="json")
+        def blocked(minutes):
+            connections = {} if minutes is None else {("GMP", "ICN"): AirportConnection(from_airport="GMP", to_airport="ICN", mode="rail", duration_minutes=minutes)}
+            [pair] = required_airport_connections([raw], connections)
+            return pair["journey_count"], pair["unresolved_journey_count"]
+        self.assertEqual(blocked(None), (1, 1))
+        self.assertEqual(blocked(45), (1, 0))  # The layover is 120 minutes.
+        self.assertEqual(blocked(150), (1, 1))
 
     def test_ways_set_replace_the_default_taxi_unless_a_taxi_is_set(self):
         rail = dict(from_id="airport:ICN", to_id="seoul", mode="rail", adults=1, duration_minutes=59, low=14.5, high=None, currency="MYR")

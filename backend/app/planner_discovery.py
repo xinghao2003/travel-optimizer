@@ -451,7 +451,10 @@ def shareable_snapshot(snapshot, spec):
     return shared
 
 
-def required_airport_connections(movements):
+def required_airport_connections(movements, airport_connections):
+    """Airport changes inside flight journeys. A journey can't be used when its change has no saved connection,
+    or the saved connection is longer than the layover (the rule of flight_movement). The rule uses the current
+    connections, not the notes in the movements: movements found during a search don't have the trip's connections yet."""
     airport_pairs = {}
     for movement in movements:
         if movement.get("source") != "Google Flights / fast-flights":
@@ -466,9 +469,9 @@ def required_airport_connections(movements):
                                                       "to_name": following.get("from_name", to_airport),
                                                       "journey_count": 0, "unresolved_journey_count": 0})
                 pair["journey_count"] += 1
-                unresolved_prefixes = (f"Airport change {from_airport} → {to_airport}:",
-                                       f"Airport connection {from_airport} → {to_airport} ")
-                if any(assumption.startswith(unresolved_prefixes) for assumption in movement.get("assumptions", [])):
+                connection = airport_connections.get(key)
+                gap_minutes = (timestamp(following["departure"])-timestamp(previous["arrival"])).total_seconds()/60
+                if not connection or connection.duration_minutes > gap_minutes:
                     pair["unresolved_journey_count"] += 1
     return sorted(airport_pairs.values(), key=lambda item: (item["from_airport"], item["to_airport"]))
 
@@ -682,7 +685,7 @@ class DiscoveryManager:
             logger.debug("planner optimize.return trip=%s elapsed=%.2fs expanded=%d completed=%d routes=%d bundles=%d", trip_id, clock.monotonic()-started, result["expanded_labels"], result["feasible_count"], len(result["routes"]), len(result.get("bundle_candidates", [])))
             result["coverage"] = snapshot.get("coverage", {})
             result["coverage"]["unresolved_movements"] = [{"id": m["id"], "from_id": m["from_id"], "to_id": m["to_id"], "assumptions": m["assumptions"]} for m in snapshot["movements"] if not m.get("usable", True)]
-            result["coverage"]["airport_connections_required"] = required_airport_connections(snapshot["movements"])
+            result["coverage"]["airport_connections_required"] = required_airport_connections(snapshot["movements"], airport_connections)
             result["discovery_required"] = snapshot.get("discovery_key") != spec.discovery_key()
             latest = self.store.get("trips", trip_id)
             if latest["revision"] == trip["revision"] and (not latest.get("snapshot") or latest["snapshot"]["revision"] <= snapshot["revision"]):

@@ -62,6 +62,8 @@ test("transfer estimates keep other party sizes and directions without a draft",
   assert.deepEqual(buildTransferEstimates(rows, saved, drafts, 2), [
     saved[1],
     saved[0],
+    // A blank taxi beside another way keeps the taxi: the ways set replace the default taxi.
+    { from_id: "airport:PUS", to_id: "PUS", adults: 2, mode: "taxi", duration_minutes: null, low: null, high: null, currency: "MYR" },
     { from_id: "airport:PUS", to_id: "PUS", adults: 2, mode: "rail", duration_minutes: 70, low: 12.5, high: null, currency: "KRW" },
   ]);
 });
@@ -158,6 +160,7 @@ test("saved transfer rows as drafts, and equal rows", () => {
   assert.equal(sameTransferRows([way("taxi", "96"), way("rail", "20", "30", "40")], rowsKul), false);
   assert.equal(sameTransferRows([], [way("taxi")]), true);
   assert.equal(sameTransferRows([way("taxi", "", "", "", "")], []), true);
+  assert.equal(sameTransferRows([way("taxi"), way("rail", "20", "", "40")], [way("rail", "20", "", "40")]), false);
 });
 
 test("saved airport changes as drafts, and equal drafts", () => {

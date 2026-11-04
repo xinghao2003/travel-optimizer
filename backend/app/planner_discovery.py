@@ -134,8 +134,8 @@ def airport_transfer_variants(raw_movements, trip, spec, roads, connections):
         options = []
         for pair in (access, egress):
             entries = choices.get(pair, [])
-            # The existing routed taxi remains available unless explicitly edited.
-            options.append(entries if any(e.get("mode", "taxi") == "taxi" for e in entries) else [None, *entries])
+            # The ways the user set replace the default taxi; without any, the default taxi stays.
+            options.append(entries or [None])
         for selected in itertools.product(*options):
             if not any(selected):
                 result.append(movement)

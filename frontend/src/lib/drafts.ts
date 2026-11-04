@@ -121,11 +121,17 @@ const numberText = (text: string) => {
 };
 const isBlankTaxi = (row: TransferRowDraft) => row.mode === "taxi" && !row.low.trim() && !row.high.trim() && !row.duration.trim();
 /**
- * True when two lists of ways give the same estimates: a fully blank taxi row is no estimate, and a blank
+ * True when the rows are only the default way: no rows, or one fully blank taxi row. The default way is no estimate.
+ * The ways the user sets replace the default taxi (planner_discovery.airport_transfer_variants), so a blank taxi
+ * row beside other ways is an estimate: the taxi stays a way, with the road time and no price.
+ */
+const onlyDefaultWay = (rows: TransferRowDraft[]) => !rows.length || (rows.length === 1 && isBlankTaxi(rows[0]));
+/**
+ * True when two lists of ways give the same estimates: only the default way is no estimate, and a blank
  * highest price is the same as a highest price equal to the price (a fixed price).
  */
 export function sameTransferRows(a: TransferRowDraft[], b: TransferRowDraft[]) {
-  const norm = (rows: TransferRowDraft[]) => JSON.stringify(rows.filter(row => !isBlankTaxi(row)).map(row => {
+  const norm = (rows: TransferRowDraft[]) => JSON.stringify((onlyDefaultWay(rows) ? [] : rows).map(row => {
     const low = numberText(row.low);
     return [row.mode, low, numberText(row.high) || low, numberText(row.duration), row.currency.trim().toUpperCase()];
   }));
@@ -192,8 +198,8 @@ export function invalidDraftFields(drafts: Pick<DraftState, "transfers" | "airpo
 
 /**
  * The full estimate list for PUT /airport-transfer-estimates. Directions with a draft use the draft;
- * other directions and other party sizes keep their saved estimates. A fully blank taxi row means
- * no estimate. Throws an Error with a message for the first invalid value.
+ * other directions and other party sizes keep their saved estimates. Only the default way (one fully
+ * blank taxi row) means no estimate. Throws an Error with a message for the first invalid value.
  */
 export function buildTransferEstimates(rows: AirportTransferRow[], saved: AirportTransferEstimate[], drafts: Record<string, TransferRowDraft[]>, adults: number): AirportTransferEstimate[] {
   // The server accepts only the directions in rows.
@@ -206,10 +212,10 @@ export function buildTransferEstimates(rows: AirportTransferRow[], saved: Airpor
     }
     const [problem] = transferProblems(draft);
     if (problem) throw new Error(`${row.label}: ${problem.message}`);
+    if (onlyDefaultWay(draft)) continue;
     for (const value of draft) {
-      if (isBlankTaxi(value)) continue;
       const number = (text: string) => text.trim() ? Number(text) : null;
-      estimates.push({ from_id: row.from_id, to_id: row.to_id, adults, mode: value.mode, duration_minutes: number(value.duration), low: number(value.low), high: number(value.high), currency: value.currency.toUpperCase() });
+      estimates.push({ from_id: row.from_id, to_id: row.to_id, adults, mode: value.mode, duration_minutes: number(value.duration), low: number(value.low), high: number(value.high), currency: value.currency.trim().toUpperCase() || "MYR" });
     }
   }
   return estimates;

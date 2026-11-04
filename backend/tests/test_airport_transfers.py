@@ -25,8 +25,10 @@ class AirportTransferTests(unittest.TestCase):
     def test_variants_keep_ticket_bundle_and_change_timing_and_fare(self):
         trip = {'airport_transfer_estimates': self.estimates}
         variants = airport_transfer_variants([self.flight.model_dump(mode='json')], trip, self.spec, self.roads, {})
-        self.assertEqual(len(variants), 2)
-        rail = next(m for m in variants if any(c.mode == 'rail' for c in m.charges))
+        # The rail way replaces the default taxi to KUL: one variant, with no unpriced default access.
+        self.assertEqual(len(variants), 1)
+        rail = variants[0]
+        self.assertEqual(next(c for c in rail.charges if c.kind == 'Airport access').mode, 'rail')
         self.assertEqual((self.flight.departure - rail.departure).total_seconds()/60, -30)
         self.assertEqual((self.flight.arrival - rail.arrival).total_seconds()/60, 30)
         base = FareOffer(id='ticket', movement_ids=[self.flight.id], low=100, high=100)
@@ -40,6 +42,17 @@ class AirportTransferTests(unittest.TestCase):
         other = self.flight.model_copy(deep=True, update={'id': 'other', 'charges': []})
         bundle = FareOffer(id='return-ticket', movement_ids=[self.flight.id, 'other'], kind='round-trip', low=90, high=90)
         self.assertEqual(price_path([rail, other], [bundle], self.spec, airport_transfer_rules(trip, self.spec))['cost_high_myr'], 120)
+
+    def test_ways_set_replace_the_default_taxi_unless_a_taxi_is_set(self):
+        rail = dict(from_id="airport:ICN", to_id="seoul", mode="rail", adults=1, duration_minutes=59, low=14.5, high=None, currency="MYR")
+        taxi = dict(from_id="airport:ICN", to_id="seoul", mode="taxi", adults=1, duration_minutes=None, low=None, high=None, currency="MYR")
+        def egress_modes(estimates):
+            variants = airport_transfer_variants([self.flight.model_dump(mode='json')], {'airport_transfer_estimates': estimates}, self.spec, self.roads, {})
+            return sorted(next(c for c in m.charges if c.kind == 'Airport egress').mode for m in variants)
+        self.assertEqual(egress_modes([]), ['taxi'])  # The default taxi
+        self.assertEqual(egress_modes([rail]), ['rail'])
+        # A taxi set beside the rail keeps the taxi, with the road time.
+        self.assertEqual(egress_modes([rail, taxi]), ['rail', 'taxi'])
 
     def test_transfer_estimate_keeps_flight_departure_window(self):
         # The 09:00-17:00 window applies to the 10:00 flight, not the earlier taxi to the airport.

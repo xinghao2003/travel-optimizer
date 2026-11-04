@@ -382,8 +382,9 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
             quote(closed)
             completed.append(closed)
             continue
+        # `required` keeps the list order, so with ordered visits the next city is the first one not visited yet.
         targets = ([label.departure_gateway] if label.phase == 0 else
-                   [id for id, (i, _) in required.items() if not label.mask & (1 << i)] if label.phase == 1 else
+                   [id for id, (i, _) in required.items() if not label.mask & (1 << i)][:1 if spec.ordered_visits else None] if label.phase == 1 else
                    list(dict.fromkeys([label.arrival_gateway, *[id for id, (i, _) in required.items()
                                       if not label.return_mask & (1 << i)]])) if label.phase == 2 else
                    [id for id in dict.fromkeys([spec.home.id, *([label.own_location] if label.own_used and label.own_location != spec.home.id else [])]) if id != label.city])

@@ -71,6 +71,25 @@ class DiscoveryDateTests(unittest.TestCase):
             constrained = tasks_for(spec)
         self.assertEqual({t["legs"][0]["from_code"] for t in constrained if t.get("ticket_kind") == "round-trip"}, {"KUL"})
 
+    def test_ordered_visits_search_and_choose_only_the_list_order(self):
+        visits = [Visit(place=A, min_stay_hours=24), Visit(place=B, min_stay_hours=24)]
+        free, ordered = trip(visits=visits), trip(visits=visits, ordered_visits=True)
+        self.assertNotEqual(free.discovery_key(), ordered.discovery_key())
+        # Only A before B: no pair from home to B first, or from A back to home last (no revisit of A is needed).
+        windows = rough_date_windows(ordered)
+        self.assertIn((HOME.id, A.id), windows)
+        self.assertIn((A.id, B.id), windows)
+        self.assertNotIn((HOME.id, B.id), windows)
+        # B first is cheaper; the ordered trip still goes to A first.
+        spec = lambda ordered_visits: trip(visits=visits, ordered_visits=ordered_visits).model_copy(update={"end_date": date(2027, 2, 13)})
+        moves = [movement("h-a", HOME, A, dt(10), dt(10, 10)), movement("a-b", A, B, dt(11, 12), dt(11, 13)), movement("b-h", B, HOME, dt(13, 12), dt(13, 13)),
+                 movement("h-b", HOME, B, dt(10), dt(10, 10)), movement("b-a", B, A, dt(11, 12), dt(11, 13)), movement("a-h", A, HOME, dt(13, 12), dt(13, 13))]
+        offers = [fare("h-a", 100), fare("a-b", 100), fare("b-h", 100), fare("h-b", 10), fare("b-a", 10), fare("a-h", 10)]
+        for ordered_visits, expected in ((False, B.id), (True, A.id)):
+            result = optimize(spec(ordered_visits), moves, offers, [])
+            self.assertTrue(result["routes"])
+            self.assertEqual(result["routes"][0]["movements"][0]["to_id"], expected)
+
     def test_minimum_stays_narrow_dates_for_both_visit_orders(self):
         spec = trip(visits=[Visit(place=A, min_stay_hours=72), Visit(place=B, min_stay_hours=72)])
         spec.end_date = date(2027, 2, 20)

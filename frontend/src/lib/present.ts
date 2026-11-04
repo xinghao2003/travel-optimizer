@@ -676,7 +676,7 @@ const placeNames = (places: { name: string }[], home: { name: string } | null) =
 /** The two summary lines of a trip (C3): its places, then dates, departure times, adults, budget and transport. */
 export function tripSummary(draft: TripDraft) {
   const visits = draft.visits.map(visit => visit.min_stay_hours > 0 ? `${visit.place.name} ${visit.min_stay_hours} h+` : visit.place.name).join(", ");
-  const route = `${placeNames(draft.departures, draft.home)} → ${visits}${draft.visits.length > 1 ? " (any order)" : ""} → ${placeNames(draft.arrivals, draft.home)}`;
+  const route = `${placeNames(draft.departures, draft.home)} → ${visits}${draft.visits.length > 1 ? draft.ordered_visits ? " (in this order)" : " (any order)" : ""} → ${placeNames(draft.arrivals, draft.home)}`;
   const details = [
     `${dateRange(draft.start_date, draft.end_date)} (${draft.date_mode === "fixed" ? "exact dates" : "any days"})`,
     `leave ${hhmm(draft.departure_start)}–${hhmm(draft.departure_end)}`,

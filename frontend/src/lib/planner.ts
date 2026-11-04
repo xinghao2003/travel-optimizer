@@ -11,6 +11,8 @@ export type PositioningPolicy = { direction: "outbound" | "return"; gateway_id: 
 export type PositioningService = { id: string; direction: "outbound" | "return"; gateway_id: string; mode: Mode; departure: string; arrival: string; fare_amount: number | null; currency: string; label: string };
 export type TripSpec = {
   name: string; home: Place; departures: Place[]; arrivals: Place[]; visits: Visit[];
+  /** Visit the cities in the order of `visits`; otherwise the search picks the order. */
+  ordered_visits?: boolean;
   start_date: string; end_date: string; date_mode: "fixed" | "flexible";
   adults: number; budget_myr: number | null; modes: Mode[]; max_transfers: number | null; allow_overnight: boolean;
   departure_start: string; departure_end: string;

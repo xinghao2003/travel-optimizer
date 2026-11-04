@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import itertools
 import math
 from datetime import date, datetime, time, timezone
 from typing import Literal
@@ -123,6 +124,8 @@ class TripSpec(Contract):
     departures: list[Place] = Field(default_factory=list, max_length=3)
     arrivals: list[Place] = Field(default_factory=list, max_length=3)
     visits: list[Visit] = Field(min_length=1, max_length=4)
+    # Visit the cities in the order of `visits`; otherwise the search picks the order.
+    ordered_visits: bool = False
     start_date: date
     end_date: date
     date_mode: Literal["fixed", "flexible"] = "fixed"
@@ -179,6 +182,11 @@ class TripSpec(Contract):
                 raise ValueError("Positioning must reference a non-home gateway in the selected direction.")
         return self
 
+    def visit_orders(self):
+        """The orders in which the cities can be visited first: the list order, or every order."""
+        ids = [v.place.id for v in self.visits]
+        return [tuple(ids)] if self.ordered_visits else list(itertools.permutations(ids))
+
     def places(self) -> dict[str, Place]:
         return {p.id: p for p in [self.home, *self.departures, *self.arrivals, *(v.place for v in self.visits)]}
 
@@ -191,6 +199,9 @@ class TripSpec(Contract):
                  self.adults, sorted(self.modes), self.departure_start, self.departure_end)
         if self.rail_fallback.enabled:
             parts = (*parts, "rail-fallback-v1", self.rail_fallback)
+        # One order searches fewer city pairs and dates than every order.
+        if self.ordered_visits and len(self.visits) > 1:
+            parts = (*parts, "ordered-visits-v1")
         if self.home_departure_earliest is None and self.home_arrival_latest is None and not self.positioning_policies:
             return stable_id(*parts)
         return stable_id(*parts, self.home_departure_earliest, self.home_arrival_latest, self.positioning_policies)

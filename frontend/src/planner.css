@@ -106,6 +106,8 @@ html { scroll-padding-top: calc(var(--header-h) + var(--tabs-h, 0px) + 8px); scr
 .p-visit-rows li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 6px 6px 6px 12px; border-radius: 6px; background: var(--muted-surface); }
 /* The name keeps at least 8rem; on a narrow row the stay field wraps under it. */
 .p-visit-name { flex: 1 1 8rem; min-width: 0; color: var(--foreground); font-weight: 500; overflow-wrap: anywhere; }
+.p-visit-rows li:has(.p-drag-handle) { padding-left: 2px; }
+.p-drag-handle { cursor: grab; touch-action: none; }
 .optimizer .p-stay-field { display: grid; grid-template-columns: auto auto; align-items: center; gap: 2px 8px; }
 .optimizer .p-stay-field input { width: 76px; }
 .p-stay-field > small { grid-column: 2; }

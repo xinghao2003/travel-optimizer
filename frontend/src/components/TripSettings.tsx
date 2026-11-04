@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { ChevronDown, LoaderCircle, Play } from "lucide-react";
+import { ChevronDown, GripVertical, LoaderCircle, Play } from "lucide-react";
 import { Button } from "./ui/button";
 import { InfoTip } from "./InfoTip";
 import { Field, NumberField, PlacePicker } from "./PlannerForms";
@@ -54,6 +54,17 @@ export function TripSettings({ draft, edit, places, errors, transitConfigured, s
     edit({ ...draft, visits: draft.visits.filter(item => item.place.id !== place.id), commitments: draft.commitments.filter(item => item.place_id !== place.id) });
     setVisitStatus(appointments ? `Also removed ${count(appointments, "appointment")} in ${place.name}.` : "");
   }
+  // Ordered visits: drag a row, or use the arrow keys on its handle. Focus stays on the moved row's handle.
+  const dragged = useRef<number | null>(null);
+  function moveVisit(from: number, to: number) {
+    if (to < 0 || to >= draft.visits.length || to === from) return;
+    const next = [...draft.visits];
+    const [item] = next.splice(from, 1);
+    next.splice(to, 0, item);
+    edit({ ...draft, visits: next });
+    setVisitStatus(`${item.place.name} moved to position ${to + 1} of ${next.length}.`);
+    requestAnimationFrame(() => document.getElementById(`visit-handle-${item.place.id}`)?.focus());
+  }
   // Departure window › Change: opens More settings › Departure times and changes, then focuses the earliest time.
   function changeDepartureTimes() {
     const field = document.getElementById("setting-departure-start");
@@ -63,6 +74,7 @@ export function TripSettings({ draft, edit, places, errors, transitConfigured, s
 
   const visits = draft.visits;
   const full = visits.length >= 4;
+  const ordered = !!draft.ordered_visits && visits.length > 1;
   const firstStay = visits[0]?.min_stay_hours ?? 0;
   const staySum = staySumWarning(draft);
   const summaries = settingsSummaries(draft, batchSize);
@@ -74,7 +86,7 @@ export function TripSettings({ draft, edit, places, errors, transitConfigured, s
 
   return <section id="trip-settings" className="p-panel p-settings" aria-labelledby="settings-title">
     <h2 id="settings-title" tabIndex={-1}>Trip settings</h2>
-    {searchActive && <p className="p-notice">A search is running. Changing places, dates, adults, transport, departure times, start and end cities or estimated train timetables stops it.</p>}
+    {searchActive && <p className="p-notice">A search is running. Changing places, the visit order, dates, adults, transport, departure times, start and end cities or estimated train timetables stops it.</p>}
 
     <div className="p-settings-grid">
       <div className="p-setting">
@@ -93,18 +105,31 @@ export function TripSettings({ draft, edit, places, errors, transitConfigured, s
       </div>
 
       <div className="p-setting">
-        <PlacePicker label="Cities to visit (any order)" placeholder="Add a city: name or airport code" limitText={`${visits.length} of 4`} disabled={full}
+        <PlacePicker label={ordered ? "Cities to visit (in this order)" : "Cities to visit (any order)"} placeholder="Add a city: name or airport code" limitText={`${visits.length} of 4`} disabled={full}
           hint={full ? "Up to 4 cities. Remove one to add another." : undefined} disabledIds={[home?.id ?? "", ...visits.map(visit => visit.place.id)]}
           error={placeErrors ? errors.visits : undefined}
-          info={<InfoTip topic="cities to visit" align="end">The search picks the best order. Each city gets at least its minimum stay.</InfoTip>}
+          info={<InfoTip topic="cities to visit" align="end">The search picks the best order, unless you choose Visit in this order. Each city gets at least its minimum stay.</InfoTip>}
           onSelect={place => { if (!full) { edit({ ...draft, visits: [...visits, { place, min_stay_hours: 0 }] }); setVisitStatus(""); } }} />
-        {visits.length > 0 && <ul className="p-visit-rows">{visits.map((visit, i) => <li key={visit.place.id}>
-          <span className="p-visit-name">{[visit.place.name, visit.place.country_code].filter(Boolean).join(" · ")}</span>
+        {visits.length > 0 && <ul className="p-visit-rows">{visits.map((visit, i) => <li key={visit.place.id}
+          onDragStart={event => { dragged.current = i; event.dataTransfer.effectAllowed = "move"; }}
+          onDragOver={event => { if (dragged.current !== null) event.preventDefault(); }}
+          onDrop={event => { event.preventDefault(); if (dragged.current !== null) moveVisit(dragged.current, i); dragged.current = null; }}
+          onDragEnd={event => { dragged.current = null; event.currentTarget.draggable = false; }}>
+          {ordered && <button type="button" id={`visit-handle-${visit.place.id}`} className="p-icon-button p-drag-handle"
+            aria-label={`${visit.place.name}, position ${i + 1} of ${visits.length}. Drag, or press the up and down arrow keys, to move it.`}
+            // Only the handle starts a drag, so text in the row's fields stays selectable.
+            onPointerDown={event => { const row = event.currentTarget.closest("li"); if (row) row.draggable = true; }}
+            onPointerUp={event => { const row = event.currentTarget.closest("li"); if (row) row.draggable = false; }}
+            onKeyDown={event => {
+              if (event.key === "ArrowUp" || event.key === "ArrowDown") { event.preventDefault(); moveVisit(i, i + (event.key === "ArrowUp" ? -1 : 1)); }
+            }}><GripVertical size={16} aria-hidden="true" /></button>}
+          <span className="p-visit-name">{ordered && `${i + 1}. `}{[visit.place.name, visit.place.country_code].filter(Boolean).join(" · ")}</span>
           <NumberField className="p-stay-field" label={<><span className="sr-only">Minimum stay in {visit.place.name}: </span>At least</>} unit="h" hint={stayDays(visit.min_stay_hours)}
             value={visit.min_stay_hours} min={0} max={8760} message="Enter 0 to 8,760 hours."
             onChange={n => edit({ ...draft, visits: visits.map((item, j) => j === i ? { ...item, min_stay_hours: n ?? 0 } : item) })} />
           <button type="button" className="p-icon-button" aria-label={`Remove ${visit.place.name}`} onClick={() => removeVisit(visit.place)}>×</button>
         </li>)}</ul>}
+        {visits.length > 1 && <label className="p-check"><input type="checkbox" checked={!!draft.ordered_visits} onChange={e => edit({ ...draft, ordered_visits: e.target.checked })} />Visit in this order</label>}
         {visits.length > 1 && visits.some(visit => visit.min_stay_hours !== firstStay) && <button type="button" className="p-text-button"
           onClick={() => edit({ ...draft, visits: visits.map(visit => ({ ...visit, min_stay_hours: firstStay })) })}>Use {firstStay} h for all cities</button>}
         <p className="p-field-status" aria-live="polite">{visitStatus}</p>

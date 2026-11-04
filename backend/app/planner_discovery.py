@@ -190,7 +190,7 @@ def rough_date_windows(spec):
         return {pair: (start, end) for pair in itertools.permutations(spec.places(), 2)}
     stays = {v.place.id: v.min_stay_hours for v in spec.visits}
     windows = {}
-    for order in (path for first in itertools.permutations(stays) for path in visit_return_orders(first)):
+    for order in (path for first in spec.visit_orders() for path in visit_return_orders(first)):
         for departure in spec.departures:
             for arrival in spec.arrivals:
                 path = [spec.home.id, departure.id, *(id for id in order if id != departure.id), arrival.id, spec.home.id]
@@ -241,7 +241,7 @@ def tasks_for(spec):
     # Prioritize complete seeds, rather than spending the first batch on just
     # the outbound directions. Remaining calendar dates follow deterministically.
     dates = seed_dates(spec)
-    for order in (path for first in itertools.permutations([v.place.id for v in spec.visits]) for path in visit_return_orders(first)):
+    for order in (path for first in spec.visit_orders() for path in visit_return_orders(first)):
         for departure in spec.departures:
             for arrival in spec.arrivals:
                 path = [spec.home.id, departure.id, *order, arrival.id, spec.home.id]

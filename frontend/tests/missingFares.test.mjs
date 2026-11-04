@@ -36,3 +36,9 @@ test("repeated journeys share one estimate across departures and count distinct 
  assert.equal(groups[0].affected_itineraries,3);
  assert.deepEqual(groups[0].components.map(c => c.component_id),["a","b","c"]);
 });
+test("components carry the journey's search link and template id; charges have none",()=>{
+ const flight={...movement("f1",[charge("c1")]),search_url:"https://example.com/f1",template_id:"t1"};
+ const groups=groupMissingFares([fare("f1",{label:"flight"}),fare("c1")],[route("r1",[flight])]);
+ const byId=Object.fromEntries(groups.flatMap(g=>g.components).map(c=>[c.component_id,[c.search_url,c.template_id]]));
+ assert.deepEqual(byId,{f1:["https://example.com/f1","t1"],c1:[null,null]});
+});

@@ -4,11 +4,13 @@ export type MissingFare = Result["missing_fares"][number];
 export type MissingFareGroup = {
   key: string; from_id: string; to_id: string; label: string; mode: string;
   currency: string; reason: string; affected_itineraries: number;
-  components: (MissingFare & { departure: string | null; service: string | null })[];
+  /** `search_url` and `template_id` come from the journey (null for charges): Search fare and canonical ids. */
+  components: (MissingFare & { departure: string | null; service: string | null; search_url: string | null; template_id: string | null })[];
 };
+type Context = { from: string; to: string; mode: string; departure: string | null; service: string | null; search_url: string | null; template_id: string | null };
 
 export function groupMissingFares(missing: MissingFare[], routes: Route[]): MissingFareGroup[] {
-  const contexts = new Map<string, { from: string; to: string; mode: string; departure: string | null; service: string | null }>();
+  const contexts = new Map<string, Context>();
   const affected = new Map<string, Set<string>>();
   const register = (id: string, routeId: string) => {
     if (!affected.has(id)) affected.set(id, new Set());
@@ -19,14 +21,14 @@ export function groupMissingFares(missing: MissingFare[], routes: Route[]): Miss
       const services = [...new Set(movement.segments.filter(segment => segment.mode === movement.mode)
         .map(segment => segment.operator || segment.service).filter((service): service is string => !!service))];
       contexts.set(movement.id, { from: movement.from_id, to: movement.to_id, mode: movement.mode,
-        departure: movement.departure, service: services.join(" / ") || null });
+        departure: movement.departure, service: services.join(" / ") || null, search_url: movement.search_url ?? null, template_id: movement.template_id ?? null });
       register(movement.id, route.id);
       for (const charge of movement.charges) {
         // Diagnostics historically use the whole flight's endpoints; use the
         // charge endpoints to identify the actual city-airport transfer.
         const scoped = charge as typeof charge & { from_id?: string; to_id?: string };
         contexts.set(charge.id, { from: scoped.from_id ?? movement.from_id, to: scoped.to_id ?? movement.to_id,
-          mode: charge.mode, departure: movement.departure, service: null });
+          mode: charge.mode, departure: movement.departure, service: null, search_url: null, template_id: null });
         register(charge.id, route.id);
       }
     }
@@ -42,7 +44,8 @@ export function groupMissingFares(missing: MissingFare[], routes: Route[]): Miss
       affected_itineraries: 0, components: [], routeIds: new Set() });
     const group = groups.get(key)!;
     if (group.components.some(c => c.component_id === fare.component_id)) continue;
-    group.components.push({ ...fare, from_id: from, to_id: to, departure: context?.departure ?? null, service: context?.service ?? null });
+    group.components.push({ ...fare, from_id: from, to_id: to, departure: context?.departure ?? null, service: context?.service ?? null,
+      search_url: context?.search_url ?? null, template_id: context?.template_id ?? null });
     for (const id of affected.get(fare.component_id) ?? []) group.routeIds.add(id);
   }
   return [...groups.values()].map(({ routeIds, ...group }) => ({ ...group, affected_itineraries: routeIds.size }))

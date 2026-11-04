@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { loadTs } from "./loadTs.mjs";
-const { activeFares, buildAirportConnections, buildTransferEstimates, canonicalIds, countDrafts, stageFare, storedOfferId, transferKey } = await loadTs("../src/lib/drafts.ts");
+const { activeFares, airportChangeFieldId, buildAirportConnections, buildTransferEstimates, canonicalFares, canonicalIds, countDrafts, invalidDraftFields, knownComponentIds, nextTransferMode, removeComponent, sameAirportChange, sameFare, sameTransferRows, savedAirportChange, savedTransferRows, stageFare, storedOfferId, transferFieldId, transferKey } = await loadTs("../src/lib/drafts.ts");
 
 // Ids from the priced demo trip: a flight template and its transfer variant.
 const T = "flight:b4c409a9636f4407fc3f7874";
@@ -122,4 +122,72 @@ test("draft counts by kind", () => {
   assert.deepEqual(countDrafts({ fares: { a: fare(["1"]), b: fare(["2"]) }, transfers: { [transferKey("KUL", "airport:KUL", 2)]: [] }, airportChanges: { "GMP>ICN": null } }),
     { airportChanges: 1, transfers: 1, prices: 2 });
   assert.deepEqual(countDrafts({ fares: {}, transfers: {}, airportChanges: {} }), { airportChanges: 0, transfers: 0, prices: 0 });
+});
+
+test("undoing one component removes it from every fare draft", () => {
+  const drafts = { a: fare(["1", "2"]), b: fare(["2"]), c: fare(["3"]) };
+  assert.deepEqual(removeComponent(drafts, "2"), { a: fare(["1"]), c: fare(["3"]) });
+});
+
+test("stored fare drafts on variant ids move to their template ids", () => {
+  const templateOf = new Map([[V, T]]);
+  assert.deepEqual(canonicalFares({ a: fare([V, "x"]), b: fare([T], 20) }, templateOf), { a: fare(["x"]), b: fare([T], 20) });
+});
+
+test("known components come from the GET field, else from the snapshot and the routes", () => {
+  const movement = (id, charges = []) => ({ id, charges: charges.map(id => ({ id })) });
+  const routes = [{ movements: [movement(V, [`${V}:access`])], extra_charges: [{ id: "charge:rental" }] }];
+  assert.deepEqual([...knownComponentIds({ fare_component_ids: ["a"], snapshot: null }, routes)], ["a"]);
+  assert.deepEqual([...knownComponentIds({ snapshot: { movements: [movement(T, [`${T}:egress`])] } }, routes)], [T, `${T}:egress`, V, `${V}:access`, "charge:rental"]);
+  assert.deepEqual([...knownComponentIds(null, [])], []);
+});
+
+test("a staged price equal to the saved one changes nothing", () => {
+  assert.equal(sameFare({ low: 10, high: 10, currency: "myr" }, { low: 10, high: 10, currency: "MYR" }), true);
+  assert.equal(sameFare({ low: 10, high: null, currency: "MYR" }, { low: 10, high: 10, currency: "MYR" }), false);
+  assert.equal(sameFare({ low: 10, high: 10, currency: "MYR" }, undefined), false);
+});
+
+test("saved transfer rows as drafts, and equal rows", () => {
+  const saved = [estimate("KUL", "airport:KUL", 2, { low: 95, high: 95 }), estimate("KUL", "airport:KUL", 3), estimate("KUL", "airport:KUL", 2, { mode: "rail", duration_minutes: 40, low: null, high: null })];
+  const rowsKul = savedTransferRows(saved, "KUL", "airport:KUL", 2);
+  assert.deepEqual(rowsKul, [way("taxi", "95", "95"), way("rail", "", "", "40")]);
+  assert.deepEqual(savedTransferRows(saved, "airport:PUS", "PUS", 2), [way("taxi")]);
+  assert.equal(sameTransferRows([way("taxi", "95.0", ""), way("rail", "", "", "40", "myr")], rowsKul), true);
+  assert.equal(sameTransferRows([way("taxi", "96"), way("rail", "", "", "40")], rowsKul), false);
+  assert.equal(sameTransferRows([], [way("taxi")]), true);
+  assert.equal(sameTransferRows([way("taxi", "", "", "", "")], []), true);
+});
+
+test("saved airport changes as drafts, and equal drafts", () => {
+  const saved = savedAirportChange(connection("GMP", "ICN", { mode: "rail", duration_minutes: 70, fare_amount: 60 }));
+  assert.deepEqual(saved, change("rail", "70", "60"));
+  assert.equal(savedAirportChange(undefined), null);
+  assert.equal(sameAirportChange(change("rail", "70.0", "60", "myr"), saved), true);
+  assert.equal(sameAirportChange(change("rail", "70", "", "KRW"), change("rail", "70")), true);
+  assert.equal(sameAirportChange(change(""), null), true);
+  assert.equal(sameAirportChange(null, saved), false);
+});
+
+test("invalid draft fields are listed by input id, airport changes first", () => {
+  const drafts = {
+    airportChanges: { "GMP>ICN": change("rail", "", "-1"), "HND>NRT": null },
+    transfers: {
+      [transferKey("KUL", "airport:KUL", 2)]: [way("taxi", "20"), way("rail", "5")],
+      [transferKey("airport:PUS", "PUS", 3)]: [way("rail")],
+    },
+  };
+  assert.deepEqual(invalidDraftFields(drafts, rows, 2), [
+    airportChangeFieldId("GMP>ICN", "duration"), airportChangeFieldId("GMP>ICN", "fare"),
+    transferFieldId("KUL", "airport:KUL", 1, "duration"),
+  ]);
+  assert.equal(transferFieldId("KUL", "airport:KUL", 0, "low"), "transfer-low-KUL>airport:KUL-0");
+  assert.deepEqual(invalidDraftFields({ airportChanges: {}, transfers: { [transferKey("KUL", "airport:KUL", 2)]: [way("taxi", "", "9")] } }, rows, 2), [transferFieldId("KUL", "airport:KUL", 0, "low")]);
+});
+
+test("another way adds the first way not used yet, taxi first", () => {
+  assert.equal(nextTransferMode([]), "taxi");
+  assert.equal(nextTransferMode([{ mode: "taxi" }]), "rail");
+  assert.equal(nextTransferMode([{ mode: "rail" }, { mode: "taxi" }, { mode: "bus" }]), "coach");
+  assert.equal(nextTransferMode(["taxi", "rail", "bus", "coach", "subway", "tram", "car"].map(mode => ({ mode }))), null);
 });

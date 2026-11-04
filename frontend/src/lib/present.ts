@@ -1,4 +1,4 @@
-import { blankTrip, defaultBatchSize, modes, type AirportConnectionRequirement, type AirportTransferMode, type AirportTransferRow, type ApiError, type Charge, type Coverage, type Job, type Movement, type Offer, type Result, type Route, type SavedTrip, type Segment, type TripDraft } from "./planner";
+import { blankTrip, defaultBatchSize, localInputToISO, modes, type AirportConnectionRequirement, type AirportTransferMode, type AirportTransferRow, type ApiError, type Charge, type Coverage, type Job, type Mode, type Movement, type Offer, type PricingRule, type Result, type Route, type SavedTrip, type Segment, type TripDraft } from "./planner";
 import type { MissingFareGroup } from "./missingFares";
 
 // Pure display and decision helpers for the planner UI (spec sections C–G). No React here:
@@ -970,6 +970,42 @@ export function transferDirections(rows: AirportTransferRow[], routes: Route[], 
 }
 
 /**
+ * A journey of an airport transfer direction (F2 Show journeys): "Fri 4 Dec 07:20 · flight to Busan" for access, at the
+ * journey's start in its origin's time, or "Fri 4 Dec 18:54 · flight from Kuala Lumpur" for egress, at its end.
+ */
+export function transferJourneyText({ charge, movement }: Pick<TransferJourney, "charge" | "movement">, placeName: (id: string) => string, zoneOf: (id: string) => string) {
+  const egress = charge.kind === "Airport egress";
+  const time = egress ? movement.arrival : movement.departure;
+  const what = `${modeLabel(movement.mode).toLowerCase()} ${egress ? "from" : "to"} ${placeName(egress ? movement.from_id : movement.to_id)}`;
+  return time ? `${formatLocal(time, zoneOf(egress ? movement.to_id : movement.from_id))} · ${what}` : capitalize(what);
+}
+
+/** The title of a Journey prices row (F2): "Flight · Kuala Lumpur → Busan". A label that is a mode value reads as the mode. */
+export function journeyGroupTitle(group: Pick<MissingFareGroup, "label" | "from_id" | "to_id">, placeName: (id: string) => string) {
+  const kind = (modes as string[]).includes(group.label) ? modeLabel(group.label) : group.label;
+  return `${kind} · ${placeName(group.from_id)} → ${placeName(group.to_id)}`;
+}
+
+/** One journey of a Journey prices row: "Fri 4 Dec 10:15 · AirAsia X D7530" in the origin's time (`zone`); "" when both are unknown. */
+export function componentWhen(component: Pick<MissingFareGroup["components"][number], "departure" | "service">, zone: string) {
+  return [component.departure ? formatLocal(component.departure, zone) : null, component.service].filter(Boolean).join(" · ");
+}
+
+/** The journeys of a Journey prices row: "1 journey · Fri 4 Dec 10:15 · AirAsia X D7530" or "3 journeys · 4–9 Dec" (dates in the origin's time). */
+export function journeyGroupWhen(group: Pick<MissingFareGroup, "components">, zone: string) {
+  const count = plural(group.components.length, "journey");
+  if (group.components.length === 1) {
+    const when = componentWhen(group.components[0], zone);
+    return when ? `${count} · ${when}` : count;
+  }
+  const times = group.components.flatMap(component => component.departure ? [new Date(component.departure).getTime()] : []).sort((a, b) => a - b);
+  if (!times.length) return count;
+  const [first, last] = [times[0], times.at(-1)!].map(time => formatLocal(new Date(time).toISOString(), zone, "day"));
+  const [firstDay, firstMonth] = first.split(" "), lastMonth = last.split(" ")[1];
+  return `${count} · ${first === last ? first : firstMonth === lastMonth ? `${firstDay}–${last}` : `${first} – ${last}`}`;
+}
+
+/**
  * Splits missing-price groups for Missing info: airport access and egress groups that match a transfer row
  * belong to Airport transfers; the rest are Journey prices. Airport change groups ("Airport transfer …") belong to neither.
  */
@@ -1117,4 +1153,107 @@ export function optionsEmptyState({ searched, active, pending, hasResult, best, 
     ...(excludeUnpricedFlights ? [line("Flights without a price are skipped.", { label: "Show them", target: "show-unpriced-flights" })] : []),
     line("Or change the trip: fewer minimum hours, more days, more transport or wider departure times.", editTrip),
   ] };
+}
+
+// ---------------------------------------------------------------- connections and price rules
+
+/**
+ * A connection you added (F2 row 4): "Busan → Tokyo · Bus · 4 h 30 min · any time", or with fixed times
+ * "… · Mon 7 Dec 09:00 → 13:30", the departure in the origin's time and the arrival in the destination's time.
+ */
+export function connectionText(movement: Pick<Movement, "from_id" | "to_id" | "mode" | "duration_minutes" | "departure" | "arrival">, placeName: (id: string) => string, zoneOf: (id: string) => string) {
+  const from = zoneOf(movement.from_id), to = zoneOf(movement.to_id);
+  const when = movement.departure && movement.arrival
+    ? `${formatLocal(movement.departure, from)} → ${formatLocal(movement.arrival, to, formatLocal(movement.departure, from, "date") === formatLocal(movement.arrival, to, "date") ? "time" : "datetime")}`
+    : "any time";
+  return `${placeName(movement.from_id)} → ${placeName(movement.to_id)} · ${modeLabel(movement.mode)} · ${formatDuration(movement.duration_minutes)} · ${when}`;
+}
+
+/** The Add a connection form (F2 row 4) as typed. `departure` and `arrival` are datetime-local values. */
+export type ConnectionForm = { from: string; to: string; mode: Mode; fixed: boolean; hours: string; distance: string; departure: string; arrival: string };
+export type ConnectionErrors = Partial<Record<"places" | "hours" | "distance" | "departure" | "arrival", string>>;
+export const blankConnectionForm = (): ConnectionForm => ({ from: "", to: "", mode: "bus", fixed: false, hours: "", distance: "", departure: "", arrival: "" });
+/**
+ * The connection to add (F2 row 4), or the errors of the form by field. Fixed times are read in each city's own time
+ * zone (`zoneOf`, I6 item 6): both or neither; the travel time is then the time between them. `id` is "assumed:{uuid}".
+ */
+export function connectionFromForm(form: ConnectionForm, zoneOf: (id: string) => string, id: string): { movement: Movement; errors?: undefined } | { movement?: undefined; errors: ConnectionErrors } {
+  const errors: ConnectionErrors = {};
+  if (!form.from || !form.to || form.from === form.to) errors.places = "Choose two different places.";
+  const distance = form.distance.trim() === "" ? null : Number(form.distance);
+  if (distance !== null && (!Number.isFinite(distance) || distance < 0)) errors.distance = "Enter a distance of 0 or more.";
+  let duration = Number(form.hours) * 60, departure: string | null = null, arrival: string | null = null;
+  if (!form.fixed) {
+    if (form.hours.trim() === "" || !Number.isFinite(duration) || duration <= 0) errors.hours = "Enter a travel time above 0.";
+  } else if (!form.departure || !form.arrival) {
+    errors[form.departure ? "arrival" : "departure"] = "Enter both times, or choose Any time.";
+  } else if (!errors.places) {
+    const read = (field: "departure" | "arrival", place: string) => {
+      try { return localInputToISO(form[field], zoneOf(place)); }
+      catch (err) { errors[field] = err instanceof Error ? err.message : String(err); return null; }
+    };
+    departure = read("departure", form.from); arrival = read("arrival", form.to);
+    if (departure && arrival) {
+      duration = (Date.parse(arrival) - Date.parse(departure)) / 60000;
+      if (duration <= 0) errors.arrival = "Arrival must be after departure.";
+    }
+  }
+  if (Object.keys(errors).length) return { errors };
+  return { movement: {
+    id, from_id: form.from, to_id: form.to, mode: form.mode, duration_minutes: duration, distance_km: distance, departure, arrival,
+    source: "User-defined connection", assumptions: ["User supplied connectivity and timing"], segments: [], charges: [], transfers: 0,
+    vehicle_kind: form.mode === "car" ? "rental" : null, search_url: null,
+  } };
+}
+
+/** Transport values of a price rule (F2 row 7), in the order of the Transport select. */
+export const ruleModes = ["*", ...modes, "rental"];
+const ruleUnits: Record<PricingRule["unit"], string> = { person: "per person", party: "per group", vehicle: "per vehicle" };
+/**
+ * A price rule in the rule list (F2 row 7): "Taxi · Busan → PUS airport · RM 80 – 120 · per vehicle (4 seats) · from KR · priority 0".
+ * Places and the service show only when the rule names them.
+ */
+export function ruleText(rule: PricingRule, placeName: (id: string) => string) {
+  const price = `${moneyShort(rule.low, rule.currency)}${rule.high !== null && rule.high !== rule.low ? ` – ${amount(rule.high)}` : ""}${rule.kind === "per-km" ? "/km" : ""}`;
+  return [
+    modeLabel(rule.mode),
+    rule.from_id || rule.to_id ? `${rule.from_id ? placeName(rule.from_id) : "any place"} → ${rule.to_id ? placeName(rule.to_id) : "any place"}` : "",
+    rule.service ?? "",
+    price,
+    rule.unit === "vehicle" ? `per vehicle (${plural(rule.capacity, "seat")})` : ruleUnits[rule.unit],
+    rule.country_code ? `from ${rule.country_code}` : "",
+    `priority ${rule.priority}`,
+  ].filter(Boolean).join(" · ");
+}
+
+/** The price rule form (F2 row 7) as typed. */
+export type RuleForm = Omit<PricingRule, "from_id" | "to_id" | "service" | "country_code" | "low" | "high" | "capacity" | "priority">
+  & Record<"from_id" | "to_id" | "service" | "country_code" | "low" | "high" | "capacity" | "priority", string>;
+export type RuleErrors = Partial<Record<"name" | "country_code" | "low" | "high" | "currency" | "capacity" | "priority", string>>;
+export const blankRuleForm = (id: string): RuleForm => ({ id, name: "", mode: "*", from_id: "", to_id: "", service: "", country_code: "", kind: "fixed", low: "", high: "", currency: "MYR", unit: "person", capacity: "4", priority: "0" });
+/** A saved rule in the form, for Edit. */
+export function ruleForm(rule: PricingRule): RuleForm {
+  return { ...rule, from_id: rule.from_id ?? "", to_id: rule.to_id ?? "", service: rule.service ?? "", country_code: rule.country_code ?? "",
+    low: String(rule.low), high: rule.high === null ? "" : String(rule.high), capacity: String(rule.capacity), priority: String(rule.priority) };
+}
+/**
+ * The rule to save, or the errors of the form by field. A blank highest price is a fixed price; a blank priority is 0.
+ * Seats count only per vehicle; otherwise an invalid hidden value goes back to 4.
+ */
+export function ruleFromForm(form: RuleForm): { rule: PricingRule; errors?: undefined } | { rule?: undefined; errors: RuleErrors } {
+  const errors: RuleErrors = { ...priceInputErrors(form.low, form.high, form.currency) };
+  if (!form.name.trim()) errors.name = "Enter a rule name.";
+  if (form.country_code.trim() && !/^[A-Za-z]{2}$/.test(form.country_code.trim())) errors.country_code = "Enter a 2-letter country code.";
+  const capacity = Number(form.capacity), priority = form.priority.trim() === "" ? 0 : Number(form.priority);
+  const seatsValid = form.capacity.trim() !== "" && Number.isInteger(capacity) && capacity >= 1 && capacity <= 9;
+  if (form.unit === "vehicle" && !seatsValid) errors.capacity = "Enter 1 to 9 seats.";
+  if (!Number.isInteger(priority)) errors.priority = "Enter a whole number.";
+  if (Object.keys(errors).length) return { errors };
+  const text = (value: string) => value.trim() || null;
+  return { rule: {
+    id: form.id, name: form.name.trim(), mode: form.mode, from_id: form.from_id || null, to_id: form.to_id || null,
+    service: text(form.service), country_code: text(form.country_code)?.toUpperCase() ?? null, kind: form.kind,
+    low: Number(form.low), high: form.high.trim() === "" ? null : Number(form.high), unit: form.unit,
+    capacity: seatsValid ? capacity : 4, currency: form.currency.trim().toUpperCase(), priority,
+  } };
 }

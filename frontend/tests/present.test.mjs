@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { loadTs } from "./loadTs.mjs";
 const {
-  airportChangeRows, appError, assumedConnections, assumptionNotes, buildNextSteps, bundleStatusLabel, cityGaps, compareText, dateModeText, dateRange, dayByDay, formatDuration,
-  formatLocal, hoursText, journeyChips, journeySource, journeyWhen, mainService, matchingQuoteLinks, modeLabel, moneyShort, needsInputCount, optionChips, optionsEmptyState, partySizeNotice, perCityHourText, priceEstimated, priceText, routeChain, routeSignature,
+  airportChangeRows, appError, assumedConnections, assumptionNotes, blankConnectionForm, blankRuleForm, buildNextSteps, bundleStatusLabel, cityGaps, connectionFromForm, connectionText, compareText, dateModeText, dateRange, dayByDay, formatDuration,
+  componentWhen, formatLocal, hoursText, journeyGroupTitle, journeyGroupWhen, journeyChips, journeySource, journeyWhen, mainService, matchingQuoteLinks, modeLabel, moneyShort, needsInputCount, optionChips, optionsEmptyState, partySizeNotice, perCityHourText, priceEstimated, priceText, routeChain, routeSignature,
   priceInputErrors, purchaseAmount, quoteLinkText, searchDetails, searchState, settingsFooter, settingsSummaries, sortRoutes, sourceLabel, splitGroups, stepLabel, staySumWarning, ticketJourney, ticketRows,
-  transferDirections, tripSummary, unpricedSummary, unresolvedAccessJourneys, validateDraft,
+  ruleForm, ruleFromForm, ruleText, transferDirections, transferJourneyText, tripSummary, unpricedSummary, unresolvedAccessJourneys, validateDraft,
 } = await loadTs("../src/lib/present.ts");
 const { blankTrip } = await loadTs("../src/lib/planner.ts");
 
@@ -560,6 +560,35 @@ test("airport transfer directions show their use, missing prices, own prices and
   assert.equal(plain(transferDirections(rows, own, 2, { MYR: 1 }).find(d => d.label === "PUS airport → Busan").status), "RM 150 for 2 adults");
 });
 
+test("journeys of an airport transfer direction read in the local time at their end of the journey", () => {
+  const names = { KUL: "Kuala Lumpur", PUS: "Busan" };
+  const flight = flightTo("f1", "KUL", "PUS", { departure: "2026-12-04T00:00:00Z", arrival: "2026-12-04T09:54:00Z" });
+  const zoneOf = id => id === "KUL" ? "Asia/Kuala_Lumpur" : "Asia/Seoul";
+  assert.equal(transferJourneyText({ charge: flight.charges[0], movement: flight }, id => names[id], zoneOf), "Fri 4 Dec 08:00 · flight to Busan");
+  assert.equal(transferJourneyText({ charge: flight.charges[1], movement: flight }, id => names[id], zoneOf), "Fri 4 Dec 18:54 · flight from Kuala Lumpur");
+  const rail = { ...flight, mode: "rail", departure: null };
+  assert.equal(transferJourneyText({ charge: rail.charges[0], movement: rail }, id => names[id], zoneOf), "Train to Busan");
+});
+
+test("journey price rows name the journey and its dates in the origin's time", () => {
+  const names = { KUL: "Kuala Lumpur", PUS: "Busan" };
+  const component = (departure, service = null) => ({ departure, service });
+  const group = (label, components) => ({ label, from_id: "KUL", to_id: "PUS", components });
+  assert.equal(journeyGroupTitle(group("flight", []), id => names[id]), "Flight · Kuala Lumpur → Busan");
+  assert.equal(journeyGroupTitle(group("rail", []), id => names[id]), "Train · Kuala Lumpur → Busan");
+  assert.equal(journeyGroupTitle(group("Airport access", []), id => names[id]), "Airport access · Kuala Lumpur → Busan");
+  const zone = "Asia/Kuala_Lumpur";
+  assert.equal(componentWhen(component("2026-12-04T02:15:00Z", "AirAsia X D7530"), zone), "Fri 4 Dec 10:15 · AirAsia X D7530");
+  assert.equal(componentWhen(component(null), zone), "");
+  assert.equal(journeyGroupWhen(group("flight", [component("2026-12-04T02:15:00Z", "AirAsia X D7530")]), zone), "1 journey · Fri 4 Dec 10:15 · AirAsia X D7530");
+  assert.equal(journeyGroupWhen(group("flight", [component(null)]), zone), "1 journey");
+  // 9 Dec 20:00 UTC is 10 Dec in Kuala Lumpur.
+  assert.equal(journeyGroupWhen(group("flight", [component("2026-12-09T20:00:00Z"), component("2026-12-04T02:15:00Z"), component("2026-12-06T02:15:00Z")]), zone), "3 journeys · 4–10 Dec");
+  assert.equal(journeyGroupWhen(group("flight", [component("2026-11-28T02:15:00Z"), component("2026-12-04T02:15:00Z")]), zone), "2 journeys · 28 Nov – 4 Dec");
+  assert.equal(journeyGroupWhen(group("flight", [component("2026-12-04T02:15:00Z"), component("2026-12-04T09:15:00Z")]), zone), "2 journeys · 4 Dec");
+  assert.equal(journeyGroupWhen(group("flight", [component(null), component(null)]), zone), "2 journeys");
+});
+
 test("missing-price groups split into airport transfer rows and journey prices", () => {
   const group = (label, from_id, to_id, mode = "taxi") => ({ key: JSON.stringify([from_id, to_id, label]), label, from_id, to_id, mode, currency: "MYR", reason: "missing_fare", affected_itineraries: 1, components: [] });
   const rows = [{ from_id: "KUL", to_id: "airport:KUL", label: "Kuala Lumpur → KUL airport" }];
@@ -719,4 +748,65 @@ test("combined-ticket searches and typed prices in plain words", () => {
   assert.deepEqual(priceInputErrors("-1", "", "MYR"), { low: "Enter a price of 0 or more." });
   assert.deepEqual(priceInputErrors("200", "150", "MYR"), { high: "The highest price must be at least the lowest." });
   assert.deepEqual(priceInputErrors("200", "abc", "MYR"), { high: "The highest price must be at least the lowest." });
+});
+
+test("connections you add: text, and times read in each city's own time zone", () => {
+  const placeName = id => ({ PUS: "Busan", HND: "Tokyo", LON: "London" })[id] ?? id;
+  const zoneOf = id => ({ PUS: "Asia/Seoul", HND: "Asia/Tokyo", LON: "Europe/London" })[id] ?? "UTC";
+  const form = { ...blankConnectionForm(), from: "PUS", to: "HND" };
+  // Any time: the travel time in hours.
+  const any = connectionFromForm({ ...form, hours: "4.5", distance: "" }, zoneOf, "assumed:a");
+  assert.equal(any.errors, undefined);
+  assert.deepEqual({ ...any.movement, segments: undefined, charges: undefined }, {
+    id: "assumed:a", from_id: "PUS", to_id: "HND", mode: "bus", duration_minutes: 270, distance_km: null, departure: null, arrival: null,
+    source: "User-defined connection", assumptions: ["User supplied connectivity and timing"], segments: undefined, charges: undefined, transfers: 0, vehicle_kind: null, search_url: null,
+  });
+  assert.equal(connectionText(any.movement, placeName, zoneOf), "Busan → Tokyo · Bus · 4 h 30 min · any time");
+  // A car connection is a rental car.
+  assert.equal(connectionFromForm({ ...form, mode: "car", hours: "2" }, zoneOf, "assumed:c").movement.vehicle_kind, "rental");
+  // Fixed times: departure in Busan's time, arrival in Tokyo's time; the travel time is the time between them.
+  const fixed = connectionFromForm({ ...form, fixed: true, hours: "", departure: "2026-12-07T09:00", arrival: "2026-12-07T13:30", distance: "580" }, zoneOf, "assumed:b");
+  assert.equal(fixed.movement.departure, "2026-12-07T00:00:00.000Z");
+  assert.equal(fixed.movement.arrival, "2026-12-07T04:30:00.000Z");
+  assert.equal(fixed.movement.duration_minutes, 270);
+  assert.equal(fixed.movement.distance_km, 580);
+  assert.equal(connectionText(fixed.movement, placeName, zoneOf), "Busan → Tokyo · Bus · 4 h 30 min · Mon 7 Dec 09:00 → 13:30");
+  assert.equal(connectionText({ ...fixed.movement, arrival: "2026-12-07T16:00:00.000Z" }, placeName, zoneOf), "Busan → Tokyo · Bus · 4 h 30 min · Mon 7 Dec 09:00 → Tue 8 Dec 01:00");
+  // Errors, by field.
+  assert.deepEqual(connectionFromForm({ ...form, to: "PUS", hours: "1" }, zoneOf, "x").errors, { places: "Choose two different places." });
+  assert.deepEqual(connectionFromForm({ ...form, from: "", hours: "0", distance: "-1" }, zoneOf, "x").errors,
+    { places: "Choose two different places.", hours: "Enter a travel time above 0.", distance: "Enter a distance of 0 or more." });
+  assert.deepEqual(connectionFromForm({ ...form, fixed: true, departure: "2026-12-07T09:00" }, zoneOf, "x").errors, { arrival: "Enter both times, or choose Any time." });
+  assert.deepEqual(connectionFromForm({ ...form, fixed: true }, zoneOf, "x").errors, { departure: "Enter both times, or choose Any time." });
+  // 13:30 in Busan is 13:30 in Tokyo too (same offset): an arrival at 08:59 Tokyo time is before the departure.
+  assert.deepEqual(connectionFromForm({ ...form, fixed: true, departure: "2026-12-07T09:00", arrival: "2026-12-07T08:59" }, zoneOf, "x").errors, { arrival: "Arrival must be after departure." });
+  // A local time that a clock change skips.
+  assert.deepEqual(connectionFromForm({ ...form, to: "LON", fixed: true, departure: "2026-03-28T09:00", arrival: "2026-03-29T01:30" }, zoneOf, "x").errors,
+    { arrival: "This local time does not exist because of a timezone clock change." });
+});
+
+test("price rules: list text, form values and validation", () => {
+  const placeName = id => id.startsWith("airport:") ? `${id.slice(8)} airport` : ({ PUS: "Busan" })[id] ?? id;
+  const rule = { id: "r1", name: "Busan taxi", mode: "taxi", from_id: "PUS", to_id: "airport:PUS", service: "Airport access", country_code: "KR", kind: "fixed", low: 80, high: 120, unit: "vehicle", capacity: 4, currency: "MYR", priority: 0 };
+  assert.equal(plain(ruleText(rule, placeName)), "Taxi · Busan → PUS airport · Airport access · RM 80 – 120 · per vehicle (4 seats) · from KR · priority 0");
+  assert.equal(plain(ruleText({ ...rule, mode: "*", from_id: null, to_id: null, service: null, country_code: null, kind: "per-km", low: 0.5, high: null, unit: "party", priority: 5 }, placeName)),
+    "Any · RM 0.50/km · per group · priority 5");
+  assert.equal(plain(ruleText({ ...rule, mode: "rental", from_id: null, service: null, unit: "person", currency: "JPY", low: 3000, high: 3000 }, placeName)),
+    "Rental car · any place → PUS airport · JPY 3,000 · per person · from KR · priority 0");
+  // Edit loads the rule; saving it unchanged gives the same rule.
+  assert.deepEqual(ruleFromForm(ruleForm(rule)).rule, rule);
+  assert.deepEqual(ruleFromForm(ruleForm({ ...rule, high: null })).rule, { ...rule, high: null });
+  // A new rule: blank optional fields are null, codes are upper case, a blank priority is 0.
+  const blank = blankRuleForm("r2");
+  assert.deepEqual(ruleFromForm({ ...blank, name: " Taxi ", low: "30", currency: "myr", country_code: "kr", service: " ", priority: "" }).rule,
+    { id: "r2", name: "Taxi", mode: "*", from_id: null, to_id: null, service: null, country_code: "KR", kind: "fixed", low: 30, high: null, unit: "person", capacity: 4, currency: "MYR", priority: 0 });
+  // Seats count only per vehicle; a hidden invalid value goes back to 4.
+  assert.equal(ruleFromForm({ ...blank, name: "a", low: "1", capacity: "12" }).rule.capacity, 4);
+  assert.deepEqual(ruleFromForm({ ...blank, name: "a", low: "1", unit: "vehicle", capacity: "12" }).errors, { capacity: "Enter 1 to 9 seats." });
+  assert.deepEqual(ruleFromForm({ ...blank, name: "a", low: "1", unit: "vehicle", capacity: "" }).errors, { capacity: "Enter 1 to 9 seats." });
+  assert.deepEqual(ruleFromForm({ ...blank, low: "50", high: "40", currency: "MY", country_code: "KOR", priority: "1.5" }).errors, {
+    name: "Enter a rule name.", high: "The highest price must be at least the lowest.", currency: "Enter a 3-letter currency code.",
+    country_code: "Enter a 2-letter country code.", priority: "Enter a whole number.",
+  });
+  assert.deepEqual(ruleFromForm({ ...blank, name: "a" }).errors, { low: "Enter a price of 0 or more." });
 });

@@ -1,7 +1,7 @@
-import { AirportTransferTable } from "./components/AirportTransferTable";
 import { AppHeader } from "./components/AppHeader";
-import { InfoTip } from "./components/InfoTip";
+import { ApplyBar } from "./components/ApplyBar";
 import { ItineraryPanel } from "./components/ItineraryPanel";
+import { MissingInfoPanel } from "./components/MissingInfoPanel";
 import { OptionsPanel } from "./components/OptionsPanel";
 import { ErrorBanner } from "./components/ErrorBanner";
 import { StatusStrip } from "./components/StatusStrip";
@@ -10,13 +10,12 @@ import { TripBar } from "./components/TripBar";
 import { TripSettings } from "./components/TripSettings";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CircleCheck, LoaderCircle } from "lucide-react";
-import { Button } from "./components/ui/button";
-import { Field, RulesEditor } from "./components/PlannerForms";
-import { MissingFaresTable, type AppliedSharedFareGroup } from "./components/MissingFaresTable";
+import type { AppliedSharedFareGroup } from "./components/MissingFaresTable";
 import { groupMissingFares } from "./lib/missingFares";
-import type { SharedFare } from "./lib/drafts";
-import { airportChangeRows, appError, assumedConnections, buildNextSteps, cityGaps, needsInputCount, optionNumber, optionsEmptyState, partySizeNotice, routeSignature, searchDetails, searchState, settingsFooter, sortRoutes, splitGroups, staySumWarning, transferDirections, transitSearchModes, unresolvedAccessJourneys, validateDraft, type AirportChangeRow, type AppError, type OptionsTarget } from "./lib/present";
-import { api, blankTrip, defaultBatchSize, localTime, modes, type AirportTransferMode, type Job, type Movement, type Offer, type Place, type PricingRule, type Result, type Route, type SavedSummary, type SavedTrip, type TripDraft } from "./lib/planner";
+import { activeFares, airportChangeFieldId, buildAirportConnections, buildTransferEstimates, canonicalFares, canonicalIds, countDrafts, invalidDraftFields, knownComponentIds, savedTransferRows, sameTransferRows, transferFieldId, transferKey, type DraftPrice, type DraftState, type DraftTarget, type PriceValue, type SharedFare } from "./lib/drafts";
+import { useTripDrafts, type DraftKind } from "./lib/useTripDrafts";
+import { airportChangeRows, appError, assumedConnections, buildNextSteps, cityGaps, needsInputCount, optionNumber, optionsEmptyState, partySizeNotice, purchaseAmount, routeSignature, searchDetails, searchState, settingsFooter, sortRoutes, splitGroups, staySumWarning, transferDirections, transitSearchModes, unresolvedAccessJourneys, validateDraft, type AppError, type OptionsTarget } from "./lib/present";
+import { api, blankTrip, defaultBatchSize, modes, type AirportTransferMode, type Charge, type Job, type Movement, type Offer, type PricingRule, type Result, type Route, type SavedSummary, type SavedTrip, type TripDraft } from "./lib/planner";
 import { useMediaQuery } from "./lib/useMediaQuery";
 import "./planner.css";
 
@@ -27,90 +26,15 @@ const pollError: AppError = { text: "Can't get the search status. Retrying…", 
 type Panel = "options" | "itinerary" | "missing";
 /** Option rows shown at first, and added by each "Show more" (C6). */
 const pageSize = 40;
-
-function AirportConnectionsTable({ tripId, rows: savedRows, onSaved, report }: {
-  tripId: string;
-  rows: AirportChangeRow[];
-  onSaved: (record: SavedTrip, result: Result) => void;
-  report: (message: string) => void;
-}) {
-  // Typed rows reset only when the trip or the server's pairs change. Polling and
-  // autosave replace the records with new objects that hold the same rows.
-  const signature = JSON.stringify(savedRows);
-  const [rows, setRows] = useState<AirportChangeRow[]>(savedRows);
-  const [busy, setBusy] = useState(false);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => setRows(savedRows), [tripId, signature]);
-
-  if (!rows.length) return null;
-  const requirements = savedRows.filter(row => row.required);
-  const requiredJourneys = requirements.reduce((sum, item) => sum + item.journey_count, 0);
-  const pairKey = (row: Pick<AirportChangeRow, "from_airport" | "to_airport">) => `${row.from_airport}>${row.to_airport}`;
-  // Next steps › Add airport transfer focuses this row's mode.
-  const firstUnresolved = rows.find(row => row.unresolved_journey_count > 0);
-  function updateRow(key: string, change: Partial<AirportChangeRow>) {
-    setRows(current => current.map(row => pairKey(row) === key ? { ...row, ...change } : row));
-  }
-  function clearOrRemove(row: AirportChangeRow) {
-    if (row.required) updateRow(pairKey(row), { mode: "", duration_minutes: null, fare_amount: null, currency: "MYR" });
-    else setRows(current => current.filter(item => pairKey(item) !== pairKey(row)));
-  }
-  async function save() {
-    setBusy(true);
-    try {
-      const incomplete = rows.some(row => (row.mode || row.duration_minutes !== null || row.fare_amount !== null)
-        && (!row.mode || row.duration_minutes === null || !Number.isFinite(row.duration_minutes) || row.duration_minutes <= 0));
-      if (incomplete) throw new Error("Complete the mode and positive transfer time, or clear that row before saving.");
-      if (rows.some(row => row.fare_amount !== null && (!Number.isFinite(row.fare_amount) || row.fare_amount < 0))) throw new Error("Enter a nonnegative party fare or leave it blank.");
-      const configured = rows.filter(row => row.mode && row.duration_minutes !== null && row.duration_minutes > 0)
-        .map(({ from_airport, to_airport, mode, duration_minutes, fare_amount, currency }) => ({
-          from_airport, to_airport, mode, duration_minutes, fare_amount,
-          currency: fare_amount === null ? "MYR" : (currency || "MYR").toUpperCase(),
-        }));
-      if (configured.some(row => row.fare_amount !== null && !/^[A-Z]{3}$/.test(row.currency))) throw new Error("Use a three-letter currency code for each fare.");
-      const result = await api<Result>(`/trips/${tripId}/airport-connections`, "PUT", { connections: configured });
-      const record = await api<SavedTrip>(`/trips/${tripId}`);
-      onSaved(record, result);
-    } catch (err) { report(err instanceof Error ? err.message : "Airport connections could not be saved."); }
-    finally { setBusy(false); }
-  }
-
-  return <section className="p-panel" aria-labelledby="airport-connections-title">
-    <div className="p-panel-heading"><div><span className="p-step">↔</span><h2 id="airport-connections-title">Airport connections</h2></div><span className="p-tag">{requirements.length} unique pairs · {requiredJourneys} journeys</span></div>
-    <p>Enter a connection you have checked for each airport change. Its duration should include your transfer buffer and must fit the scheduled layover. One directed pair applies to every matching journey in this trip; the reverse direction is a separate row.</p>
-    <div className="p-airport-table-wrap"><table className="p-airport-table"><thead><tr><th scope="col">Airport change</th><th scope="col">Journeys</th><th scope="col">Mode</th><th scope="col">Transfer time · min</th><th scope="col">Party fare</th><th scope="col">Currency</th><th scope="col"><span className="sr-only">Clear or remove</span></th></tr></thead>
-      <tbody>{rows.map(row => <tr key={pairKey(row)}>
-        <th scope="row"><strong>{row.from_airport} → {row.to_airport}</strong><small>{row.from_name} → {row.to_name}{!row.required && " · saved"}</small></th>
-        <td>{row.required ? <>{row.journey_count}<small className={row.unresolved_journey_count > 0 ? "p-warning" : ""}>{row.unresolved_journey_count} unresolved</small></> : "—"}</td>
-        <td><select id={row === firstUnresolved ? "airport-change-unresolved" : undefined} aria-label={`${row.from_airport} to ${row.to_airport} transfer mode`} value={row.mode} onChange={event => updateRow(pairKey(row), { mode: event.target.value as AirportTransferMode | "" })}><option value="">Choose mode</option>{airportTransferModes.map(mode => <option value={mode} key={mode}>{mode}</option>)}</select></td>
-        <td><input aria-label={`${row.from_airport} to ${row.to_airport} transfer time in minutes`} type="number" min="1" step="1" value={row.duration_minutes ?? ""} onChange={event => updateRow(pairKey(row), { duration_minutes: event.target.value === "" ? null : Number(event.target.value) })} /></td>
-        <td><input aria-label={`${row.from_airport} to ${row.to_airport} total party fare`} type="number" min="0" step="0.01" placeholder="Unknown" value={row.fare_amount ?? ""} onChange={event => updateRow(pairKey(row), { fare_amount: event.target.value === "" ? null : Number(event.target.value) })} /></td>
-        <td><input aria-label={`${row.from_airport} to ${row.to_airport} fare currency`} maxLength={3} value={row.currency} onChange={event => updateRow(pairKey(row), { currency: event.target.value.toUpperCase() })} /></td>
-        <td><button className="p-airport-clear" type="button" onClick={() => clearOrRemove(row)} aria-label={row.required ? `Clear ${row.from_airport} to ${row.to_airport}` : `Remove saved ${row.from_airport} to ${row.to_airport}`}>×</button></td>
-      </tr>)}</tbody>
-    </table></div>
-    <div className="p-actions"><Button type="button" size="sm" disabled={busy} onClick={() => void save()}>{busy ? "Saving…" : "Save connections"}</Button><span className="p-hint">Rows without both a mode and positive duration remain unresolved. Blank fare keeps transfer cost unknown.</span></div>
-  </section>;
-}
-
-function AssumedConnection({ places, gaps, add, report }: { gaps: { from_id: string; to_id: string }[]; places: Place[]; add: (m: Movement) => Promise<void>; report: (s: string) => void }) {
-  const [form, setForm] = useState({ from: "", to: "", mode: "bus", hours: "", distance: "", departure: "", arrival: "" });
-  const [busy, setBusy] = useState(false);
-  async function submit() {
-    setBusy(true);
-    try {
-      if (!form.from || !form.to || form.from === form.to || Number(form.hours) <= 0) throw new Error("Choose different endpoints and a positive duration.");
-      await add({ id: `assumed:${crypto.randomUUID()}`, from_id: form.from, to_id: form.to, mode: form.mode as Movement["mode"], duration_minutes: Number(form.hours) * 60, distance_km: form.distance === "" ? null : Number(form.distance), departure: form.departure ? new Date(form.departure).toISOString() : null, arrival: form.arrival ? new Date(form.arrival).toISOString() : null, source: "User-defined connection", assumptions: ["User supplied connectivity and timing"], segments: [], charges: [], transfers: 0, vehicle_kind: form.mode === "car" ? "rental" : null, search_url: null });
-    } catch (err) { report(err instanceof Error ? err.message : "Connection could not be saved."); }
-    finally { setBusy(false); }
-  }
-  return <><div aria-live="polite">{gaps.length > 0 && <><h3>Missing city connections</h3><p>No direct connection was collected in either direction for these cities. If your route needs one, enter a verified schedule or an assumed duration below. Connecting routes or enabled road transport may still provide alternatives.</p>{gaps.map(gap => <Button key={`${gap.from_id}:${gap.to_id}`} type="button" variant="secondary" onClick={() => { setForm(f => ({ ...f, from: gap.from_id, to: gap.to_id })); const panel = document.getElementById("assumed-city-connection") as HTMLDetailsElement | null; if (panel) { panel.open = true; panel.scrollIntoView({ block: "center" }); } }}>Add {places.find(p => p.id === gap.from_id)?.name} → {places.find(p => p.id === gap.to_id)?.name}</Button>)}</>}</div><details id="assumed-city-connection" className="p-details"><summary id="add-connection">Add a connection missing from the providers</summary><p>This explicitly assumes that the connection exists. Flexible connections use the duration; scheduled connections need both timestamps (shown in your browser timezone).</p><div className="p-grid">
-    {(["from", "to"] as const).map(key => <Field key={key} label={`Assumed connection ${key}`}><select value={form[key]} onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}><option value="">Choose place</option>{places.map(p => <option value={p.id} key={p.id}>{p.name}</option>)}</select></Field>)}
-    <Field label="Assumed mode"><select value={form.mode} onChange={e => setForm(f => ({ ...f, mode: e.target.value }))}>{modes.map(m => <option key={m}>{m}</option>)}</select></Field>
-    <Field label="Assumed duration · hours"><input type="number" min="0.01" step="any" value={form.hours} onChange={e => setForm(f => ({ ...f, hours: e.target.value }))} /></Field><Field label="Assumed distance · km (optional)"><input type="number" min="0" value={form.distance} onChange={e => setForm(f => ({ ...f, distance: e.target.value }))} /></Field>
-    <Field label="Optional departure · browser local"><input type="datetime-local" value={form.departure} onChange={e => setForm(f => ({ ...f, departure: e.target.value }))} /></Field><Field label="Optional arrival · browser local"><input type="datetime-local" value={form.arrival} onChange={e => setForm(f => ({ ...f, arrival: e.target.value }))} /></Field><Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => void submit()}>Add assumed connection</Button>
-  </div></details></>;
-}
+/** Best, weaker and over-budget options of a result. */
+const resultRoutes = (result: Result | null) => [...(result?.routes ?? []), ...(result?.dominated_routes ?? []), ...(result?.refinement_routes ?? [])];
+/**
+ * Route movement id → template id. Transfer estimates give flights variant ids ("{template}:transfer:{hash}")
+ * that change with every estimate edit; prices are staged and saved on template ids.
+ */
+const templatesOf = (result: Result | null) => new Map(resultRoutes(result).flatMap(route => route.movements.map(movement => [movement.id, movement.template_id ?? movement.id] as const)));
+/** The kinds of drafts in the order Apply sends them (F4), with their names in the Apply bar's failure text. */
+const applyOrder: [DraftKind, string][] = [["airportChanges", "Airport changes"], ["transfers", "Airport transfers"], ["fares", "Prices"]];
 
 export default function Planner() {
   const [draft, setDraft] = useState<TripDraft>(blankTrip);
@@ -148,6 +72,11 @@ export default function Planner() {
   const [focusTarget, setFocusTarget] = useState<string | string[] | null>(null);
   // A chart click scrolls the selected row into view after the render (E8).
   const [revealRow, setRevealRow] = useState(0);
+  // Typed prices, airport transfers and airport changes of the open trip, kept in this browser until Apply (F4).
+  const tripDrafts = useTripDrafts(saved?.id ?? null);
+  // Apply bar (C9): the step that Apply runs, and why the last Apply stopped.
+  const [applyState, setApplyState] = useState<{ step: number; steps: number } | null>(null);
+  const [applyError, setApplyError] = useState<{ text: string; reload: boolean } | null>(null);
   const draftRef = useRef(draft);
   const savedRef = useRef(saved);
   const version = useRef(0);
@@ -321,6 +250,12 @@ export default function Planner() {
     catch (err) { setError(appError(err)); }
     finally { setBusyAction(null); }
   }
+  /** Like act(), for a form that shows its own errors inline (C2): the error goes back to the caller. */
+  async function actInline(action: () => Promise<void>, name: string) {
+    setBusyAction(name); setError(null);
+    try { await action(); }
+    finally { setBusyAction(null); }
+  }
   async function search(continuation = false) {
     await act(async () => {
       const record = await saveSpec();
@@ -384,23 +319,40 @@ export default function Planner() {
     const record = await saveSpec();
     const updated = await api<Result>(`/trips/${record.id}/fares/${encodeURIComponent(offer.id)}`, "PUT", offer);
     const next = await api<SavedTrip>(`/trips/${record.id}`);
-    if (savedRef.current?.id === record.id) { accept(next); acceptResult(updated, record.id); setSaveStatus("Fare saved · frontier recalculated"); }
+    if (savedRef.current?.id === record.id) { accept(next); acceptResult(updated, record.id); setSaveStatus("Combined ticket saved · options updated"); }
   }
   async function applySharedFares(estimates: SharedFare[]) {
     const record = await saveSpec();
     const updated = await api<Result>(`/trips/${record.id}/fares/estimates`, "POST", { estimates, expected_revision: record.revision });
     const next = await api<SavedTrip>(`/trips/${record.id}`);
     if (savedRef.current?.id === record.id) { accept(next); acceptResult(updated, record.id); setSaveStatus("Shared estimates saved · frontier recalculated"); }
+    return updated;
   }
   async function removePrice(id: string) {
     if (!savedRef.current) return;
     const tripId = savedRef.current.id;
     const updated = await api<Result>(`/trips/${tripId}/fares/${encodeURIComponent(id)}`, "DELETE");
     accept(await api<SavedTrip>(`/trips/${tripId}`)); acceptResult(updated, tripId);
+    if (savedRef.current?.id === tripId) setSaveStatus("Price removed · options updated");
   }
   async function rulesChanged() {
     setRules((await api<{ rules: PricingRule[] }>("/pricing-rules")).rules);
     if (savedRef.current) { const id = savedRef.current.id; accept(await api<SavedTrip>(`/trips/${id}`)); acceptResult(await api<Result>(`/trips/${id}/optimize`, "POST"), id); }
+  }
+  // Missing info › Price rules (F2 row 7, F6): saved at once for all trips; the open trip recalculates.
+  function saveRule(rule: PricingRule) {
+    return actInline(async () => {
+      await api(`/pricing-rules/${encodeURIComponent(rule.id)}`, "PUT", rule);
+      await rulesChanged();
+      setSaveStatus("Rule saved · options updated");
+    }, "rule");
+  }
+  function deleteRule(rule: PricingRule) {
+    return actInline(async () => {
+      await api(`/pricing-rules/${encodeURIComponent(rule.id)}`, "DELETE");
+      await rulesChanged();
+      setSaveStatus("Rule deleted · options updated");
+    }, "rule");
   }
 
   // The option list in the current order (E3), with weaker options when shown. Numbers are positions in this order.
@@ -414,10 +366,9 @@ export default function Planner() {
     (result?.missing_fares ?? []).filter(fare => !fare.label.startsWith("Airport transfer ")),
     [...(result?.routes ?? []), ...(result?.dominated_routes ?? []), ...(result?.refinement_routes ?? [])],
   ), [result]);
-  // Route movement id → template id. Transfer estimates give flights variant ids
-  // ("{template}:transfer:{hash}") that change with every estimate edit.
-  const templateOf = useMemo(() => new Map([...(result?.routes ?? []), ...(result?.dominated_routes ?? []), ...(result?.refinement_routes ?? [])]
-    .flatMap(route => route.movements.map(movement => [movement.id, movement.template_id ?? movement.id] as const))), [result]);
+  const templateOf = useMemo(() => templatesOf(result), [result]);
+  // The fare components that Apply can price (F4); drafts on other components wait under "Other drafts".
+  const knownComponents = useMemo(() => knownComponentIds(saved, resultRoutes(result)), [saved, result]);
   // Autosave (PUT /trips/{id}) returns the trip with snapshot.movements and airport_transfer_rows, but
   // without the other fields that GET adds; these helpers derive them from the snapshot.
   const assumed = useMemo(() => saved ? assumedConnections(saved) : [], [saved]);
@@ -466,14 +417,6 @@ export default function Planner() {
   const appliedSharedGroups = useMemo(() => {
     const offers = new Map<string, Offer>(allOffers.map(offer => [offer.id, offer] as const));
     const grouped = new Map<string, Offer[]>();
-    const resultRoutes = [...(result?.routes ?? []), ...(result?.dominated_routes ?? []), ...(result?.refinement_routes ?? [])];
-    const knownComponents = new Set(saved?.fare_component_ids ?? [
-      ...(saved?.snapshot?.movements ?? []).flatMap(movement => [movement.id, ...movement.charges.map(charge => charge.id)]),
-      ...resultRoutes.flatMap(route => [
-        ...route.movements.flatMap(movement => [movement.id, ...movement.charges.map(charge => charge.id)]),
-        ...route.extra_charges.map(charge => charge.id),
-      ]),
-    ]);
     for (const offer of offers.values()) {
       if (offer.source !== "user" || !offer.label.startsWith("Shared estimate:") || offer.movement_ids.length !== 1 || !knownComponents.has(offer.movement_ids[0]) || offer.low === null) continue;
       const entries = grouped.get(offer.label) ?? [];
@@ -496,7 +439,18 @@ export default function Planner() {
         label,
       };
     }).sort((a, b) => a.label.localeCompare(b.label));
-  }, [saved?.fare_component_ids, saved?.snapshot?.offers, saved?.offers, saved?.snapshot?.movements, result?.routes, result?.dominated_routes, result?.refinement_routes]);
+  }, [knownComponents, saved?.snapshot?.offers, saved?.offers]);
+  // Missing info › Add a connection (F2 row 4, F6): saved at once after a trip save; the trip and its options reload.
+  function addConnection(movement: Movement) {
+    return actInline(async () => {
+      const record = await saveSpec();
+      const next = await api<Result>(`/trips/${record.id}/movements`, "POST", movement);
+      const updated = await api<SavedTrip>(`/trips/${record.id}`);
+      if (savedRef.current?.id !== record.id) return;
+      accept(updated); acceptResult(next, record.id);
+      setSaveStatus("Connection added · options updated");
+    }, "connection");
+  }
   async function removeAssumedConnection(movementId: string) {
     if (!saved) return;
     const tripId = saved.id;
@@ -508,6 +462,8 @@ export default function Planner() {
     }, "connection");
   }
   const coverage = result?.coverage;
+  // Combined tickets to check: the search's links, else those of the stored result.
+  const bundleLinks = job?.bundle_links?.length ? job.bundle_links : coverage?.bundle_links ?? [];
   const unresolvedAccess = unresolvedAccessJourneys(coverage?.unresolved_movements ?? []).map(movement => ({
     ...movement,
     assumptions: movement.assumptions.filter(assumption => !assumption.startsWith("Airport change ") && !assumption.startsWith("Airport connection ")),
@@ -548,7 +504,6 @@ export default function Planner() {
   const settingsShown = settingsOpen || !saved;
   // A saved trip has the workspace (B3), with #options-title.
   const workspace = !!saved;
-  const report = (message: string) => setError(message ? { text: message, action: null } : null);
 
   // The tab shown in the side panel (wide) or in the one tab bar (narrow).
   const tab: Panel = isWide && panel === "options" ? "itinerary" : panel;
@@ -599,13 +554,20 @@ export default function Planner() {
   // their section has no such field.
   function runAction(target: OptionsTarget) {
     const showMissing = (ids: string[]) => { chooseTab("missing"); setFocusTarget([...ids, "missing-title"]); };
-    if (target === "airport-changes") showMissing(["airport-change-unresolved"]);
+    if (target === "airport-changes") {
+      const first = airportChanges.find(row => row.unresolved_journey_count > 0);
+      showMissing([...(first ? [airportChangeFieldId(`${first.from_airport}>${first.to_airport}`, "mode")] : []), "airport-changes-title"]);
+    }
     else if (target === "prices") {
       // Airport transfers first (F3): one price there covers every matching journey.
       const direction = directions.find(item => item.state === "missing");
-      showMissing([...(direction ? [`transfer-price-${direction.from_id}>${direction.to_id}`] : []), "missing-fare-first"]);
+      showMissing([...(direction ? [transferFieldId(direction.from_id, direction.to_id, 0, "low")] : []), "missing-fare-first"]);
     }
-    else if (target === "exchange-rate") showMissing(["missing-fares-title"]);
+    else if (target === "exchange-rate") {
+      // The rate field of the first Journey prices row in that currency.
+      const group = groups.journeys.find(item => item.reason === "exchange_rate");
+      showMissing([...(group ? [`rate-input-${group.currency}`] : []), "journey-prices-title"]);
+    }
     else if (target === "add-connection") showMissing(["add-connection"]);
     else if (target === "transfer-times") showMissing(["airport-transfers-title"]);
     else if (target === "airport-fallback") { setSettingsOpen(true); setFocusTarget("setting-airport-fallback"); }
@@ -613,6 +575,188 @@ export default function Planner() {
     else if (target === "over-budget") setFocusTarget("over-budget-summary");
     else edit({ ...draft, exclude_unpriced_flights: false });
   }
+
+  // Drafts (F4). Fare drafts use canonical ids; stored drafts from before template ids are mapped here.
+  const fareDrafts = useMemo(() => canonicalFares(tripDrafts.drafts.fares, templateOf), [tripDrafts.drafts.fares, templateOf]);
+  const draftCounts = countDrafts({ ...tripDrafts.drafts, fares: fareDrafts });
+  const draftTotal = draftCounts.airportChanges + draftCounts.transfers + draftCounts.prices;
+  // Transfer drafts are kept per party size; those for the saved adults apply.
+  const adults = saved?.spec.adults ?? draft.adults;
+  const invalidFields = (drafts: DraftState) => invalidDraftFields(drafts, directions, adults);
+  const invalidCount = invalidFields(tripDrafts.drafts).length;
+  /** Stages a fare draft on canonical ids (Journey prices, group prices). `saved` is the user price in use now. */
+  function stagePrice(key: string, fare: SharedFare, savedPrice?: PriceValue | null) {
+    tripDrafts.stageFare(key, { ...fare, component_ids: canonicalIds(fare.component_ids, templateOf), currency: fare.currency.toUpperCase() }, savedPrice);
+  }
+  /** Undo of one journey's price: removes the component, and stored variant ids of it, from every fare draft. */
+  function unstageComponent(id: string) {
+    const ids = new Set([id, ...Object.values(tripDrafts.read().fares).flatMap(fare => fare.component_ids).filter(item => (templateOf.get(item) ?? item) === id)]);
+    ids.forEach(tripDrafts.unstageComponent);
+  }
+  /** Set price › Only this journey (E9.4): a fare draft "component:{template_id ?? id}". */
+  function stageComponent(componentId: string, value: PriceValue, label: string) {
+    const id = templateOf.get(componentId) ?? componentId;
+    const own = offerFor(componentId);
+    stagePrice(`component:${id}`, { component_ids: [id], ...value, label }, own?.source === "user" && own.low !== null ? { low: own.low, high: own.high, currency: own.currency } : null);
+  }
+  // The airport transfer row of an access or egress charge, and its saved ways for the saved adults.
+  function transferDirection(charge: Charge) {
+    if (!saved || !charge.from_id || !charge.to_id || !airportTransferModes.includes(charge.mode as AirportTransferMode)) return null;
+    const row = saved.airport_transfer_rows?.find(item => item.from_id === charge.from_id && item.to_id === charge.to_id);
+    if (!row) return null;
+    return { row, key: transferKey(row.from_id, row.to_id, adults), saved: savedTransferRows(saved.airport_transfer_estimates ?? [], row.from_id, row.to_id, adults) };
+  }
+  /**
+   * Set price › All {direction} transfers (E9.4): sets the price of the direction's way with the charge's mode, or adds
+   * that way. A blank highest price is a fixed price for a transfer. A draft for this journey alone is removed.
+   */
+  function stageDirection(charge: Charge, value: PriceValue) {
+    const direction = transferDirection(charge);
+    if (!direction) return;
+    const mode = charge.mode as AirportTransferMode;
+    const base = tripDrafts.read().transfers[direction.key] ?? direction.saved;
+    const price = { low: String(value.low), high: value.high === null || value.high === value.low ? "" : String(value.high), currency: value.currency.toUpperCase() };
+    const rows = base.some(row => row.mode === mode) ? base.map(row => row.mode === mode ? { ...row, ...price } : row) : [...base, { mode, duration: "", ...price }];
+    tripDrafts.stageTransfer(direction.key, rows, direction.saved);
+    unstageComponent(charge.id);
+  }
+  /**
+   * The draft that changes an itinerary ticket row (E9.4), in price precedence order (F5): a price for this journey,
+   * else the price of its transfer direction (not when the journey has your own price), or its airport change.
+   */
+  function draftFor({ componentId, charge, ownPrice }: DraftTarget): DraftPrice | null {
+    const pair = charge && /^Airport transfer (\S+) → (\S+)$/.exec(charge.kind);
+    if (pair) {
+      const key = `${pair[1]}>${pair[2]}`;
+      if (!(key in tripDrafts.drafts.airportChanges)) return null;
+      const change = tripDrafts.drafts.airportChanges[key];
+      const fare = change?.fare.trim() ? Number(change.fare) : null;
+      const value = fare !== null && Number.isFinite(fare) ? { low: fare, high: fare, currency: (change!.currency || "MYR").toUpperCase() } : null;
+      return { scope: "change", value, amount: !change?.mode ? "Cleared" : value ? purchaseAmount(value, rates) : "Not priced", undo: () => tripDrafts.unstage("airportChanges", key) };
+    }
+    if (!componentId) return null;
+    const id = templateOf.get(componentId) ?? componentId;
+    const fare = Object.values(fareDrafts).find(item => item.component_ids.includes(id));
+    if (fare) return { scope: "journey", value: fare, amount: purchaseAmount(fare, rates), undo: () => unstageComponent(id) };
+    const direction = charge && !ownPrice ? transferDirection(charge) : null;
+    const rows = direction && tripDrafts.drafts.transfers[direction.key];
+    const way = rows?.find(row => row.mode === charge!.mode);
+    const savedWay = direction?.saved.find(row => row.mode === charge!.mode);
+    if (!direction || !rows || !way || (savedWay && sameTransferRows([way], [savedWay]))) return null;
+    const low = way.low.trim() ? Number(way.low) : null;
+    const high = way.high.trim() ? Number(way.high) : low;
+    const value = low !== null && high !== null && Number.isFinite(low) && Number.isFinite(high) ? { low, high, currency: way.currency.toUpperCase() } : null;
+    return { scope: "direction", value, amount: value ? purchaseAmount(value, rates) : low === null ? "Not priced" : `${way.low} (not valid)`,
+      undo: () => tripDrafts.stageTransfer(direction.key, savedWay ? rows.map(row => row.mode === way.mode ? savedWay : row) : rows.filter(row => row !== way), direction.saved) };
+  }
+  // The label of the charge's airport transfer row, for Set price › All {label} transfers; null without one.
+  const directionLabel = (charge: Charge) => transferDirection(charge)?.row.label ?? null;
+  // Apply bar › Fix {k} values, and an Apply with invalid drafts: the first field to fix in Missing info.
+  function focusInvalid(drafts = tripDrafts.read()) {
+    chooseTab("missing");
+    setFocusTarget([...invalidFields(drafts).slice(0, 1), "missing-title"]);
+  }
+  /**
+   * Apply (F4, C9): sends the drafts in the order airport changes → transfers → fares, each kind after a trip save, and
+   * removes each kind's drafts when the server took them. The first failure stops the run and keeps the drafts not sent.
+   * The session token is checked after every request, so a trip opened meanwhile is never changed.
+   */
+  function applyDrafts() {
+    const tripId = savedRef.current?.id;
+    const drafts = tripDrafts.read();
+    const kinds = applyOrder.filter(([kind]) => Object.keys(drafts[kind]).length);
+    if (!tripId || busy || !kinds.length) return;
+    if (invalidFields(drafts).length) { focusInvalid(drafts); return; }
+    const fares = canonicalFares(drafts.fares, templateOf);
+    const before = result?.routes.length ?? 0;
+    // Focus after Apply: the itinerary heading when Apply started there, else the panel in view (C9).
+    const focus = document.activeElement?.closest("#panel-itinerary") || tab === "itinerary" ? "itinerary-title" : tab === "missing" ? "missing-title" : "options-title";
+    setApplyError(null);
+    void act(async () => {
+      const token = session.current;
+      const current = () => token === session.current && savedRef.current?.id === tripId;
+      let latest: Result | null = null, done = 0;
+      try {
+        for (const [kind] of kinds) {
+          setApplyState({ step: done + 1, steps: kinds.length });
+          if (kind === "airportChanges") {
+            const record = await saveSpec();
+            if (!current()) return;
+            const connections = buildAirportConnections(record.airport_connections ?? [], drafts.airportChanges);
+            const updated = await api<Result>(`/trips/${tripId}/airport-connections`, "PUT", { connections });
+            if (!current()) return;
+            const next = await api<SavedTrip>(`/trips/${tripId}`);
+            if (!current()) return;
+            accept(next); acceptResult(updated, tripId); latest = updated;
+          } else if (kind === "transfers") {
+            const record = await saveSpec();
+            if (!current()) return;
+            const estimates = buildTransferEstimates(record.airport_transfer_rows ?? [], record.airport_transfer_estimates ?? [], drafts.transfers, record.spec.adults);
+            const updated = await api<SavedTrip>(`/trips/${tripId}/airport-transfer-estimates`, "PUT", { estimates, expected_revision: record.revision });
+            if (!current()) return;
+            accept(updated);
+            if (updated.result) { acceptResult(updated.result, tripId); latest = updated.result; }
+          } else {
+            // The earlier steps can change the options, so the known components come from the latest data.
+            const active = activeFares(fares, knownComponentIds(savedRef.current, resultRoutes(latest ?? result)));
+            if (active.length) {
+              latest = await applySharedFares(active);
+              if (!current()) return;
+            }
+          }
+          tripDrafts.clear(kind);
+          done++;
+        }
+        setSaveStatus(`Applied · ${before} → ${latest?.routes.length ?? before} best options`);
+        setFocusTarget([focus, "options-title"]);
+      } catch (err) {
+        if (!current()) return;
+        const message = (err instanceof Error ? err.message : String(err)).replace(/\.$/, "");
+        const text = kinds.map(([, name], index) => index < done ? `${name} applied.` : index === done ? `${name} not applied: ${message}.` : `${name} not applied.`).join(" ");
+        setApplyError({ text, reload: (err as { status?: number }).status === 409 });
+      } finally { setApplyState(null); }
+    }, "apply");
+  }
+  // Journey prices › Add rate (F2): writes the trip's exchange rates; autosave saves and recalculates.
+  function addRate(currency: string, rate: number) {
+    edit({ ...draftRef.current, exchange_rates: { ...draftRef.current.exchange_rates, [currency]: rate } });
+  }
+  // Apply bar › Discard: removes every draft of this trip after a confirm.
+  function discardDrafts() {
+    if (!window.confirm(`Discard ${draftTotal} ${draftTotal === 1 ? "change that is" : "changes that are"} not applied?`)) return;
+    tripDrafts.clear();
+    setApplyError(null);
+  }
+  useEffect(() => { setApplyError(null); }, [saved?.id]);
+  // Ctrl/Cmd+Enter applies from Missing info, an itinerary price editor or the Apply bar (F4). An editor that handles the
+  // keys itself (it stages its typed price first) prevents the default.
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (event.key !== "Enter" || !(event.ctrlKey || event.metaKey) || event.defaultPrevented) return;
+      if (!(event.target as Element | null)?.closest?.("#panel-missing, .p-price-editor, .p-apply-bar")) return;
+      event.preventDefault();
+      applyDrafts();
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  });
+  // The Apply bar and the sticky settings footer never cover the focused element: after the browser has scrolled it into
+  // view, the page scrolls on until the element is above them.
+  useEffect(() => {
+    function reveal(event: FocusEvent) {
+      const target = event.target as HTMLElement;
+      requestAnimationFrame(() => {
+        if (document.activeElement !== target) return;
+        const box = target.getBoundingClientRect();
+        const tops = [...document.querySelectorAll<HTMLElement>(".p-apply-bar, .p-settings-footer")].filter(cover => !cover.contains(target))
+          .map(cover => cover.getBoundingClientRect()).filter(cover => box.bottom > cover.top && box.top < cover.bottom).map(cover => cover.top);
+        if (tops.length) window.scrollBy({ top: box.bottom - Math.min(...tops) + 8 });
+      });
+    }
+    document.addEventListener("focusin", reveal);
+    return () => document.removeEventListener("focusin", reveal);
+  }, []);
+
   const best = result?.routes.length ?? 0;
   const optionsTab: TabItem<Panel> = { id: "options", label: "Options", ...(searched && result ? { badge: best, badgeText: `${best} best option${best === 1 ? "" : "s"}` } : {}) };
   const itineraryTab: TabItem<Panel> = { id: "itinerary", label: "Itinerary" };
@@ -621,7 +765,9 @@ export default function Planner() {
 
   if (initialLoad) return <div className="optimizer"><main className="p-page-loading" aria-busy="true"><p role="status"><LoaderCircle size={18} className="p-spin" aria-hidden="true" />Opening your trips…</p></main></div>;
 
-  return <div className="optimizer">
+  // The Apply bar shows in every tab while the open trip has drafts (C9).
+  const showApplyBar = !!saved && !loadingTrip && draftTotal > 0;
+  return <div className="optimizer" data-drafts={showApplyBar || undefined}>
     <a href={workspace ? "#options-title" : "#settings-title"} className="p-skip-link" onClick={event => {
       // On a narrow screen the options can be in a hidden tab: show them first.
       if (!workspace) return;
@@ -659,30 +805,25 @@ export default function Planner() {
             weaker={showDominated && !!selected && !!result?.dominated_routes?.some(route => route.id === selected.id)}
             comparedId={compare?.id ?? null} onCompare={setComparisonId} places={places} zoneOf={zoneOf} placeName={placeName}
             minStays={Object.fromEntries(saved.spec.visits.map(visit => [visit.place.id, visit.min_stay_hours]))}
-            budget={budget} adults={saved.spec.adults} rates={rates} offerFor={offerFor} onSavePrice={updatePrice}
-            onRemovePrice={id => void act(() => removePrice(id), "price")} busy={busy} bundleLinks={job?.bundle_links ?? coverage?.bundle_links ?? []}
-            onAction={runAction} onBack={backToOptions} />}</div>
-        <div id="panel-missing" className="p-side-panel" role="tabpanel" aria-labelledby="tab-missing" tabIndex={0} hidden={tab !== "missing"}>{visited.includes("missing") && <>
-          <div className="p-panel-heading"><div><h2 id="missing-title" tabIndex={-1}>Missing info</h2><InfoTip topic="Missing info">Information the search could not find.</InfoTip></div><span className="p-missing-status">{allClear && <CircleCheck size={15} aria-hidden="true" />}{searched && needs ? needsText : allClear ? "Nothing missing" : "Nothing to check yet"}</span></div>
-          {!searched && <p>Unknown prices and gaps appear here after a search. You can enter airport transfers now.</p>}
-          {searched && result && <AirportConnectionsTable key={`airport-connections:${saved.id}`} tripId={saved.id} rows={airportChanges} report={report} onSaved={(record, updated) => { accept(record); acceptResult(updated, record.id); setSaveStatus("Airport connections saved · frontier recalculated"); }} />}
-          <AirportTransferTable key={saved.id} trip={saved} save={async estimates => {
-            const record = await saveSpec();
-            const updated = await api<SavedTrip>(`/trips/${record.id}/airport-transfer-estimates`, "PUT", { estimates, expected_revision: record.revision });
-            accept(updated);
-            if (updated.result) acceptResult(updated.result, updated.id);
-            setSaveStatus("Airport transfer estimates saved");
-          }} report={report} />
-          {searched && result && (missingFareGroups.length > 0 || appliedSharedGroups.length > 0) && <MissingFaresTable key={`missing-fares:${saved?.id}`} storageKey={`wayfinder:pending-estimates:${saved?.id}`} groups={missingFareGroups} appliedGroups={appliedSharedGroups} placeName={placeName} templateOf={templateOf} offerFor={offerFor} onApply={applySharedFares} onSave={updatePrice} onRemove={removePrice} />}
-          {searched && result && !!unresolvedAccess.length && <details className="p-panel"><summary>{unresolvedAccess.length} retrieved journeys need airport access timing</summary>{unresolvedAccess.map(m => <p key={m.id}>{placeName(m.from_id)} → {placeName(m.to_id)}: {m.assumptions.join(" · ")}</p>)}</details>}
-          {searched && <section className="p-panel">{assumed.length > 0 && <div><h3>Saved assumed connections</h3>{assumed.map(m => <div className="p-actions" key={m.id}><span>{placeName(m.from_id)} → {placeName(m.to_id)} · {m.mode} · {m.duration_minutes} min{m.departure ? ` · ${localTime(m.departure, places.find(p => p.id === m.from_id)?.timezone ?? "UTC")}` : " · Flexible departure"}</span><Button type="button" size="sm" variant="secondary" disabled={busy} onClick={() => void removeAssumedConnection(m.id)}>Remove</Button></div>)}</div>}<AssumedConnection gaps={gaps} places={places} report={report} add={async m => { const record = await saveSpec(); const next = await api<Result>(`/trips/${record.id}/movements`, "POST", m); accept(await api<SavedTrip>(`/trips/${record.id}`)); acceptResult(next, record.id); setSaveStatus("Connection added · options updated"); }} /></section>}
-          {searched && result && !!(coverage?.bundle_links?.length || job?.bundle_links?.length) && <section className="p-panel"><details><summary>Round-trip and multi-city quote searches</summary><p>An automatic quote is usable only when all journeys and the combined fare are verified. Otherwise open the search and enter a complete ticket price above.</p>{(job?.bundle_links ?? coverage?.bundle_links ?? []).map((b, i) => <p key={i}><a href={b.url} target="_blank" rel="noreferrer">{b.kind}: {b.legs.map(l => `${placeName(l.from_id)} → ${placeName(l.to_id)} (${l.date})`).join(" · ")} ↗</a><small> · {b.status}</small></p>)}</details></section>}
-          <section className="p-panel"><RulesEditor rules={rules} places={places} changed={rulesChanged} report={report} /></section>
-        </>}</div>
+            budget={budget} adults={saved.spec.adults} rates={rates} offerFor={offerFor} onSaveBundle={updatePrice}
+            draftFor={draftFor} directionLabel={directionLabel} stageComponent={stageComponent} stageDirection={stageDirection}
+            applying={!!applyState} onApply={applyDrafts}
+            onRemovePrice={id => void act(() => removePrice(id), "price")} busy={busy} bundleLinks={bundleLinks}
+            onAction={runAction} onEditAirportChange={key => { chooseTab("missing"); setFocusTarget([airportChangeFieldId(key, "mode"), "missing-title"]); }} onBack={backToOptions} />}</div>
+        <div id="panel-missing" className="p-side-panel" role="tabpanel" aria-labelledby="tab-missing" tabIndex={0} hidden={tab !== "missing"} inert={!!applyState}>{visited.includes("missing") &&
+          <MissingInfoPanel searched={searched} allClear={allClear} needs={needs} needsText={needsText} airportChanges={airportChanges} connections={saved.airport_connections ?? []}
+            directions={directions} estimates={saved.airport_transfer_estimates ?? []} accessNote={nextSteps.find(step => step.id === "access-time")?.text ?? null}
+            journeyGroups={groups.journeys} appliedGroups={appliedSharedGroups} adults={adults} rates={rates} draftRates={draft.exchange_rates}
+            drafts={tripDrafts} fares={fareDrafts} canonical={id => templateOf.get(id) ?? id} offerFor={offerFor} places={places} placeName={placeName} zoneOf={zoneOf}
+            stagePrice={stagePrice} stageComponent={stageComponent} removePrice={id => void act(() => removePrice(id), "price")} addRate={addRate}
+            gaps={gaps} assumed={assumed} addConnection={addConnection} removeConnection={id => void removeAssumedConnection(id)} bundleLinks={bundleLinks}
+            rules={rules} saveRule={saveRule} deleteRule={deleteRule} busy={busy} onAction={runAction} onApply={applyDrafts} />}</div>
       </div>
     </div>}
     </>}
     <footer className="p-footer">Wayfinder Routes · Flights via fast-flights · Scheduled transit via <a href="https://transitous.org/sources/" target="_blank" rel="noreferrer">Transitous sources</a> · Road estimates via OSRM · Cities © GeoNames · Airports © airportsdata · Map © OpenStreetMap contributors</footer></main>
     </div>
+    {showApplyBar && <ApplyBar counts={draftCounts} invalid={invalidCount} applying={applyState} error={applyError} busy={busy}
+      onApply={applyDrafts} onDiscard={discardDrafts} onReload={() => { setApplyError(null); reloadTrip(); }} onFocusInvalid={() => focusInvalid()} />}
   </div>;
 }

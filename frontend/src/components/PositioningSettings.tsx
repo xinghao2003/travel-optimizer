@@ -10,8 +10,8 @@ type Direction = PositioningPolicy["direction"];
 type PolicyValue = "search" | "supplied" | "unavailable";
 const policyLabels: Record<PolicyValue, string> = { search: "Search", supplied: "Your journeys only", unavailable: "Don't use" };
 const count = (n: number, word: string) => `${n} ${n === 1 ? word : `${word}s`}`;
-/** A trip date (YYYY-MM-DD) as "4 Dec"; blank while the date input is cleared. */
-const tripDay = (date: string) => date && !Number.isNaN(Date.parse(date)) ? formatLocal(`${date}T00:00:00Z`, "UTC", "day") : "";
+/** A trip date (YYYY-MM-DD) as "4 Dec"; blank while the date input is cleared or holds an invalid date (a 5-digit year). */
+const tripDay = (date: string) => date && !Number.isNaN(Date.parse(`${date}T00:00:00Z`)) ? formatLocal(`${date}T00:00:00Z`, "UTC", "day") : "";
 
 /**
  * "Start the trip from" or "End the trip at" (G). An empty list means home only. Home is checked when the list is

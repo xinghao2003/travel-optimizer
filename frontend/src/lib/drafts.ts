@@ -26,6 +26,8 @@ export const transferKey = (from_id: string, to_id: string, adults: number) => J
  * `index` is the position of the way in the direction's draft rows.
  */
 export const transferFieldId = (from_id: string, to_id: string, index: number, field: keyof TransferRowDraft) => `transfer-${field}-${from_id}>${to_id}-${index}`;
+/** The exchange-rate input of an airport transfer direction whose price is in `currency` (Next steps › Add rate). */
+export const transferRateId = (from_id: string, to_id: string, currency: string) => `transfer-rate-${from_id}>${to_id}-${currency}`;
 export const airportChangeFieldId = (key: string, field: keyof AirportChangeDraft) => `airport-change-${field}-${key}`;
 
 /** Stages a fare under key. Other drafts lose the components it covers; drafts left empty are dropped. */
@@ -102,11 +104,14 @@ export const blankTransferRow = (mode: AirportTransferMode = "taxi"): TransferRo
 export const transferModes: AirportTransferMode[] = ["taxi", "rail", "bus", "coach", "subway", "tram", "car"];
 /** The way that "+ Add another way" adds: the first one not used yet; null when all are used. */
 export const nextTransferMode = (rows: Pick<TransferRowDraft, "mode">[]) => transferModes.find(mode => !rows.some(row => row.mode === mode)) ?? null;
-/** The saved ways of one direction as row drafts; one blank taxi row (the default way) when none is saved. */
+/**
+ * The saved ways of one direction as row drafts; one blank taxi row (the default way) when none is saved.
+ * A highest price equal to the price is a fixed price, so its optional field shows blank.
+ */
 export function savedTransferRows(estimates: AirportTransferEstimate[], from_id: string, to_id: string, adults: number): TransferRowDraft[] {
   const text = (value: number | null) => value === null ? "" : String(value);
   const rows = estimates.filter(e => e.from_id === from_id && e.to_id === to_id && e.adults === adults)
-    .map(e => ({ mode: e.mode, low: text(e.low), high: text(e.high), duration: text(e.duration_minutes), currency: e.currency }));
+    .map(e => ({ mode: e.mode, low: text(e.low), high: e.high === e.low ? "" : text(e.high), duration: text(e.duration_minutes), currency: e.currency }));
   return rows.length ? rows : [blankTransferRow()];
 }
 // A number as text in one form ("95.0" → "95"); other text as typed.

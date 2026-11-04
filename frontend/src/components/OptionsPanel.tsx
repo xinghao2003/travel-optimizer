@@ -15,16 +15,19 @@ function ParetoExplorer(props: ComponentProps<typeof LazyPareto>) {
 /** Next steps rows visible before "Show {k} more" (F1). */
 const visibleSteps = 3;
 
-/** One option in the list (C6): number, price and time in cities; the route; the price per city hour and the chips. */
-function OptionRow({ route, number, selected, chips, placeName, onSelect }: {
-  route: Route; number: number; selected: boolean; chips: OptionChip[]; placeName: (id: string) => string; onSelect: () => void;
+/**
+ * One option in the list (C6): number, price and time in cities; the route; the price per city hour and the chips.
+ * `name` is read before the number ("Over-budget option 1"), as in the itinerary heading.
+ */
+function OptionRow({ route, number, name = "Option", selected, chips, placeName, onSelect }: {
+  route: Route; number: number; name?: string; selected: boolean; chips: OptionChip[]; placeName: (id: string) => string; onSelect: () => void;
 }) {
   const chain = routeChain(route);
   const perHour = perCityHourText(route);
   return <li>
     <button type="button" id={selected ? "selected-option" : undefined} className="p-option" aria-pressed={selected} onClick={onSelect}>
       <span className="p-option-line">
-        <span className="p-option-number"><span className="sr-only">Option </span>{optionNumber(number)}</span>
+        <span className="p-option-number"><span className="sr-only">{name} </span>{optionNumber(number)}</span>
         <span className="p-option-price">{priceText(route)}</span>
         <span className="p-option-aside">{hoursText(route.stay_hours)} h in cities</span>
       </span>
@@ -74,7 +77,7 @@ export function OptionsPanel({ result, displayRoutes, numbers, refinement, selec
   const weaker = new Set((showDominated ? result?.dominated_routes ?? [] : []).map(route => route.id));
   // Said once above the list instead of a chip on every row (C6).
   const estimatedOnce = displayRoutes.length > 0 && displayRoutes.every(priceEstimated);
-  const chips = (route: Route, overBudget: boolean) => optionChips(route, { budget, rates, estimatedOnce: estimatedOnce && !overBudget, weaker: weaker.has(route.id), overBudget, compared: route.id === comparedId });
+  const chips = (route: Route, overBudget: boolean) => optionChips(route, { budget, rates, estimatedOnce: estimatedOnce && !overBudget, weaker: weaker.has(route.id), overBudget, compared: route.id === comparedId && comparedId !== selectedId });
   const best = result?.routes.length ?? 0;
   const left = displayRoutes.length - visibleCount;
   const hiddenSteps = allSteps ? 0 : Math.max(0, nextSteps.length - visibleSteps);
@@ -151,7 +154,7 @@ export function OptionsPanel({ result, displayRoutes, numbers, refinement, selec
       <details>
         <summary id="over-budget-summary">Over budget ({refinement.length}) · from {moneyShort(Math.min(...refinement.map(route => route.cost_low_myr)))}</summary>
         <ol className="p-options">
-          {refinement.map((route, index) => <OptionRow key={route.id} route={route} number={index + 1} selected={route.id === selectedId}
+          {refinement.map((route, index) => <OptionRow key={route.id} route={route} number={index + 1} name="Over-budget option" selected={route.id === selectedId}
             chips={chips(route, true)} placeName={placeName} onSelect={() => onSelect(route.id, "row")} />)}
         </ol>
       </details>

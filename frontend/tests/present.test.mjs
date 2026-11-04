@@ -274,11 +274,11 @@ test("the status strip shows the first matching state and routes Check more comb
   assert.deepEqual(row(strip({ result: gaps, job: job("complete", { manual_quote_queries: 2 }) })), ["gaps", "Search finished with gaps: 2 combined tickets to check, trains and buses not searched.", ""]);
   assert.deepEqual(row(strip({ job: job("complete") })), ["complete", "Search complete.", ""]);
   assert.deepEqual(row(strip()), ["idle", "", ""]);
-  // Check more combinations never spends provider requests: it continues a search only when nothing is pending or failed.
+  // Check more combinations never spends provider requests: it always recalculates, also after a finished search.
   const incomplete = { ...done, optimization_complete: false };
   const checkMore = extra => strip({ result: incomplete, ...extra }).secondary?.action.run;
   assert.equal(checkMore({ job: job("paused", { pending: 41 }) }), "optimize");
-  assert.equal(checkMore({ job: job("complete") }), "continue");
+  assert.equal(checkMore({ job: job("complete") }), "optimize");
   assert.equal(checkMore({ job: job("complete", { failed_queries: 2 }) }), "optimize");
   assert.equal(checkMore({ job: job("superseded") }), "optimize");
   // A finished search can't continue after the trip's search inputs changed.
@@ -477,6 +477,8 @@ test("draft validation lists errors in the order the settings footer reports the
   assert.equal(empty.departureWindow, "The latest departure must be after the earliest.");
   assert.equal(validateDraft(draftTrip({ end_date: "2027-12-05" })).dates, "Choose up to 365 days.");
   assert.deepEqual(validateDraft(draftTrip({ end_date: "2027-12-04" })), {});
+  // A date input can hold a 5-digit year: Date.parse accepts "20266-12-14", but it is not a valid ISO date.
+  assert.equal(validateDraft(draftTrip({ end_date: "20266-12-14" })).dates, "Choose up to 365 days.");
   assert.equal(validateDraft(draftTrip({ start_date: "" })).dates, "Choose a start date and an end date.");
   assert.equal(validateDraft(draftTrip({ departure_start: "" })).departureWindow, "Enter both departure times.");
   const sameDay = { start_date: "2026-12-04", end_date: "2026-12-04", home_departure_earliest: "18:00", home_arrival_latest: "18:00:00" };
@@ -555,6 +557,11 @@ test("airport transfer directions show their use, missing prices, own prices and
   assert.equal(directions[2].journeys[1].offer.id, "user:f3:egress");
   // With a JPY rate the f4 transfer has a price.
   assert.equal(transferDirections(rows, routes, 2, { MYR: 1, JPY: 0.03 })[0].missing, 1);
+  assert.deepEqual(directions.map(d => d.rateCurrencies), [["JPY"], [], [], []]);
+  // A direction whose only problem is a price without an exchange rate says so.
+  const krw = [option("r5", { movements: [flightTo("f6", "KUL", "PUS")], purchases: [fare("f6:access", 9000, 9000, { currency: "KRW" }), estimate("f6:egress")] })];
+  const rateOnly = transferDirections(rows, krw, 2, { MYR: 1 }).find(d => d.label === "Kuala Lumpur → KUL airport");
+  assert.deepEqual([rateOnly.state, rateOnly.rateCurrencies, plain(rateOnly.status)], ["missing", ["KRW"], "Needs an exchange rate · in 1 option"]);
   // When every journey has its own price, the status shows those prices.
   const own = [option("r4", { movements: [flightTo("f5", "KUL", "PUS")], purchases: [fare("f5:access", 90, 90, { id: "user:f5:access", source: "user" }), fare("f5:egress", 150, 150, { id: "user:f5:egress", source: "user" })] })];
   assert.equal(plain(transferDirections(rows, own, 2, { MYR: 1 }).find(d => d.label === "PUS airport → Busan").status), "RM 150 for 2 adults");

@@ -95,9 +95,9 @@ export function TripSettings({ draft, edit, places, errors, transitConfigured, s
       <div className="p-setting">
         <PlacePicker label="Cities to visit (any order)" placeholder="Add a city: name or airport code" limitText={`${visits.length} of 4`} disabled={full}
           hint={full ? "Up to 4 cities. Remove one to add another." : undefined} disabledIds={[home?.id ?? "", ...visits.map(visit => visit.place.id)]}
+          error={placeErrors ? errors.visits : undefined}
           info={<InfoTip topic="cities to visit" align="end">The search picks the best order. Each city gets at least its minimum stay.</InfoTip>}
           onSelect={place => { if (!full) { edit({ ...draft, visits: [...visits, { place, min_stay_hours: 0 }] }); setVisitStatus(""); } }} />
-        {placeErrors && errors.visits && <p className="p-field-error">{errors.visits}</p>}
         {visits.length > 0 && <ul className="p-visit-rows">{visits.map((visit, i) => <li key={visit.place.id}>
           <span className="p-visit-name">{[visit.place.name, visit.place.country_code].filter(Boolean).join(" · ")}</span>
           <NumberField className="p-stay-field" label={<><span className="sr-only">Minimum stay in {visit.place.name}: </span>At least</>} unit="h" hint={stayDays(visit.min_stay_hours)}
@@ -132,8 +132,9 @@ export function TripSettings({ draft, edit, places, errors, transitConfigured, s
       </div>
 
       <div className="p-setting p-setting-wide">
-        <p className="p-departure-text">Leave between {draft.departure_start.slice(0, 5)} and {draft.departure_end.slice(0, 5)} (local time). <button type="button" className="p-text-button" aria-label="Change departure times" onClick={changeDepartureTimes}>Change</button></p>
-        {errors.departureWindow && <p className="p-field-error">{errors.departureWindow}</p>}
+        <p className="p-departure-text">Leave between {draft.departure_start.slice(0, 5)} and {draft.departure_end.slice(0, 5)} (local time). <button type="button" className="p-text-button" aria-label="Change departure times"
+          aria-describedby={errors.departureWindow ? "departure-window-error" : undefined} onClick={changeDepartureTimes}>Change</button></p>
+        {errors.departureWindow && <p id="departure-window-error" className="p-field-error">{errors.departureWindow}</p>}
       </div>
 
       <div className="p-setting">

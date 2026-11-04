@@ -65,11 +65,11 @@ export function NumberField({ label, value, onChange, min = 0, max, integer = fa
 
 /**
  * A place search box (combobox) with "Add a place by coordinates" (C11). `limitText` is right-aligned on the
- * label row ("2 of 4"); `hint` explains a disabled picker.
+ * label row ("2 of 4"); `hint` explains a disabled picker; `error` is a validation error of the trip (I8).
  */
-export function PlacePicker({ label, onSelect, disabledIds = [], inputId, disabled = false, limitText, placeholder = "City name or airport code", info, hint }: {
+export function PlacePicker({ label, onSelect, disabledIds = [], inputId, disabled = false, limitText, placeholder = "City name or airport code", info, hint, error: fieldError }: {
   label: string; onSelect: (p: Place) => void; disabledIds?: string[]; inputId?: string;
-  disabled?: boolean; limitText?: string; placeholder?: string; info?: ReactNode; hint?: string;
+  disabled?: boolean; limitText?: string; placeholder?: string; info?: ReactNode; hint?: string; error?: string;
 }) {
   const id = useId();
   const [query, setQuery] = useState("");
@@ -111,7 +111,7 @@ export function PlacePicker({ label, onSelect, disabledIds = [], inputId, disabl
     } catch (err) { setError(err instanceof Error ? err.message : "Invalid place."); }
   }
   return <div className="p-place-picker">
-    <Field label={label} info={info} aside={limitText} hint={hint}><input id={inputId} role="combobox" aria-autocomplete="list" aria-expanded={items.length > 0} aria-controls={`${id}-list`} aria-activedescendant={items.length ? `${id}-${active}` : undefined} placeholder={placeholder} value={query} disabled={disabled}
+    <Field label={label} info={info} aside={limitText} hint={hint} error={fieldError}><input id={inputId} role="combobox" aria-autocomplete="list" aria-expanded={items.length > 0} aria-controls={`${id}-list`} aria-activedescendant={items.length ? `${id}-${active}` : undefined} placeholder={placeholder} value={query} disabled={disabled}
       onChange={e => setQuery(e.target.value)} onKeyDown={e => { if (e.key === "ArrowDown") { e.preventDefault(); setActive(i => Math.min(items.length - 1, i + 1)); } if (e.key === "ArrowUp") { e.preventDefault(); setActive(i => Math.max(0, i - 1)); } if (e.key === "Enter" && items[active]) { e.preventDefault(); choose(items[active]); } if (e.key === "Escape") setItems([]); }} /></Field>
     {items.length > 0 && <div className="p-suggestions" role="listbox" id={`${id}-list`}>{items.map((p, i) => <button key={p.id} type="button" role="option" id={`${id}-${i}`} aria-selected={i === active} onClick={() => choose(p)}><strong>{p.name}</strong><small>{[p.country_code, p.airport_codes.length ? p.airport_codes.join(", ") : "No airport"].filter(Boolean).join(" · ")}</small></button>)}</div>}
     <div aria-live="polite">{loading ? <small>Searching…</small> : noMatch && <small>No matching places. Check the spelling, or add the place by coordinates.</small>}</div>
@@ -125,9 +125,14 @@ export function PlacePicker({ label, onSelect, disabledIds = [], inputId, disabl
 }
 const customLabels = { name: "Name", latitude: "Latitude", longitude: "Longitude", timezone: "Time zone (for example Asia/Seoul)", airports: "Airport codes (optional, comma-separated)" };
 
-/** Moves focus to the next (or, with `back`, the previous) visible price input of the same section (C11 Enter / Shift+Enter). */
+/**
+ * Moves focus to the next (or, with `back`, the previous) visible price input of the same section (C11 Enter / Shift+Enter).
+ * A blank optional price (`data-price-optional`, an airport transfer's highest price) is skipped, so one Enter between
+ * prices goes to the next direction (spec J).
+ */
 export function focusNextPrice(from: HTMLElement, back = false) {
-  const inputs = [...(from.closest("section") ?? document.body).querySelectorAll<HTMLElement>("[data-price-input]")].filter(input => input.getClientRects().length > 0);
+  const inputs = [...(from.closest("section") ?? document.body).querySelectorAll<HTMLElement>("[data-price-input]")]
+    .filter(input => input.getClientRects().length > 0 && (input === from || !(input.hasAttribute("data-price-optional") && !(input as HTMLInputElement).value.trim())));
   const index = inputs.indexOf(from);
   if (index >= 0) inputs[index + (back ? -1 : 1)]?.focus();
 }
@@ -281,7 +286,12 @@ export function RulesEditor({ rules, places, placeName, busy, onSave, onDelete }
   }
   async function remove(rule: PricingRule) {
     if (!window.confirm(`Delete the rule "${rule.name}"? It applies to all trips.`)) return;
-    try { await onDelete(rule); if (form.id === rule.id) newRule(); }
+    try {
+      await onDelete(rule);
+      if (form.id === rule.id) newRule();
+      // The deleted row held the focus: it goes to the section's summary.
+      document.getElementById("price-rules-title")?.closest("summary")?.focus();
+    }
     catch (err) { setErrors({ save: err instanceof Error ? err.message : "The rule could not be deleted." }); }
   }
   function edit(rule: PricingRule) {

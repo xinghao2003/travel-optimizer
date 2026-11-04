@@ -12,7 +12,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { CircleCheck, LoaderCircle } from "lucide-react";
 import type { AppliedSharedFareGroup } from "./components/MissingFaresTable";
 import { groupMissingFares } from "./lib/missingFares";
-import { activeFares, airportChangeFieldId, buildAirportConnections, buildTransferEstimates, canonicalFares, canonicalIds, countDrafts, invalidDraftFields, knownComponentIds, savedTransferRows, sameTransferRows, transferFieldId, transferKey, type DraftPrice, type DraftState, type DraftTarget, type PriceValue, type SharedFare } from "./lib/drafts";
+import { activeFares, airportChangeFieldId, buildAirportConnections, buildTransferEstimates, canonicalFares, canonicalIds, countDrafts, invalidDraftFields, knownComponentIds, savedTransferRows, sameTransferRows, transferFieldId, transferKey, transferRateId, type DraftPrice, type DraftState, type DraftTarget, type PriceValue, type SharedFare } from "./lib/drafts";
 import { useTripDrafts, type DraftKind } from "./lib/useTripDrafts";
 import { airportChangeRows, appError, assumedConnections, buildNextSteps, cityGaps, needsInputCount, optionNumber, optionsEmptyState, partySizeNotice, purchaseAmount, routeSignature, searchDetails, searchState, settingsFooter, sortRoutes, splitGroups, staySumWarning, transferDirections, transitSearchModes, unresolvedAccessJourneys, validateDraft, type AppError, type OptionsTarget } from "./lib/present";
 import { api, blankTrip, defaultBatchSize, modes, type AirportTransferMode, type Charge, type Job, type Movement, type Offer, type PricingRule, type Result, type Route, type SavedSummary, type SavedTrip, type TripDraft } from "./lib/planner";
@@ -309,7 +309,8 @@ export default function Planner() {
   function reloadTrip() {
     const tripId = savedRef.current?.id;
     if (!tripId || (dirtyRef.current && !window.confirm("Reload the trip? Your unsaved changes will be lost."))) return;
-    void act(() => openTrip(tripId, { discard: true }), "open");
+    // Another tab can have renamed the trip: the Trip select reads the trip list.
+    void act(async () => { await Promise.all([openTrip(tripId, { discard: true }), refreshList()]); }, "open");
   }
   // Strip › Stop search. Found options and saved data stay.
   function stopSearch() {
@@ -459,6 +460,8 @@ export default function Planner() {
       accept(await api<SavedTrip>(`/trips/${tripId}`));
       acceptResult(updated, tripId);
       setSaveStatus("Connection removed · options updated");
+      // The removed row held the focus.
+      setFocusTarget("connections-title");
     }, "connection");
   }
   const coverage = result?.coverage;
@@ -522,6 +525,8 @@ export default function Planner() {
   // Selecting an option shows its itinerary (C5, E8): beside the options on a wide screen; on a narrow screen a row opens the Itinerary tab.
   function selectOption(id: string, source: "row" | "chart") {
     setSelectedId(id);
+    // An option is not compared with itself: the itinerary's Compare with shows None.
+    if (id === comparisonId) setComparisonId(null);
     // A chart click shows the option's row, also beyond the rows shown so far (C6, E8); focus stays on the chart.
     if (source === "chart") {
       const index = displayRoutes.findIndex(route => route.id === id);
@@ -538,7 +543,7 @@ export default function Planner() {
   }
   // Show weaker options (E4): the first time, the saved trip is recalculated with them; it turns off again on failure.
   function toggleDominated(show: boolean) {
-    if (!show) { setShowDominated(false); return; }
+    if (!show) { setShowDominated(false); setSaveStatus(current => current === "Weaker options loaded" ? "Saved" : current); return; }
     if (result?.dominated_routes !== undefined) { setShowDominated(true); return; }
     setShowDominated(true);
     void act(async () => {
@@ -564,9 +569,11 @@ export default function Planner() {
       showMissing([...(direction ? [transferFieldId(direction.from_id, direction.to_id, 0, "low")] : []), "missing-fare-first"]);
     }
     else if (target === "exchange-rate") {
-      // The rate field of the first Journey prices row in that currency.
+      // The rate field of the first Journey prices row in that currency, else of the first airport transfer direction with one.
       const group = groups.journeys.find(item => item.reason === "exchange_rate");
-      showMissing([...(group ? [`rate-input-${group.currency}`] : []), "journey-prices-title"]);
+      const direction = directions.find(item => item.rateCurrencies.length > 0);
+      showMissing([...(group ? [`rate-input-${group.currency}`] : []), ...(direction ? [transferRateId(direction.from_id, direction.to_id, direction.rateCurrencies[0])] : []),
+        "journey-prices-title", "airport-transfers-title"]);
     }
     else if (target === "add-connection") showMissing(["add-connection"]);
     else if (target === "transfer-times") showMissing(["airport-transfers-title"]);
@@ -578,10 +585,13 @@ export default function Planner() {
 
   // Drafts (F4). Fare drafts use canonical ids; stored drafts from before template ids are mapped here.
   const fareDrafts = useMemo(() => canonicalFares(tripDrafts.drafts.fares, templateOf), [tripDrafts.drafts.fares, templateOf]);
-  const draftCounts = countDrafts({ ...tripDrafts.drafts, fares: fareDrafts });
-  const draftTotal = draftCounts.airportChanges + draftCounts.transfers + draftCounts.prices;
-  // Transfer drafts are kept per party size; those for the saved adults apply.
+  // Transfer drafts are kept per party size; those for the saved adults and the trip's directions apply. Others wait,
+  // unseen and not counted, until the party size is the same again.
   const adults = saved?.spec.adults ?? draft.adults;
+  const transferKeys = (drafts: DraftState, rows = saved?.airport_transfer_rows ?? [], count = adults) =>
+    rows.map(row => transferKey(row.from_id, row.to_id, count)).filter(key => key in drafts.transfers);
+  const draftCounts = countDrafts({ ...tripDrafts.drafts, fares: fareDrafts, transfers: Object.fromEntries(transferKeys(tripDrafts.drafts).map(key => [key, tripDrafts.drafts.transfers[key]])) });
+  const draftTotal = draftCounts.airportChanges + draftCounts.transfers + draftCounts.prices;
   const invalidFields = (drafts: DraftState) => invalidDraftFields(drafts, directions, adults);
   const invalidCount = invalidFields(tripDrafts.drafts).length;
   /** Stages a fare draft on canonical ids (Journey prices, group prices). `saved` is the user price in use now. */
@@ -651,6 +661,8 @@ export default function Planner() {
   }
   // The label of the charge's airport transfer row, for Set price › All {label} transfers; null without one.
   const directionLabel = (charge: Charge) => transferDirection(charge)?.row.label ?? null;
+  // The heading of the panel in view: the side panel's on a wide screen.
+  const panelHeading = () => tab === "itinerary" ? "itinerary-title" : tab === "missing" ? "missing-title" : "options-title";
   // Apply bar › Fix {k} values, and an Apply with invalid drafts: the first field to fix in Missing info.
   function focusInvalid(drafts = tripDrafts.read()) {
     chooseTab("missing");
@@ -658,19 +670,34 @@ export default function Planner() {
   }
   /**
    * Apply (F4, C9): sends the drafts in the order airport changes → transfers → fares, each kind after a trip save, and
-   * removes each kind's drafts when the server took them. The first failure stops the run and keeps the drafts not sent.
+   * removes the drafts that the server took. Drafts it can't send now (transfers for another party size, fares on
+   * components outside the options) stay. The first failure stops the run and keeps the drafts not sent.
    * The session token is checked after every request, so a trip opened meanwhile is never changed.
    */
   function applyDrafts() {
     const tripId = savedRef.current?.id;
     const drafts = tripDrafts.read();
-    const kinds = applyOrder.filter(([kind]) => Object.keys(drafts[kind]).length);
-    if (!tripId || busy || !kinds.length) return;
-    if (invalidFields(drafts).length) { focusInvalid(drafts); return; }
     const fares = canonicalFares(drafts.fares, templateOf);
+    // Only drafts that Apply can send: fare drafts on components of the current options ("Other drafts" stay).
+    const sendable: Record<DraftKind, boolean> = { airportChanges: Object.keys(drafts.airportChanges).length > 0, transfers: transferKeys(drafts).length > 0,
+      fares: activeFares(fares, knownComponents).length > 0 };
+    const kinds = applyOrder.filter(([kind]) => sendable[kind]);
+    if (!tripId || busy) return;
+    if (!kinds.length) {
+      // The Apply bar counts every fare draft, so it shows while only "Other drafts" are left.
+      if (Object.keys(fares).length) setApplyError({ text: "No change matches the current options. Undo the drafts under Missing info › Other drafts, or change the trip back.", reload: false });
+      return;
+    }
+    if (invalidFields(drafts).length) { focusInvalid(drafts); return; }
+    // A trip with marked settings can't save, and every step saves the trip first.
+    if (invalid) {
+      setApplyError({ text: "Fix the marked trip settings first.", reload: false });
+      setSettingsOpen(true); setFocusTarget("settings-title");
+      return;
+    }
     const before = result?.routes.length ?? 0;
     // Focus after Apply: the itinerary heading when Apply started there, else the panel in view (C9).
-    const focus = document.activeElement?.closest("#panel-itinerary") || tab === "itinerary" ? "itinerary-title" : tab === "missing" ? "missing-title" : "options-title";
+    const focus = document.activeElement?.closest("#panel-itinerary") ? "itinerary-title" : panelHeading();
     setApplyError(null);
     void act(async () => {
       const token = session.current;
@@ -688,26 +715,34 @@ export default function Planner() {
             const next = await api<SavedTrip>(`/trips/${tripId}`);
             if (!current()) return;
             accept(next); acceptResult(updated, tripId); latest = updated;
+            tripDrafts.clear(kind);
           } else if (kind === "transfers") {
             const record = await saveSpec();
             if (!current()) return;
-            const estimates = buildTransferEstimates(record.airport_transfer_rows ?? [], record.airport_transfer_estimates ?? [], drafts.transfers, record.spec.adults);
-            const updated = await api<SavedTrip>(`/trips/${tripId}/airport-transfer-estimates`, "PUT", { estimates, expected_revision: record.revision });
-            if (!current()) return;
-            accept(updated);
-            if (updated.result) { acceptResult(updated.result, tripId); latest = updated.result; }
+            // The drafts for the saved party size and directions; drafts for other party sizes stay.
+            const sent = transferKeys(drafts, record.airport_transfer_rows ?? [], record.spec.adults);
+            if (sent.length) {
+              const estimates = buildTransferEstimates(record.airport_transfer_rows ?? [], record.airport_transfer_estimates ?? [], drafts.transfers, record.spec.adults);
+              const updated = await api<SavedTrip>(`/trips/${tripId}/airport-transfer-estimates`, "PUT", { estimates, expected_revision: record.revision });
+              if (!current()) return;
+              accept(updated);
+              if (updated.result) { acceptResult(updated.result, tripId); latest = updated.result; }
+              sent.forEach(key => tripDrafts.unstage("transfers", key));
+            }
           } else {
             // The earlier steps can change the options, so the known components come from the latest data.
             const active = activeFares(fares, knownComponentIds(savedRef.current, resultRoutes(latest ?? result)));
             if (active.length) {
               latest = await applySharedFares(active);
               if (!current()) return;
+              // Only the sent components leave the drafts; drafts on other components stay under "Other drafts".
+              active.flatMap(fare => fare.component_ids).forEach(unstageComponent);
             }
           }
-          tripDrafts.clear(kind);
           done++;
         }
-        setSaveStatus(`Applied · ${before} → ${latest?.routes.length ?? before} best options`);
+        // Before a search there are no options to count.
+        setSaveStatus(savedRef.current?.snapshot ? `Applied · ${before} → ${latest?.routes.length ?? before} best options` : "Applied");
         setFocusTarget([focus, "options-title"]);
       } catch (err) {
         if (!current()) return;
@@ -721,19 +756,21 @@ export default function Planner() {
   function addRate(currency: string, rate: number) {
     edit({ ...draftRef.current, exchange_rates: { ...draftRef.current.exchange_rates, [currency]: rate } });
   }
-  // Apply bar › Discard: removes every draft of this trip after a confirm.
+  // Apply bar › Discard: removes every draft of this trip after a confirm. The bar closes, so focus goes to the panel in view.
   function discardDrafts() {
     if (!window.confirm(`Discard ${draftTotal} ${draftTotal === 1 ? "change that is" : "changes that are"} not applied?`)) return;
     tripDrafts.clear();
     setApplyError(null);
+    setFocusTarget([panelHeading(), "options-title"]);
   }
   useEffect(() => { setApplyError(null); }, [saved?.id]);
-  // Ctrl/Cmd+Enter applies from Missing info, an itinerary price editor or the Apply bar (F4). An editor that handles the
-  // keys itself (it stages its typed price first) prevents the default.
+  // Ctrl/Cmd+Enter applies from Missing info, an itinerary ticket row (its price editor, or its Set price button, which
+  // has the focus after a price is set) or the Apply bar (F4). An editor that handles the keys itself (it stages its
+  // typed price first) prevents the default.
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       if (event.key !== "Enter" || !(event.ctrlKey || event.metaKey) || event.defaultPrevented) return;
-      if (!(event.target as Element | null)?.closest?.("#panel-missing, .p-price-editor, .p-apply-bar")) return;
+      if (!(event.target as Element | null)?.closest?.("#panel-missing, .p-ticket, .p-price-editor, .p-apply-bar")) return;
       event.preventDefault();
       applyDrafts();
     }

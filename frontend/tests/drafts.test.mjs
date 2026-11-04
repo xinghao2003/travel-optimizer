@@ -149,12 +149,13 @@ test("a staged price equal to the saved one changes nothing", () => {
 });
 
 test("saved transfer rows as drafts, and equal rows", () => {
-  const saved = [estimate("KUL", "airport:KUL", 2, { low: 95, high: 95 }), estimate("KUL", "airport:KUL", 3), estimate("KUL", "airport:KUL", 2, { mode: "rail", duration_minutes: 40, low: null, high: null })];
+  const saved = [estimate("KUL", "airport:KUL", 2, { low: 95, high: 95 }), estimate("KUL", "airport:KUL", 3), estimate("KUL", "airport:KUL", 2, { mode: "rail", duration_minutes: 40, low: 20, high: 30 })];
   const rowsKul = savedTransferRows(saved, "KUL", "airport:KUL", 2);
-  assert.deepEqual(rowsKul, [way("taxi", "95", "95"), way("rail", "", "", "40")]);
+  // A fixed price shows a blank highest price, so a higher price is valid without clearing it.
+  assert.deepEqual(rowsKul, [way("taxi", "95"), way("rail", "20", "30", "40")]);
   assert.deepEqual(savedTransferRows(saved, "airport:PUS", "PUS", 2), [way("taxi")]);
-  assert.equal(sameTransferRows([way("taxi", "95.0", ""), way("rail", "", "", "40", "myr")], rowsKul), true);
-  assert.equal(sameTransferRows([way("taxi", "96"), way("rail", "", "", "40")], rowsKul), false);
+  assert.equal(sameTransferRows([way("taxi", "95.0", "95"), way("rail", "20", "30", "40", "myr")], rowsKul), true);
+  assert.equal(sameTransferRows([way("taxi", "96"), way("rail", "20", "30", "40")], rowsKul), false);
   assert.equal(sameTransferRows([], [way("taxi")]), true);
   assert.equal(sameTransferRows([way("taxi", "", "", "", "")], []), true);
 });

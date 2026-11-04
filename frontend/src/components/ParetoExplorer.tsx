@@ -3,13 +3,14 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import * as echarts from "echarts/core";
 import { LineChart, ScatterChart } from "echarts/charts";
 import { GridComponent, TooltipComponent, DataZoomComponent, MarkLineComponent } from "echarts/components";
+import { LabelLayout } from "echarts/features";
 import { CanvasRenderer } from "echarts/renderers";
 import type { Route } from "../lib/planner";
 import { axisBounds, chartLabel, chartPoints, chartSeries, legendItems, priceAxisValues, priceRange, tailEnd, type ChartPoint, type LegendItem } from "../lib/chartView";
 import { useDismiss } from "../lib/useDismiss";
 import { InfoTip } from "./InfoTip";
 
-echarts.use([LineChart, ScatterChart, GridComponent, TooltipComponent, DataZoomComponent, MarkLineComponent, CanvasRenderer]);
+echarts.use([LineChart, ScatterChart, GridComponent, TooltipComponent, DataZoomComponent, MarkLineComponent, LabelLayout, CanvasRenderer]);
 
 const legendText: Record<LegendItem, string> = {
   priced: "Priced (filled circle)",
@@ -92,7 +93,11 @@ export function ParetoExplorer({ routes, weaker, numbers, selectedId, comparedId
     if (changed) setZoomed(false);
     const range = priceRange(costs, useLogCost, fit);
     const series = chartSeries(points, low => tailEnd(low, range, useLogCost));
-    const stack = (point: ChartPoint) => point.routeIds.length > 1 ? { show: true, formatter: `×${point.routeIds.length}`, position: "right", fontSize: 11, color: color.text } : undefined;
+    // A card-coloured halo keeps a label readable over a nearby mark or arrow.
+    const stack = (point: ChartPoint) => point.routeIds.length > 1 ? { show: true, formatter: `×${point.routeIds.length}`, position: "right", fontSize: 11, color: color.text, textBorderColor: color.card, textBorderWidth: 3 } : undefined;
+    // Stack labels of close marks move apart vertically instead of running together ("×3×2"). ECharts lays out the
+    // labels of every series with this option together.
+    const labelLayout = { moveOverlap: "shiftY" } as const;
     // A mark: selected marks are 1.5 × larger in --chart-selected (hollow marks keep their hollow centre); a compared mark has a dashed ring.
     const mark = (point: ChartPoint, size: number, tone: string, opacity = 1, label = true) => {
       const selected = selectedId !== null && point.routeIds.includes(selectedId);
@@ -125,16 +130,16 @@ export function ParetoExplorer({ routes, weaker, numbers, selectedId, comparedId
       ],
       series: [
         { ...line, id: "weaker-band", z: 1, lineStyle: { color: color.muted, width: 4, opacity: .35 }, data: series.weakerBand },
-        { id: "weaker", type: "scatter", z: 2, data: series.weaker.map(point => mark(point, 7, color.muted, .7)) },
+        { id: "weaker", type: "scatter", z: 2, labelLayout, data: series.weaker.map(point => mark(point, 7, color.muted, .7)) },
         { ...line, id: "frontier", z: 3, step: "end", lineStyle: { color: color.chart, type: "dashed", width: 1.5 }, data: series.frontier,
           markLine: budgetShown ? { silent: true, symbol: "none", lineStyle: { color: color.text, type: "dashed", width: 1.5 }, label: { formatter: "Budget", color: color.text }, data: [{ xAxis: budget }] } : undefined },
         { ...line, id: "range-band", z: 3, lineStyle: { color: color.range, width: 6, opacity: .35 }, data: series.rangeBand },
         { ...line, id: "lower-tail", z: 3, lineStyle: { color: color.range, type: "dashed", width: 1.5 }, data: series.lowerTail },
-        { id: "lower-head", type: "scatter", silent: true, z: 4, symbol: "triangle", symbolRotate: -90, symbolSize: 7, itemStyle: { color: color.range },
+        { id: "lower-head", type: "scatter", silent: true, z: 4, symbol: "triangle", symbolRotate: -90, symbolSize: 7, itemStyle: { color: color.range }, labelLayout,
           // The "×N" label of a lower bound sits after its arrow.
           data: series.lowerHead.map(({ point, value }) => ({ value, label: stack(point) })) },
-        { id: "exact", type: "scatter", z: 5, data: series.exact.map(point => mark(point, 11, color.chart)) },
-        { id: "range-mid", type: "scatter", z: 5, data: series.rangeMid.map(point => mark(point, 11, color.range)) },
+        { id: "exact", type: "scatter", z: 5, labelLayout, data: series.exact.map(point => mark(point, 11, color.chart)) },
+        { id: "range-mid", type: "scatter", z: 5, labelLayout, data: series.rangeMid.map(point => mark(point, 11, color.range)) },
         { id: "lower-point", type: "scatter", z: 5, data: series.lowerPoint.map(point => mark(point, 11, color.range, 1, false)) },
       ],
     }, { notMerge: changed, replaceMerge: ["series"] });

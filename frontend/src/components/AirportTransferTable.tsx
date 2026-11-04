@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type FocusEvent } from "react";
 import { CircleAlert } from "lucide-react";
 import { Field, MissingSection, PriceFields, Staged, focusNextPrice } from "./PlannerForms";
-import { blankTransferRow, nextTransferMode, sameTransferRows, savedTransferRows, storedOfferId, transferFieldId, transferKey, transferModes, transferProblems, type PriceValue, type SharedFare, type TransferRowDraft } from "../lib/drafts";
+import { RateField } from "./MissingFaresTable";
+import { blankTransferRow, nextTransferMode, sameTransferRows, savedTransferRows, storedOfferId, transferFieldId, transferKey, transferRateId, transferModes, transferProblems, type PriceValue, type SharedFare, type TransferRowDraft } from "../lib/drafts";
 import { modeLabel, purchaseAmount, transferJourneyText, type OptionsTarget, type TransferDirection, type TransferJourney } from "../lib/present";
 import type { AirportTransferEstimate } from "../lib/planner";
 import type { TripDraftsApi } from "../lib/useTripDrafts";
@@ -17,6 +18,8 @@ type Props = {
   /** Next steps row 2 text when journeys can't be used because an airport transfer time is unknown. */
   accessNote: string | null;
   placeName: (id: string) => string; zoneOf: (id: string) => string; rates: Record<string, number>;
+  /** The exchange rates as typed: a rate added here shows as added until the trip saves. */
+  draftRates: Record<string, number>; addRate: (currency: string, rate: number) => void;
   stageComponent: (componentId: string, value: PriceValue, label: string) => void;
   removePrice: (offerId: string) => void; busy: boolean;
   onAction: (target: OptionsTarget) => void; onApply: () => void;
@@ -48,7 +51,7 @@ function Journey({ journey, label, adults, fares, rates, placeName, zoneOf, draf
  * "+ Add another way" and the journeys that use it. The field ids are transferFieldId(), which Next steps and
  * "Fix {k} values" focus. Esc restores a field's value from when it got focus; Enter in a price moves to the next price.
  */
-function Direction({ direction, estimates, ...props }: Omit<Props, "directions" | "searched" | "accessNote" | "onAction"> & { direction: TransferDirection }) {
+function Direction({ direction, estimates, draftRates, addRate, ...props }: Omit<Props, "directions" | "searched" | "accessNote" | "onAction"> & { direction: TransferDirection }) {
   const { adults, drafts } = props;
   const { from_id, to_id, label } = direction;
   const [showJourneys, setShowJourneys] = useState(false);
@@ -100,6 +103,7 @@ function Direction({ direction, estimates, ...props }: Omit<Props, "directions" 
       <span className="p-mi-item-title">{label}</span>
       <span className="p-mi-item-status" data-tone={direction.state === "missing" ? "warn" : undefined}>{direction.status}</span>
     </div>
+    {direction.rateCurrencies.map(currency => <RateField key={currency} currency={currency} id={transferRateId(from_id, to_id, currency)} added={draftRates[currency] !== undefined} addRate={addRate} />)}
     {rows.map((row, index) => <div className="p-mi-fields" role="group" aria-label={way(row)} key={index}>
       <Field label="Way" error={errorOf(index, "mode")}>
         <select {...fieldProps(index, "mode")} value={row.mode} onChange={event => change(index, "mode", event.target.value)}>
@@ -113,7 +117,7 @@ function Direction({ direction, estimates, ...props }: Omit<Props, "directions" 
         <input {...fieldProps(index, "low")} type="text" inputMode="decimal" data-price-input placeholder="Not priced" value={row.low} onChange={event => change(index, "low", event.target.value)} />
       </Field>
       <Field label="Highest price (optional)" error={errorOf(index, "high")}>
-        <input {...fieldProps(index, "high")} type="text" inputMode="decimal" data-price-input value={row.high} onChange={event => change(index, "high", event.target.value)} />
+        <input {...fieldProps(index, "high")} type="text" inputMode="decimal" data-price-input data-price-optional value={row.high} onChange={event => change(index, "high", event.target.value)} />
       </Field>
       <Field label="Currency" error={errorOf(index, "currency")} className="p-price-currency">
         <input {...fieldProps(index, "currency")} maxLength={3} value={row.currency} onChange={event => change(index, "currency", event.target.value.toUpperCase())} />
@@ -149,7 +153,7 @@ export function AirportTransfers({ directions, searched, accessNote, onAction, .
       {accessNote} Enter a time below, or <button type="button" className="p-link-button" onClick={() => onAction("airport-fallback")}>set a default airport transfer time</button>.
     </p></div>}
     {!directions.length ? <p>No airport transfers in this trip.</p>
-      : !searched ? <details className="p-mi-more"><summary>Airport transfers ({directions.length} directions)</summary>{list(directions)}</details>
+      : !searched ? <details className="p-mi-more"><summary>All directions ({directions.length})</summary>{list(directions)}</details>
       : <>
         {used.length > 0 && list(used)}
         {other.length > 0 && <details className="p-mi-more"><summary>Other airports ({other.length})</summary>{list(other)}</details>}

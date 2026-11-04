@@ -110,9 +110,10 @@ html { scroll-padding-top: calc(var(--header-h) + var(--tabs-h, 0px) + 8px); scr
 .optimizer .p-stay-field input { width: 76px; }
 .p-stay-field > small { grid-column: 2; }
 .p-stay-field > .p-field-error { grid-column: 1 / -1; }
-.p-date-range { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; max-width: 520px; }
+/* Top-aligned, so an error under End date does not lift its input; "to" sits beside the inputs (24 px label row + 7 px gap). */
+.p-date-range { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; max-width: 520px; }
 .p-date-range .p-field { flex: 1 1 160px; }
-.p-date-to { padding-bottom: 8px; color: var(--muted-foreground); }
+.p-date-to { display: flex; align-items: center; min-height: 36px; margin-top: 31px; color: var(--muted-foreground); }
 .p-radio-group { display: flex; flex-wrap: wrap; gap: 0 16px; margin: 10px 0 0; padding: 0; border: 0; }
 .optimizer .p-dates .p-hint { margin: 2px 0 0; }
 .optimizer .p-departure-text { margin: 0; color: var(--foreground); }
@@ -486,8 +487,10 @@ html { scroll-padding-top: calc(var(--header-h) + var(--tabs-h, 0px) + 8px); scr
 /* Responsive (B2, I9): the side panel from 1100 px; one tab bar below 1100 px; the compact layout below 600 px. */
 @media (min-width: 1100px) {
   .p-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(400px, .75fr); gap: 24px; align-items: start; }
-  /* The scroll padding keeps a focused field below the sticky tab bar: 44 px tab, 1 px border, 8 px (C5). */
-  .p-side { position: sticky; top: 68px; max-height: calc(100vh - 80px - var(--apply-h, 0px)); overflow: auto; scroll-padding-top: 53px; border: 1px solid var(--border); border-radius: 9px; background: var(--card); box-shadow: 0 1px 2px var(--shadow-color); }
+  /* The scroll padding keeps a focused field below the sticky tab bar: 44 px tab, 1 px border, 8 px (C5).
+     A sticky panel can't pass the bottom of the workspace, and the page footer (up to 104 px with 2 lines) is below it.
+     So at the end of the page the panel top stays under the header only when the panel leaves room for the footer. */
+  .p-side { position: sticky; top: 68px; max-height: calc(100vh - 68px - 104px - var(--apply-h, 0px)); overflow: auto; scroll-padding-top: 53px; border: 1px solid var(--border); border-radius: 9px; background: var(--card); box-shadow: 0 1px 2px var(--shadow-color); }
   .p-tabs-side { position: sticky; top: 0; z-index: 2; padding: 0 12px; border-bottom: 1px solid var(--border); background: var(--card); }
   .p-side-panel { padding: 20px 24px 24px; }
 }
@@ -526,6 +529,7 @@ html { scroll-padding-top: calc(var(--header-h) + var(--tabs-h, 0px) + 8px); scr
   .p-tip > summary { width: 44px; height: 44px; margin: -10px; }
   /* 16 px text keeps iOS from zooming into a focused field; targets are at least 44 px. */
   .optimizer select, .optimizer input:not([type=checkbox], [type=radio]) { min-height: 44px; font-size: 16px; }
+  .p-date-to { min-height: 44px; }
   .optimizer .p-workspace button, .optimizer .p-workspace summary, .optimizer .p-workspace .p-check { min-height: 44px; }
   .optimizer .p-settings button, .optimizer .p-settings .p-check { min-height: 44px; }
   .p-add-form > summary { padding: 12px 0; }
@@ -541,6 +545,10 @@ html { scroll-padding-top: calc(var(--header-h) + var(--tabs-h, 0px) + 8px); scr
   .p-side-panel { padding: 16px; }
   .p-next-list > li > button { flex: 1 1 100%; }
   .p-options-sort { flex: 1 1 100%; }
+  /* The row spans the toolbar, so an end-aligned tip bubble opens from the right edge, inside the screen. The 44 px tip
+     target overhangs its box by 10 px; the margin keeps it off the label. */
+  .p-options-toolbar .p-check-row { flex: 1 1 100%; }
+  .p-check-row > .p-tip { margin-left: 8px; }
   .optimizer .p-options-sort select { flex: 1; height: 44px; }
   .p-over-budget > .p-tip { right: 10px; }
   .p-over-budget > details > summary { padding-right: 48px; }
@@ -589,4 +597,6 @@ html { scroll-padding-top: calc(var(--header-h) + var(--tabs-h, 0px) + 8px); scr
 .planner-map .maplibregl-ctrl-attrib { font-size: 8px; }
 .dark .planner-map .maplibregl-canvas { filter: invert(1) hue-rotate(180deg) brightness(.82) saturate(.65); }
 .dark .maplibregl-ctrl-group { filter: invert(.9); }
-.dark .maplibregl-ctrl-attrib { background: var(--card); color: var(--foreground); }
+/* Outranks MapLibre's compact attribution (#fff background, black text and links). */
+.dark .planner-map .maplibregl-ctrl.maplibregl-ctrl-attrib { background: var(--card); color: var(--foreground); }
+.dark .planner-map .maplibregl-ctrl-attrib a { color: var(--muted-foreground); }

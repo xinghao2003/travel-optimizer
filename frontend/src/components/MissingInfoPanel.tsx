@@ -249,7 +249,7 @@ export function MissingInfoPanel({ searched, allClear, needs, needsText, airport
     {allClear && <p className="p-mi-intro">Every option has a complete price and every journey can be used.</p>}
     <AirportChanges rows={airportChanges} connections={connections} adults={adults} drafts={drafts} />
     <AirportTransfers directions={directions} estimates={estimates} adults={adults} searched={searched} drafts={drafts} fares={fares} accessNote={accessNote}
-      placeName={placeName} zoneOf={zoneOf} rates={rates} stageComponent={stageComponent} removePrice={removePrice} busy={busy} onAction={onAction} onApply={onApply} />
+      placeName={placeName} zoneOf={zoneOf} rates={rates} draftRates={draftRates} addRate={addRate} stageComponent={stageComponent} removePrice={removePrice} busy={busy} onAction={onAction} onApply={onApply} />
     {(journeyGroups.length > 0 || others.length > 0) && <JourneyPrices groups={journeyGroups} others={others} fares={fares} adults={adults} rates={rates} draftRates={draftRates}
       canonical={canonical} offerFor={offerFor} placeName={placeName} zoneOf={zoneOf} stagePrice={stagePrice} stageComponent={stageComponent}
       unstage={unstageFare} removePrice={removePrice} addRate={addRate} busy={busy} onApply={onApply} />}

@@ -55,7 +55,7 @@ export function GroupPrices({ groups, fares, adults, stagePrice, unstage, onAppl
 }
 
 /** "Price is in {JPY}. 1 {JPY} = [ ] MYR Add rate or enter the price in MYR." Add rate writes the trip's exchange rates (autosave). */
-function RateField({ currency, id, added, addRate }: { currency: string; id?: string; added: boolean; addRate: (currency: string, rate: number) => void }) {
+export function RateField({ currency, id, added, addRate }: { currency: string; id?: string; added: boolean; addRate: (currency: string, rate: number) => void }) {
   const generated = useId();
   const inputId = id ?? generated, errorId = `${inputId}-error`;
   const [text, setText] = useState("");

@@ -1,6 +1,6 @@
 # UI/UX redesign: status and next steps
 
-Status on 4 November 2026: steps 1–6 of spec I1 are implemented on branch `ux-redesign`. The branch is not pushed. Steps 7 (cleanup) and 8 (full verification) remain.
+Status on 4 November 2026: all 8 steps of spec I1 are implemented on branch `ux-redesign`. The branch is not pushed or merged.
 
 ## Goal
 
@@ -48,14 +48,14 @@ On 2 November 2026 the user adopted all 7 behavior changes (the "Change" column,
 | 4 Options | 1048207 | OptionsPanel (Next steps, rows, sort, weaker, Over budget, empty states, show more, selection by signature), ModeIcon, ParetoExplorer rewrite with the pure chart logic in `lib/chartView.ts`. |
 | 5 Itinerary | 6692cf3 | Header, compare, Day by day, Tickets and prices, combined ticket, map disclosure. |
 | 6 Drafts and Missing info | 0f32e36 | `useTripDrafts`, the 7 sections, itinerary PriceEditor, ApplyBar. Largest step. |
-| 7 Cleanup | — | CSS rewrite, legacy deletion, `index.html`, README labels. |
-| 8 Full verification | — | All of spec J. |
+| 7 Cleanup | 31f8846 | CSS rewrite, legacy deletion, `index.html`, README labels. |
+| 8 Full verification | (this commit) | All of spec J. |
 
 ## Next steps
 
 Continue in spec I1 order. These items were found during steps 1–3 and belong to later steps:
 
-- Chart polish: on the demo trip, the "×3" and "×2" stack labels at the right edge overlap.
+- Chart polish: on the demo trip, the "×3" and "×2" stack labels at the right edge overlapped. Step 8 moves overlapping labels apart (`labelLayout.moveOverlap`) and gives them a halo; not checked in a browser.
 - Step 7: delete the legacy files (App.tsx, RouteMap.tsx, lib/types.ts, ui/badge.tsx, ui/card.tsx) and the unused CSS listed by the step 4–6 agents: `.p-comparison`, `.p-route-*`, `.p-leg-*`, `.p-visit*`, `.p-main-fields`, `.p-places-grid`, `.p-search-actions`, `.p-missing-list`, `.p-purchases*`, `.p-timeline*`, `.p-segments`, `.p-inline`, `.p-airport-*`, `.p-fare-editor`, `.p-fare-components`, the `!important` rules; check whether AirportTransferTable.tsx and MissingFaresTable.tsx are still needed; README labels (spec I2); `index.html`.
 - Steps 4, 5 and 6 had no agent review and no browser QA agent (skipped for speed). Step 8 must run the full spec J list.
 - Step 4 had no agent review and no browser QA agent (skipped for speed). It was checked with the build, 62 tests and the browser (wide and 360 px, light and dark, both demo trips, sort, selection, Next steps actions).
@@ -90,6 +90,14 @@ Step 5–6 deviations (details in the commits and agent notes):
 - Transfer and airport-change fields stage on every change (so "Fix {k} values" can find invalid text); Esc restores the value from when the field got focus.
 - Connections between cities shows after a search even without gaps, so a connection can always be added.
 - Focus ids are now built by `airportChangeFieldId()` and `transferFieldId()` in `lib/drafts.ts`.
+
+Step 8 fix deviations (final verification):
+- Before a search, the closed group of airport transfers is "All directions ({n})", not "Airport transfers ({n} directions)": the section heading already says "Airport transfers".
+- Enter in an airport transfer price skips a blank "Highest price (optional)", so one Enter between prices moves to the next direction (spec J).
+- "Check more combinations" always recalculates (`POST /optimize {expand: true}`). Continuing a finished search could queue transit searches.
+- An airport transfer price in a currency without a rate shows a rate field in its direction, and the status "Needs an exchange rate · in {n} options". Next steps › Add rate focuses it when no Journey prices row has that currency.
+- Apply sends and removes only the drafts it can send now. Fare drafts outside the options ("Other drafts") and transfer drafts for another party size stay; the latter are not counted in the Apply bar.
+- The wide side panel is at most `100vh − 172px` high, so it stays below the header at the end of the page (the footer is below the workspace).
 
 ## Spec inconsistencies found
 

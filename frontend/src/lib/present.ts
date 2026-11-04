@@ -297,12 +297,12 @@ export function searchState({ invalid, dirty, saved, result, job }: {
   const stop: StripAction = { label: "Stop search", run: "stop" };
   const searchMore: StripAction = { label: "Search more", run: "continue" };
   const retry: StripAction = { label: "Retry failed searches", run: "continue" };
-  // Continuing a search with nothing pending or failed only raises the limit, so it spends no provider
-  // requests. The server refuses to continue a search after the search inputs changed (409).
+  // Always a recalculation with a higher limit (POST /optimize {expand: true}), never a search continuation: continuing a
+  // finished search can still queue transit searches when transit search was set up after the search ran.
   const secondary = !active && result?.optimization_complete === false ? {
     text: "Not all combinations were checked. Better options may exist.",
     tip: "Recalculates from saved data with a higher limit. No new searches.",
-    action: { label: "Check more combinations", run: job && !stale && pending === 0 && failed === 0 ? "continue" : "optimize" } as StripAction,
+    action: { label: "Check more combinations", run: "optimize" } as StripAction,
   } : null;
   const state = (id: string, tone: SearchState["tone"], text: string, actions: StripAction[] = [], extra: Partial<SearchState> = {}): SearchState => ({ id, tone, text, actions, secondary, ...extra });
 
@@ -766,7 +766,11 @@ export function validateDraft(draft: TripDraft): Record<string, string> {
   if (!draft.modes.length) errors.modes = "Choose at least one type of transport.";
   if (!draft.start_date || !draft.end_date) errors.dates = "Choose a start date and an end date.";
   else if (draft.end_date < draft.start_date) errors.dates = "The end date must be on or after the start date.";
-  else if ((Date.parse(draft.end_date) - Date.parse(draft.start_date)) / 86_400_000 > 365) errors.dates = "Choose up to 365 days.";
+  else {
+    // A date input can hold a 5-digit year, which is not a valid date.
+    const start = dayParts(draft.start_date), end = dayParts(draft.end_date);
+    if (!start || !end || (end.time - start.time) / 86_400_000 > 365) errors.dates = "Choose up to 365 days.";
+  }
   if (!draft.departure_start || !draft.departure_end) errors.departureWindow = "Enter both departure times.";
   else if (hhmm(draft.departure_end) <= hhmm(draft.departure_start)) errors.departureWindow = "The latest departure must be after the earliest.";
   if (draft.start_date === draft.end_date && draft.home_departure_earliest && draft.home_arrival_latest && hhmm(draft.home_arrival_latest) <= hhmm(draft.home_departure_earliest)) errors.homeTimes = "Be home after you leave home.";
@@ -930,7 +934,9 @@ export type TransferDirection = AirportTransferRow & {
   journeys: TransferJourney[];
   /** Journeys priced by a price the user set for that journey. */
   ownPrices: number;
-  /** "Price missing · in 9 options", "RM 130 for 2 adults" or "Not used now". */
+  /** Currencies of prices in options that can't be used without an exchange rate. */
+  rateCurrencies: string[];
+  /** "Price missing · in 9 options", "Needs an exchange rate · in 9 options", "RM 130 for 2 adults" or "Not used now". */
   status: string;
 };
 /**
@@ -939,7 +945,7 @@ export type TransferDirection = AirportTransferRow & {
  * the server's label order.
  */
 export function transferDirections(rows: AirportTransferRow[], routes: Route[], adults: number, rates: Record<string, number>): TransferDirection[] {
-  const uses = new Map(rows.map(row => [`${row.from_id}>${row.to_id}`, { journeys: new Map<string, TransferJourney>(), used: new Set<string>(), missing: new Set<string>() }]));
+  const uses = new Map(rows.map(row => [`${row.from_id}>${row.to_id}`, { journeys: new Map<string, TransferJourney>(), used: new Set<string>(), missing: new Set<string>(), rates: new Set<string>(), unpriced: false }]));
   for (const route of routes) {
     const offers = new Map(route.purchases.flatMap(offer => offer.movement_ids.map(id => [id, offer] as const)));
     for (const movement of route.movements) for (const charge of movement.charges) {
@@ -948,7 +954,10 @@ export function transferDirections(rows: AirportTransferRow[], routes: Route[], 
       const offer = offers.get(charge.id);
       if (!use.journeys.has(charge.id)) use.journeys.set(charge.id, { charge, movement, offer });
       use.used.add(route.id);
-      if (!offer || !isPriced(offer, rates)) use.missing.add(route.id);
+      if (offer && isPriced(offer, rates)) continue;
+      use.missing.add(route.id);
+      // A price in a currency without an exchange rate needs only the rate.
+      if (offer && offer.low !== null) use.rates.add(offer.currency); else use.unpriced = true;
     }
   }
   const rank = { missing: 0, priced: 1, unused: 2 };
@@ -964,7 +973,9 @@ export function transferDirections(rows: AirportTransferRow[], routes: Route[], 
       ...row, state, journeys,
       options: use.used.size, missing: use.missing.size,
       ownPrices: journeys.filter(journey => journey.offer?.source === "user").length,
-      status: state === "missing" ? `Price missing · in ${plural(use.missing.size, "option")}` : state === "unused" ? "Not used now" : `${amounts.join(", ")} for ${plural(adults, "adult")}`,
+      rateCurrencies: [...use.rates].sort(),
+      status: state === "missing" ? `${use.unpriced ? "Price missing" : "Needs an exchange rate"} · in ${plural(use.missing.size, "option")}`
+        : state === "unused" ? "Not used now" : `${amounts.join(", ")} for ${plural(adults, "adult")}`,
     };
   }).sort((a, b) => rank[a.state] - rank[b.state] || b.missing - a.missing);
 }

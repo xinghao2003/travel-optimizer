@@ -204,15 +204,20 @@ def price_path(path: list[Movement], offers: list[FareOffer], spec: TripSpec,
         # Every choice covers one component: choose per component from the last one back, with the keys of cover().
         lower = upper = 0
         selected = []
+        single = True
         uncertain = set()
         for entry in reversed(entries):
             offer, lo, hi = entry[3] if upper == INF else entry[2]
             lower += lo
             upper += hi
-            selected.append(offer.id)
+            selected.append(offer)
+            single = single and len(entry[0]) == 1
             uncertain.update(entry[4])
-        chosen_ids = set(selected)
-        chosen = [offer for entry in entries for offer, _, _ in entry[0] if offer.id in chosen_ids]
+        if single:
+            chosen = selected[::-1]
+        else:
+            chosen_ids = {offer.id for offer in selected}
+            chosen = [offer for entry in entries for offer, _, _ in entry[0] if offer.id in chosen_ids]
     else:
         indexes = {id: i for i, id in enumerate(keys)}
         # The choices that cover each component: its own offers, then the combined tickets that include it.
@@ -289,7 +294,7 @@ def _overnight(movement, spec):
     return start.date() != end.date()
 
 
-@dataclass
+@dataclass(slots=True)
 class Label:
     city: str
     phase: int
@@ -313,9 +318,12 @@ class Label:
 
     def but(self, **changes):
         """A copy with these fields changed; dataclasses.replace is too slow for the search loop."""
-        copy = object.__new__(Label)
-        copy.__dict__.update(self.__dict__)
-        copy.__dict__.update(changes)
+        copy = Label(self.city, self.phase, self.mask, self.arrival, self.path, self.stays,
+                     self.reward, self.own_location, self.own_used, self.rental_pickup,
+                     self.rental_start, self.charges, self.departure_gateway, self.arrival_gateway,
+                     self.price, self.return_mask, self.revisiting, self.history, self.stay_hours)
+        for name, value in changes.items():
+            setattr(copy, name, value)
         return copy
 
 
@@ -507,8 +515,10 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
         stay_hours = current.stay_hours
         if current.reward:
             hours = (dep-current.arrival).total_seconds()/3600
-            stays = [*stays, {"place_id": current.city, "arrival": current.arrival.isoformat(),
-                              "departure": dep.isoformat(), "hours": hours}]
+            # Keep timestamps shared with the schedule while exploring labels;
+            # only returned routes need their ISO strings.
+            stays = [*stays, {"place_id": current.city, "arrival": current.arrival,
+                              "departure": dep, "hours": hours}]
             stay_hours += hours
         reward = current.phase in {1, 2} and target in required
         mask = current.mask | ((1 << required[target][0]) if reward else 0)
@@ -540,7 +550,7 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
                 commitments = [c for c in spec.commitments if c.place_id == label.city]
                 if label.arrival+timedelta(hours=minimum) > end or any(label.arrival > c.start.astimezone(UTC) or end < c.end.astimezone(UTC) for c in commitments):
                     continue
-                stays = [*label.stays, {"place_id": label.city, "arrival": label.arrival.isoformat(), "departure": end.isoformat(), "hours": (end-label.arrival).total_seconds()/3600}]
+                stays = [*label.stays, {"place_id": label.city, "arrival": label.arrival, "departure": end, "hours": (end-label.arrival).total_seconds()/3600}]
                 closed = rental_close(label.but(stays=stays, reward=False, arrival=end), end)
                 if closed is not None and (not closed.own_used or closed.own_location == spec.home.id):
                     quote(closed)
@@ -668,7 +678,8 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
             if break_even is not None:
                 entry["break_even_myr"] = break_even
         results.append({"id": id, "departure_gateway": label.departure_gateway, "arrival_gateway": label.arrival_gateway,
-                        "movements": [m.model_dump(mode="json") for m in label.path], "stays": label.stays,
+                        "movements": [m.model_dump(mode="json") for m in label.path],
+                        "stays": [{**s, "arrival": s["arrival"].isoformat(), "departure": s["departure"].isoformat()} for s in label.stays],
                         "stay_hours": round(total_stay, 4), "travel_hours": round(sum(m.duration_minutes for m in label.path)/60, 4),
                         "total_cost_myr": price["total_cost_myr"], "cost_low_myr": price["cost_low_myr"],
                         "cost_high_myr": price["cost_high_myr"], "estimated": price["estimated"] or any(m.schedule_estimated for m in label.path),

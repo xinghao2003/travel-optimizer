@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import itertools
+import json
 import tempfile
 import unittest
 import time as wall_clock
@@ -134,6 +135,16 @@ class DiscoveryDateTests(unittest.TestCase):
 
 
 class OptimizerTests(unittest.TestCase):
+    def test_open_ended_itinerary_stays_keep_json_timestamps(self):
+        spec = trip()
+        out = movement("out", HOME, A, dt(10), dt(10, 10))
+        result = optimize(spec, [out], [fare("out", 10)], [], finish_at_home=False)
+        [route] = result["routes"]
+        [stay] = route["stays"]
+        self.assertEqual(stay["arrival"], dt(10, 10).isoformat())
+        self.assertEqual(stay["departure"], bounds(spec)[1].isoformat())
+        self.assertEqual(json.loads(json.dumps(result)), result)
+
     def test_ticket_candidates_deduplicate_schedules_but_preserve_dates(self):
         spec = trip(date_mode="flexible")
         moves = [movement("early", HOME, A, dt(10), dt(10, 10)),

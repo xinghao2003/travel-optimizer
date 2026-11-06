@@ -57,6 +57,12 @@ class PlannerStore:
                        (collection, id, json.dumps(compact_trip(payload) if collection == "trips" else payload, default=str, allow_nan=False), time.time()))
         return payload
 
+    def trip_spec(self, id: str):
+        """Read current settings without decoding the saved graph and results."""
+        with self._lock, self._connect() as db:
+            row = db.execute("SELECT json_extract(payload, '$.spec') FROM records WHERE collection='trips' AND id=?", (id,)).fetchone()
+            return json.loads(row[0]) if row else None
+
     def list(self, collection: str):
         with self._lock, self._connect() as db:
             rows = db.execute("SELECT payload FROM records WHERE collection=? ORDER BY updated DESC", (collection,)).fetchall()

@@ -484,6 +484,17 @@ class PersistenceAndJobsTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.temp.cleanup)
         self.db = PlannerStore(Path(self.temp.name)/"planner.sqlite3")
 
+    async def test_spec_only_reads_follow_saved_changes_and_restart(self):
+        record = self.db.new_trip(trip().model_dump(mode="json"))
+        self.assertEqual(self.db.trip_spec(record["id"]), record["spec"])
+        record["spec"]["name"] = "Updated trip"
+        record["snapshot"] = {"movements": [{"id": "saved-movement"}]}
+        self.db.put("trips", record["id"], record)
+        restarted = PlannerStore(self.db.path)
+        self.assertEqual(restarted.trip_spec(record["id"]), record["spec"])
+        self.assertEqual(restarted.get("trips", record["id"])["snapshot"], record["snapshot"])
+        self.assertIsNone(restarted.trip_spec("missing"))
+
     async def test_multicity_manual_quote_uses_no_request_or_cache_hit(self):
         spec = trip()
         record = self.db.new_trip(spec.model_dump(mode="json"))
@@ -600,6 +611,22 @@ class PersistenceAndJobsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(job["queue"]), 1)
         self.assertEqual(len(job["bundle_links"]), 1)
         self.assertEqual(job["manual_quote_queries"], 1)
+
+    async def test_publish_reuses_shared_normalization_with_current_coverage(self):
+        import app.planner_discovery as discovery
+        spec = trip(modes=["rail"])
+        record = self.db.new_trip(spec.model_dump(mode="json"))
+        snapshot = {"revision": 1, "movements": [movement("out", HOME, A, dt(10), dt(10, 10), mode="rail").model_dump(mode="json")],
+                    "offers": [], "roads": {}, "coverage": {}}
+        job = {"id": "normalization-test", "trip_id": record["id"], "discovery_key": spec.discovery_key(),
+               "snapshot": snapshot, "queue": [], "cursor": 0, "requests": 0, "cache_hits": 0,
+               "outcomes": {}, "messages": [], "bundle_links": []}
+        manager = DiscoveryManager(self.db)
+        with patch.object(discovery, "shareable_snapshot", wraps=discovery.shareable_snapshot) as normalized:
+            await manager.publish(job, spec, final=True)
+            self.assertEqual(normalized.call_count, 1)
+        expected = discovery.shareable_snapshot(snapshot, spec)
+        self.assertEqual(self.db.get("graphs", job["discovery_key"]), expected)
 
     async def test_publish_reuses_unchanged_graph_but_recalculates_new_fares(self):
         spec = trip(modes=["rail"])

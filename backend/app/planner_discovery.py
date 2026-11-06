@@ -943,7 +943,8 @@ class DiscoveryManager:
         snapshot["coverage"]["source_gaps"] = source_gaps
         snapshot["coverage"]["unresolved_movements"] = [{"id": m["id"], "from_id": m["from_id"], "to_id": m["to_id"], "assumptions": m["assumptions"]} for m in snapshot["movements"] if not m.get("usable", True)]
         logger.debug("planner graph.persist job=%s elapsed=%.2fs movements=%d", job["id"], clock.monotonic()-started, len(snapshot["movements"]))
-        self.store.put("graphs", job["discovery_key"], shareable_snapshot(snapshot, spec))
+        shared_snapshot = shareable_snapshot(snapshot, spec)
+        self.store.put("graphs", job["discovery_key"], shared_snapshot)
         if TripSpec.model_validate(trip["spec"]).discovery_key() != job["discovery_key"]:
             job["status"] = "superseded"
             return
@@ -1036,7 +1037,12 @@ class DiscoveryManager:
         snapshot["coverage"]["discovery_complete"] = (discovery_complete and job["cursor"] == len(job["queue"])
                                                         and not any(link["status"] == "requires_manual_quote" for link in job["bundle_links"]))
         logger.debug("planner graph.persist job=%s elapsed=%.2fs movements=%d", job["id"], clock.monotonic()-started, len(snapshot["movements"]))
-        self.store.put("graphs", job["discovery_key"], shareable_snapshot(snapshot, spec))
+        # Solving uses a copy of the graph; only coverage and ticket-query
+        # metadata changed above. Reuse its trip-independent normalization.
+        unresolved = shared_snapshot["coverage"]["unresolved_movements"]
+        shared_snapshot["coverage"] = copy.deepcopy(snapshot["coverage"])
+        shared_snapshot["coverage"]["unresolved_movements"] = unresolved
+        self.store.put("graphs", job["discovery_key"], shared_snapshot)
         latest = self.store.get("trips", trip["id"])
         if TripSpec.model_validate(latest["spec"]).discovery_key() == job["discovery_key"]:
             trip_snapshot = latest.get("snapshot") or copy.deepcopy(snapshot)
@@ -1064,8 +1070,8 @@ class DiscoveryManager:
                 if job["id"] in self.cancelled_jobs:
                     job["status"] = "cancelled"
                     break
-                current = self.store.get("trips", job["trip_id"])
-                if TripSpec.model_validate(current["spec"]).discovery_key() != job["discovery_key"]:
+                current_spec = self.store.trip_spec(job["trip_id"])
+                if TripSpec.model_validate(current_spec).discovery_key() != job["discovery_key"]:
                     job["status"] = "superseded"
                     break
                 task = job["queue"][job["cursor"]]

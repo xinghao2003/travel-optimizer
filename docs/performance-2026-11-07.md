@@ -27,9 +27,15 @@ A controlled publication replay used the real complete solver and SQLite copies,
 
 - **Whole-path and movement-component caches:** screened and rejected. They preserved results but were slower; the accepted implementation does not retain an additional path-price cache.
 - **Repeated recalculation:** cost-based batching is accepted above. Persistent solver-state continuation across changing graphs remains a larger design option; the implemented change retains complete recalculation semantics.
-- **Persistence:** under investigation. Jobs are about 5 MB and rewritten per processed task. One final publication performed two graph and three trip writes. Measure serialization/checkpoint work and remove redundant writes while retaining durable collected work and current revision checks.
+- **Persistence:** settings-only reads and shared-graph normalization reuse are accepted below. Compact JSON was rejected as a latency optimization: it reduced JSON characters about 6.4%, but a three-record write/read round trip did not become faster. Per-query durable job checkpoints are retained.
 - **Provider throughput:** under investigation. Query operations historically took 293 seconds; 17 round-trip tasks made 178 conditional-return calls. Explore bounded overlap with existing provider limits and stable ordering. Preserve request budgets, coverage, cancellation, and deadline behavior.
 - **State cardinality:** compact storage is measured above. Stronger pruning remains an experiment requiring evidence that merged states have the same future bundle eligibility and fare uncertainty. Most existing dominance buckets are singleton; faster dominance comparisons alone have little measured headroom.
+
+## Storage and publication processing
+
+Discovery's per-query superseding check now reads only `spec` from SQLite rather than decoding a roughly 5.7-million-character trip record. On a private copy, twelve reads per method had median times of 28.9 ms for the full record and 12.2 ms for the spec projection. SQLite still parses the stored JSON; the improvement avoids materializing the graph/results in Python. `json_extract` returns a nested object as JSON text, as documented by [SQLite](https://www.sqlite.org/json1.html). No schema migration is needed.
+
+A publication now builds the trip-independent shared graph once, then updates its coverage metadata before the final cache write. Both existing graph writes and all job checkpoints remain, preserving collected work before a potentially long solve. The shared graph's separately normalized unresolved-movement list is retained. A controlled replay with a fixed real solver response produced identical payloads for every database record, reducing shared normalization calls from two to one (0.326s to 0.162s in the sample). Total publication work in that sample was 1.14s versus 0.96s; this is a stage sample, not a general latency claim. Evidence is in `data/diagnostics/2026-11-07-publication/`. The full suite passed 101 tests.
 
 ## Scope of the measurements
 

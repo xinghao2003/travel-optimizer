@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from functools import lru_cache
+from itertools import combinations
 from operator import itemgetter
 from zoneinfo import ZoneInfo
 
@@ -75,12 +76,15 @@ def _rule_offer(component: str, movement: Movement, distance, mode, spec, rules,
 
 
 def _fare_index(offers: list[FareOffer], spec: TripSpec):
-    """Single-journey offers by journey id, the multi-journey offers with the positions of each by journey id, their
-    journey-id sets, and a cache of the priced choices per fare component."""
+    """Index single fares, two-journey tickets, and larger tickets separately.
+
+    The component-choice cache belongs to this pricing run.
+    """
     direct = defaultdict(list)
     bundles = []
-    bundle_sets = []
     bundles_by_id = defaultdict(list)
+    bundle_pairs = defaultdict(list)
+    pair_ids = set()
     for offer in offers:
         if not offer.validated or offer.adults is not None and offer.adults != spec.adults:
             continue
@@ -88,11 +92,14 @@ def _fare_index(offers: list[FareOffer], spec: TripSpec):
             direct[offer.movement_ids[0]].append(offer)
         elif len(offer.movement_ids) > 1:
             ids = set(offer.movement_ids)
-            for id in ids:
-                bundles_by_id[id].append(len(bundles))
+            if len(ids) == 2:
+                bundle_pairs[tuple(sorted(ids))].append(len(bundles))
+                pair_ids.update(ids)
+            else:
+                for id in ids:
+                    bundles_by_id[id].append(len(bundles))
             bundles.append(offer)
-            bundle_sets.append(ids)
-    return direct, bundles, bundles_by_id, bundle_sets, {}
+    return direct, bundles, bundles_by_id, {}, bundle_pairs, pair_ids
 
 
 def _component_choices(id, movement, charge, direct_offers, spec, rules):
@@ -151,7 +158,7 @@ _cover_key = itemgetter(1, 0, 2)
 def price_path(path: list[Movement], offers: list[FareOffer], spec: TripSpec,
                rules: list[PricingRule], extra: list[Charge] | None = None, *, fare_index=None, dump=True) -> dict:
     # `dump=False` keeps the purchases as FareOffer objects: optimize converts only the routes it returns.
-    direct_offers, bundle_offers, bundles_by_id, bundle_sets, resolved = fare_index if fare_index is not None else _fare_index(offers, spec)
+    direct_offers, bundle_offers, bundles_by_id, resolved, bundle_pairs, pair_ids = fare_index if fare_index is not None else _fare_index(offers, spec)
     components: dict[str, tuple[Movement, Charge | None]] = {}
     for m in path:
         components[m.id] = (m, None)
@@ -176,24 +183,23 @@ def price_path(path: list[Movement], offers: list[FareOffer], spec: TripSpec,
             diagnostics.append(entry[1])
     # Only an offer whose journeys are all in the path (or the template of one) can cover it; keep the offers' order.
     aliases = {m.template_id: m.id for m in path if m.template_id}
-    if aliases:
-        indexes = {id: i for i, id in enumerate(keys)}
-        positions = set()
+    # A short path has few journey pairs, even when each journey has many
+    # alternative round-trip offers. Look up those pairs instead of scanning
+    # every offer that contains each journey.
+    positions = set()
+    available = sorted({id for id in (*keys, *aliases) if id in pair_ids})
+    for pair in combinations(available, 2):
+        positions.update(bundle_pairs.get(pair, ()))
+    if bundles_by_id:
         for id in (*keys, *aliases):
             positions.update(bundles_by_id.get(id, ()))
-        bundled = []
-        for position in sorted(positions):
-            offer = bundle_offers[position]
-            if any(id in aliases for id in offer.movement_ids):
-                offer = offer.model_copy(update={"movement_ids": [aliases.get(id, id) for id in offer.movement_ids]})
-            if set(offer.movement_ids).issubset(indexes):
-                bundled.append(offer)
-    else:
-        hits = {}
-        for id in keys:
-            for position in bundles_by_id.get(id, ()):
-                hits[position] = hits.get(position, 0)+1
-        bundled = [bundle_offers[position] for position in sorted(position for position, count in hits.items() if count == len(bundle_sets[position]))]
+    bundled = []
+    for position in sorted(positions):
+        offer = bundle_offers[position]
+        if aliases and any(id in aliases for id in offer.movement_ids):
+            offer = offer.model_copy(update={"movement_ids": [aliases.get(id, id) for id in offer.movement_ids]})
+        if set(offer.movement_ids).issubset(components):
+            bundled.append(offer)
     if not bundled:
         # Every choice covers one component: choose per component from the last one back, with the keys of cover().
         lower = upper = 0

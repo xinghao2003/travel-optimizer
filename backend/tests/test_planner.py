@@ -251,6 +251,39 @@ class OptimizerTests(unittest.TestCase):
         covered = [id for o in price["purchases"] for id in o["movement_ids"]]
         self.assertEqual(len(covered), len(set(covered)))
 
+    def test_pair_and_larger_tickets_require_complete_coverage(self):
+        ms = [movement("one", HOME, A, dt(10), dt(10, 10)),
+              movement("two", A, B, dt(11), dt(11, 10)),
+              movement("three", B, HOME, dt(12), dt(12, 10))]
+        spec = trip([Visit(place=A), Visit(place=B)])
+        offers = [fare(m.id, 100) for m in ms] + [
+            fare("pair", 50, ["two", "one"], kind="round-trip"),
+            fare("whole", 80, ["three", "one", "two"], kind="multi-city"),
+            fare("invalid", 1, ["one", "two"], validated=False),
+            fare("other-party", 1, ["one", "two"], adults=2),
+        ]
+        partial = price_path(ms[:1], offers, spec, [])
+        self.assertEqual(partial["total_cost_myr"], 100)
+        pair = price_path(ms[:2], offers, spec, [])
+        self.assertEqual(pair["total_cost_myr"], 50)
+        self.assertEqual([o["id"] for o in pair["purchases"]], ["fare:pair"])
+        whole = price_path(ms, offers, spec, [])
+        self.assertEqual(whole["total_cost_myr"], 80)
+        self.assertEqual([o["id"] for o in whole["purchases"]], ["fare:whole"])
+
+    def test_pair_ticket_aliases_preserve_equal_price_purchase_order(self):
+        ms = [movement("one-variant", HOME, A, dt(10), dt(10, 10), template_id="one"),
+              movement("two", A, B, dt(11), dt(11, 10)),
+              movement("three-variant", B, HOME, dt(12), dt(12, 10), template_id="three")]
+        offers = [fare("two", 20),
+                  fare("a-pair", 60, ["three", "one"], kind="round-trip"),
+                  fare("z-whole", 80, ["one", "two", "three"], kind="multi-city")]
+        price = price_path(ms, offers, trip([Visit(place=A), Visit(place=B)]), [],
+                           [Charge(id="rental-fee", kind="Rental", mode="rental", low=5, high=5)])
+        self.assertEqual(price["total_cost_myr"], 85)
+        self.assertEqual([o["id"] for o in price["purchases"]], ["fare:two", "charge:rental-fee", "fare:a-pair"])
+        self.assertEqual(price["purchases"][-1]["movement_ids"], ["three-variant", "one-variant"])
+
     def test_unknown_and_ranges_not_free_and_budget_uncertainty(self):
         spec = trip(budget_myr=150)
         ms = [movement("out", HOME, A, dt(10), dt(10, 10)), movement("back", A, HOME, dt(12, 17), dt(12, 18))]

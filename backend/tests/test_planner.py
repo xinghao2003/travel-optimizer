@@ -677,6 +677,48 @@ class PersistenceAndJobsTests(unittest.IsolatedAsyncioTestCase):
             await manager.publish(job, spec)
             self.assertEqual(manager.recalculate.await_count, 3)
 
+    async def test_solve_batching_tracks_discovery_time_and_caps_query_count(self):
+        import app.planner_discovery as discovery
+        spec = trip(modes=["rail"])
+        record = self.db.new_trip(spec.model_dump(mode="json"))
+        snapshot = {"revision": 1, "movements": [m.model_dump(mode="json") for m in [
+            movement("out", HOME, A, dt(10), dt(10, 10), mode="rail"),
+            movement("back", A, HOME, dt(12, 16), dt(12, 17), mode="rail")]],
+            "offers": [fare("out", 10).model_dump(mode="json"), fare("back", 10).model_dump(mode="json")],
+            "roads": {}, "coverage": {}}
+        job = {"id": "adaptive-test", "trip_id": record["id"], "discovery_key": spec.discovery_key(), "status": "running",
+               "snapshot": snapshot, "queue": [{"key": str(i)} for i in range(40)], "cursor": 4,
+               "requests": 0, "cache_hits": 0, "outcomes": {}, "messages": [], "bundle_links": []}
+        manager = DiscoveryManager(self.db)
+        elapsed, duration = [0.0], [2.0]
+        original = manager.recalculate
+        async def solve(*args, **kwargs):
+            result = await original(*args, **kwargs)
+            elapsed[0] += duration[0]
+            return result
+        manager.recalculate = AsyncMock(side_effect=solve)
+        async def publish(cursor, seconds=0, final=False):
+            elapsed[0] += seconds
+            job["cursor"] = cursor
+            snapshot["revision"] += 1
+            snapshot["offers"][0].update(low=cursor, high=cursor)
+            await manager.publish(job, spec, final=final)
+        with patch.object(discovery, "clock", SimpleNamespace(monotonic=lambda: elapsed[0])), patch.object(discovery.transitous, "contact_url", "https://example.test"):
+            await publish(4)
+            await publish(8, seconds=.5)
+            self.assertEqual(manager.recalculate.await_count, 1)  # A two-second solve still batches quick queries.
+            await publish(12, seconds=2)
+            self.assertEqual(manager.recalculate.await_count, 2)  # Enough discovery time has elapsed.
+            await publish(16)
+            self.assertEqual(manager.recalculate.await_count, 2)
+            await publish(28)
+            self.assertEqual(manager.recalculate.await_count, 3)  # Sixteen queries always permit another solve.
+            duration[0] = .25
+            await publish(32, final=True)
+            await publish(36)
+            self.assertEqual(manager.recalculate.await_count, 5)  # Sub-second solves publish every four queries.
+            self.assertEqual(self.db.get("trips", record["id"])["result"]["routes"][0]["total_cost_myr"], 46)
+
     async def test_restart_preserves_rules_edits_and_recovers_jobs(self):
         record = self.db.new_trip(trip().model_dump(mode="json"))
         self.db.put("rules", "rule", {"id": "rule", "name": "Persistent"})

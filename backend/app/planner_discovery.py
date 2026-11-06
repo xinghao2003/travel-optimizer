@@ -961,14 +961,16 @@ class DiscoveryManager:
                            snapshot.get("roads", {}), snapshot.get("label_limit"))
         cadence = self.optimization_cadence.get(job["id"])
         controls = (trip["revision"], pricing_rules, snapshot.get("label_limit"))
-        if (not final and job.get("status") == "running" and cadence and cadence["seconds"] >= 5
+        if (not final and job.get("status") == "running" and cadence and cadence["seconds"] >= 1
+                and clock.monotonic()-cadence["finished"] < cadence["seconds"]
                 and cadence["controls"] == controls and trip.get("result")
                 and self.published_inputs.get(job["id"]) != inputs
                 and job["cursor"]-cadence["cursor"] < 16):
-            # Keep coverage/current graph available every four queries. Larger
-            # solves wait for a batch; final/paused publishes always solve, and
-            # manual edits or a changed allowance bypass this batching.
-            logger.debug("planner optimize.deferred job=%s cursor=%d next_cursor=%d reason=batch_changed_graph", job["id"], job["cursor"], cadence["cursor"]+16)
+            # Keep coverage/current graph available every four queries. Allow
+            # discovery at least as much time as the previous solve, capped at
+            # sixteen queries. Final publishes and user changes bypass batching.
+            logger.debug("planner optimize.deferred job=%s cursor=%d max_cursor=%d wait_seconds=%.2f reason=amortize_solve", job["id"], job["cursor"], cadence["cursor"]+16,
+                         max(0, cadence["seconds"]-(clock.monotonic()-cadence["finished"])))
             return
         if self.published_inputs.get(job["id"]) == inputs and trip.get("result"):
             logger.debug("planner optimize.reuse job=%s reason=unchanged_inputs", job["id"])
@@ -981,7 +983,7 @@ class DiscoveryManager:
             solve_started = clock.monotonic()
             result = await self.recalculate(trip["id"], snapshot, job_id=job["id"])
             self.optimization_cadence[job["id"]] = {"cursor": job["cursor"], "seconds": clock.monotonic()-solve_started,
-                                                     "controls": controls}
+                                                     "controls": controls, "finished": clock.monotonic()}
         known = {t["key"] for t in job["queue"]} | {stable_id(link["kind"], link["legs"]) for link in job["bundle_links"]}
         # Include dominated complete histories too: an undiscovered bundle can
         # make them cheaper than the current one-way frontier.

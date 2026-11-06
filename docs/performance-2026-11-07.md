@@ -17,10 +17,16 @@ The pair index retrieves tickets for the journey pairs actually present in a pat
 
 Local evidence: `2026-11-07-path-pricing/` and `2026-11-07-solver-state/`, each under `data/diagnostics/`. The state experiment verifies that the production AST matches the benchmarked candidate; source formatting/comments differ. Test logs contain SQLite ResourceWarnings but no failures.
 
+## Recalculation cadence
+
+The fixed five-second threshold could stop batching after the solver became faster, causing more frequent complete recalculation. The accepted policy batches solves taking at least one second until elapsed work outside the last solve matches that solve's cost, with a maximum of sixteen queries between solves. Coverage is still published every four queries. Final publication, manual trip/rule edits, and changed solver allowances bypass batching; sub-second solves retain the four-query interval.
+
+A controlled publication replay used the real complete solver and SQLite copies, with eight changes to a fare and a simulated 1.2 seconds of provider work per publication. The old policy performed eight solves in 36.92 seconds of actual replay work; the new policy performed four solves in 20.74 seconds. The final solver response was identical. This is evidence for the scheduling policy on a controlled workload, not a new live-search speed measurement. Evidence is in `data/diagnostics/2026-11-07-publication/`. The final suite passed 99 tests, including the sub-five-second case, elapsed-time trigger, sixteen-query cap, final flushing, and user-edit bypass.
+
 ## Rejected or unfinished directions
 
 - **Whole-path and movement-component caches:** screened and rejected. They preserved results but were slower; the accepted implementation does not retain an additional path-price cache.
-- **Repeated recalculation:** under investigation. Discovery historically ran 17 solves, taking 135 seconds. The fixed five-second threshold for batching can stop batching when a faster solver falls below that cutoff. Test cost-based scheduling before changing it; final publication, manual edits, and pause/cancel must retain current results.
+- **Repeated recalculation:** cost-based batching is accepted above. Persistent solver-state continuation across changing graphs remains a larger design option; the implemented change retains complete recalculation semantics.
 - **Persistence:** under investigation. Jobs are about 5 MB and rewritten per processed task. One final publication performed two graph and three trip writes. Measure serialization/checkpoint work and remove redundant writes while retaining durable collected work and current revision checks.
 - **Provider throughput:** under investigation. Query operations historically took 293 seconds; 17 round-trip tasks made 178 conditional-return calls. Explore bounded overlap with existing provider limits and stable ordering. Preserve request budgets, coverage, cancellation, and deadline behavior.
 - **State cardinality:** compact storage is measured above. Stronger pruning remains an experiment requiring evidence that merged states have the same future bundle eligibility and fare uncertainty. Most existing dominance buckets are singleton; faster dominance comparisons alone have little measured headroom.

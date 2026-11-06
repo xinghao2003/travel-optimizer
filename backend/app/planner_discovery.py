@@ -1081,7 +1081,10 @@ class DiscoveryManager:
                     outcome, used_request = await self.fetch(task, spec, job["snapshot"])
                 except Exception as exc:
                     outcome, used_request = {"status": "failed", "message": f"{type(exc).__name__}: {str(exc)[:180]}"}, True
-                logger.debug("planner query.done job=%s kind=%s status=%s elapsed=%.2fs request=%s manual_only=%s", job["id"], task["kind"], outcome["status"], clock.monotonic()-task_started, used_request, outcome.get("automatic_query_skipped", False))
+                diagnostics = outcome.get("diagnostics", {}) if used_request else {}
+                logger.debug("planner query.done job=%s kind=%s status=%s elapsed=%.2fs request=%s manual_only=%s flight_initial=%s flight_returns=%s initial_seconds=%s return_seconds=%s", job["id"], task["kind"], outcome["status"], clock.monotonic()-task_started, used_request, outcome.get("automatic_query_skipped", False),
+                             diagnostics.get("initial_requests", 0 if not used_request else None), diagnostics.get("return_requests", 0 if not used_request else None),
+                             diagnostics.get("initial_elapsed_seconds"), diagnostics.get("return_elapsed_seconds"))
                 job["cursor"] += 1
                 job["batch_requests"] += int(used_request)
                 job["requests"] += int(used_request)

@@ -3,9 +3,10 @@ from __future__ import annotations
 import unittest
 from datetime import time
 from unittest.mock import patch
+from types import SimpleNamespace
 
 from fast_flights.model import Airport, CarbonEmission, Flights, SimpleDatetime, SingleFlight
-from app.planner_providers import fetch_flights, flight_query, selected_outbound_query
+from app.planner_providers import complete_round_trip_rows, fetch_flights, flight_query, selected_outbound_query
 
 
 def segment(origin, destination, day, hour=10):
@@ -44,6 +45,33 @@ class RoundTripSelectionTests(unittest.TestCase):
         self.assertEqual(len(result["options"][0]["journeys"]), 2)
         self.assertEqual(get.call_count, 2)
         self.assertNotEqual(get.call_args_list[0].args[0].to_bytes(), get.call_args_list[1].args[0].to_bytes())
+        self.assertIs(get.call_args_list[0].kwargs["integration"], get.call_args_list[1].kwargs["integration"])
+
+    def test_initial_and_return_pages_share_one_client_and_keep_query_parameters(self):
+        pages = [[row([segment("KUL", "SIN", 5)], 100, OUTBOUND)],
+                 [row([segment("SIN", "KUL", 11)], 450)]]
+        with patch("app.planner_providers._install_price_tolerant_parser"), patch("fast_flights.fetcher.parse", side_effect=pages), patch("primp.Client") as factory:
+            client = factory.return_value.__enter__.return_value
+            client.get.return_value = SimpleNamespace(text="flight html")
+            result = fetch_flights(LEGS, 1, "round-trip", time(0), time(23, 59))
+        factory.assert_called_once()
+        factory.return_value.__exit__.assert_called_once()
+        self.assertEqual(client.get.call_count, 2)
+        first, second = [call.kwargs["params"] for call in client.get.call_args_list]
+        self.assertEqual(first["curr"], "MYR")
+        self.assertEqual(first["hl"], second["hl"])
+        self.assertNotEqual(first["tfs"], second["tfs"])
+        self.assertEqual(result["options"][0]["price"], 450)
+        self.assertEqual(result["diagnostics"]["initial_requests"], 1)
+        self.assertEqual(result["diagnostics"]["return_requests"], 1)
+
+    def test_initial_fetch_failure_releases_the_client(self):
+        with patch("app.planner_providers._install_price_tolerant_parser"), patch("primp.Client") as factory:
+            factory.return_value.__enter__.return_value.get.side_effect = RuntimeError("connection failed")
+            result = fetch_flights(LEGS[:1], 1, "one-way", time(0), time(23, 59))
+        factory.return_value.__exit__.assert_called_once()
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("connection failed", result["message"])
 
     def test_wrong_date_or_wrong_direction_never_gets_a_bundle_price(self):
         outbound = row([segment("KUL", "SIN", 5)], 100, OUTBOUND)
@@ -64,6 +92,22 @@ class RoundTripSelectionTests(unittest.TestCase):
         result, get = self.fetch([[outbound, outbound], [row([segment("SIN", "KUL", 11)], 450)]])
         self.assertEqual(get.call_count, 2)
         self.assertEqual(len(result["options"]), 1)
+
+    def test_return_deadline_keeps_requests_serial_and_reports_unchecked_choices(self):
+        elapsed = [0.0]
+        outbound = [row([segment("KUL", "SIN", 5)], 100,
+                        (("KUL", "2027-03-05", "SIN", "SQ", str(100+index)),)) for index in range(6)]
+        def get(query):
+            elapsed[0] += 10
+            return [row([segment("SIN", "KUL", 11)], 450)]
+        query = flight_query(LEGS, 1, "round-trip", time(0), time(23, 59))
+        with patch("app.planner_providers.clock.monotonic", side_effect=lambda: elapsed[0]):
+            completed, details = complete_round_trip_rows(query, outbound, get)
+        self.assertEqual(len(completed), 3)
+        self.assertEqual(details["return_requests"], 3)
+        self.assertEqual(details["outbound_choices_checked"], 3)
+        self.assertEqual(details["return_elapsed_seconds"], 30)
+        self.assertIn("time limit", details["return_errors"][0])
 
     def test_unknown_return_price_stays_unknown(self):
         result, _ = self.fetch([[row([segment("KUL", "SIN", 5)], 100, OUTBOUND)],

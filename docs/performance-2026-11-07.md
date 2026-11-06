@@ -23,19 +23,43 @@ The fixed five-second threshold could stop batching after the solver became fast
 
 A controlled publication replay used the real complete solver and SQLite copies, with eight changes to a fare and a simulated 1.2 seconds of provider work per publication. The old policy performed eight solves in 36.92 seconds of actual replay work; the new policy performed four solves in 20.74 seconds. The final solver response was identical. This is evidence for the scheduling policy on a controlled workload, not a new live-search speed measurement. Evidence is in `data/diagnostics/2026-11-07-publication/`. The final suite passed 99 tests, including the sub-five-second case, elapsed-time trigger, sixteen-query cap, final flushing, and user-edit bypass.
 
-## Rejected or unfinished directions
+## Rejected experiments and larger design options
 
 - **Whole-path and movement-component caches:** screened and rejected. They preserved results but were slower; the accepted implementation does not retain an additional path-price cache.
 - **Repeated recalculation:** cost-based batching is accepted above. Persistent solver-state continuation across changing graphs remains a larger design option; the implemented change retains complete recalculation semantics.
 - **Persistence:** settings-only reads and shared-graph normalization reuse are accepted below. Compact JSON was rejected as a latency optimization: it reduced JSON characters about 6.4%, but a three-record write/read round trip did not become faster. Per-query durable job checkpoints are retained.
-- **Provider throughput:** under investigation. Query operations historically took 293 seconds; 17 round-trip tasks made 178 conditional-return calls. Explore bounded overlap with existing provider limits and stable ordering. Preserve request budgets, coverage, cancellation, and deadline behavior.
-- **State cardinality:** compact storage is measured above. Stronger pruning remains an experiment requiring evidence that merged states have the same future bundle eligibility and fare uncertainty. Most existing dominance buckets are singleton; faster dominance comparisons alone have little measured headroom.
+- **Provider throughput:** speculative concurrency was screened and not applied because it changes the amount of provider work under the same time window. Connection reuse is accepted below.
+- **State cardinality:** compact storage is measured above. Stronger pruning was not applied: merging histories requires proof of equal future bundle eligibility and fare uncertainty. With 99.4% singleton buckets and less than 1% profile time in dominance comparisons, changing the comparison data structure has little measured headroom. The accepted memory change preserves all state distinctions.
 
 ## Storage and publication processing
 
 Discovery's per-query superseding check now reads only `spec` from SQLite rather than decoding a roughly 5.7-million-character trip record. On a private copy, twelve reads per method had median times of 28.9 ms for the full record and 12.2 ms for the spec projection. SQLite still parses the stored JSON; the improvement avoids materializing the graph/results in Python. `json_extract` returns a nested object as JSON text, as documented by [SQLite](https://www.sqlite.org/json1.html). No schema migration is needed.
 
 A publication now builds the trip-independent shared graph once, then updates its coverage metadata before the final cache write. Both existing graph writes and all job checkpoints remain, preserving collected work before a potentially long solve. The shared graph's separately normalized unresolved-movement list is retained. A controlled replay with a fixed real solver response produced identical payloads for every database record, reducing shared normalization calls from two to one (0.326s to 0.162s in the sample). Total publication work in that sample was 1.14s versus 0.96s; this is a stage sample, not a general latency claim. Evidence is in `data/diagnostics/2026-11-07-publication/`. The full suite passed 101 tests.
+
+## Provider transport
+
+The initial flight query and its conditional-return pages now share one scoped HTTP client through the documented [fast-flights FetchIntegration](https://github.com/aweirddev/flights/blob/dev/_autodocs/api-reference/fetcher.md). Browser settings match pinned fast-flights 3.1.0; primp 2.0.1 is now declared directly and no installed package versions changed. Client cleanup is scoped to each query. Calls remain serial within a round-trip task, retain the existing global request semaphore and 25-second follow-up window, and preserve conditional whole-ticket fare validation. Diagnostics now distinguish initial and return request counts/times; cache hits do not count those historical calls as new requests in the query log.
+
+A local HTTP/1.1 experiment made six requests with six fresh clients versus one reused client, observing six connections versus one and identical responses. Its synthetic 40 ms per-connection setup cost is not Internet latency. A scaled-deadline concurrency experiment checked three choices serially versus nine with three workers in the same window, demonstrating the change in provider work. The conservative implementation keeps serial requests.
+
+A bounded read-only live pilot made three calls with fresh clients and three with a reused client: one initial page and the same two conditional-return selections in each case. Both returned 21 initial rows and 19 return rows per selection, with identical compared schedule/price fingerprints. This sample verifies integration behavior; it is too small and order-sensitive for a general live speed claim. No live trip or provider-cache records were written. The full backend suite passed 104 tests, including client sharing, cleanup after failure, selected-query parameters, conditional fares, and the serial deadline. Local evidence is in `data/diagnostics/2026-11-07-provider/`.
+
+## Final solver comparison and reproduction
+
+The final matched six-process comparison against original `926c99a` measured a median **4.528s → 3.334s** (26.4% less solver wall time) and approximately **416.0 → 371.5 MiB** peak working set. All complete responses had SHA-256 `bc818a6130a729ff2bd0191c1dc4b3ff717c75d0627e4fa1acbc1c8fca01b812`, expanded 254,075 labels, completed the graph, and returned the same ten routes. This comparison measures the combined solver changes directly; percentages from separate experiments are not multiplied. The optional weaker-route response was also compared at a matched 25,000-label allowance.
+
+`tools/benchmark_optimizer.py` reads a selected or latest trip and its rules from a consistent read-only transaction, prepares solver inputs without provider calls or database writes, and reports full-response hashes, wall/process CPU time, and peak process memory. Use separate processes with a fixed hash seed for comparisons; repeated runs in one process share allocator and cache state. Peak memory includes the entire process. The tool itself was exercised with the original and final optimizer and produced the same full-response hash.
+
+```powershell
+$env:PYTHONHASHSEED = "0"
+uv run python tools/benchmark_optimizer.py --database backend/data/planner.sqlite3 --output data/diagnostics/optimizer-current.json
+# --trip-id selects another saved trip; --optimizer-source loads a preserved optimizer module.
+# --label-limit and --include-dominated support matched alternative workloads.
+# --profile writes cProfile data; do not compare profiled latency with ordinary runs.
+```
+
+The five explored workstreams have recorded outcomes: path-pricing indexes/choice handling, recalculation cadence, storage/publication processing, provider transport/concurrency, and intermediate-label memory. Accepted changes have regression coverage and focused commits; slower or policy-changing variants are retained only as diagnostic evidence.
 
 ## Scope of the measurements
 

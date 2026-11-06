@@ -4,6 +4,7 @@ from __future__ import annotations
 import threading
 import copy
 import time as clock
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -11,6 +12,25 @@ from zoneinfo import ZoneInfo
 from .flight_search import _install_price_tolerant_parser
 
 FLIGHT_LIMIT = threading.BoundedSemaphore(3)
+
+
+@contextmanager
+def flight_session():
+    """Keep the initial query and its conditional returns on one HTTP client."""
+    from fast_flights import Query, get_flights
+    from fast_flights.fetcher import URL
+    from fast_flights.integrations.base import FetchIntegration
+    from primp import Client
+
+    class Session(FetchIntegration):
+        def fetch_html(self, query, /):
+            params = query.params() if isinstance(query, Query) else {"q": query}
+            return client.get(URL, params=params).text
+
+    # Match the pinned fast-flights 3.1.0 transport settings.
+    with Client(impersonate="chrome_145", impersonate_os="macos", referer=True, cookie_store=True) as client:
+        session = Session()
+        yield lambda query: get_flights(query, integration=session)
 
 
 def flight_query(legs, adults, kind, departure_start, departure_end):
@@ -77,12 +97,11 @@ def complete_round_trip_rows(query, rows, get_flights):
                                          airlines=list(dict.fromkeys([*outbound.airlines, *inbound.airlines]))))
         except Exception as exc:
             errors.append(f"Return choices: {type(exc).__name__}: {str(exc)[:120]}")
-    return completed, {"return_requests": requests, "outbound_choices_checked": len(seen),
+    return completed, {"return_requests": requests, "return_elapsed_seconds": round(clock.monotonic()-started, 3), "outbound_choices_checked": len(seen),
                        "return_errors": errors}
 
 
 def fetch_flights(legs: list[dict], adults, kind, departure_start, departure_end):
-    from fast_flights import get_flights
     import airportsdata
     query = flight_query(legs, adults, kind, departure_start, departure_end)
     result = {"status": "empty", "options": [], "search_url": query.url(), "kind": kind}
@@ -94,13 +113,16 @@ def fetch_flights(legs: list[dict], adults, kind, departure_start, departure_end
     airports = airportsdata.load("IATA")
     try:
         _install_price_tolerant_parser()
-        with FLIGHT_LIMIT:
-            rows = get_flights(query)
-        result["diagnostics"] = {"returned_rows": len(rows), "requested_journeys": len(legs), "complete_options": 0}
-        if kind == "round-trip" and len(legs) == 2 and any(getattr(row, "outbound_selection", None) for row in rows):
-            rows, details = complete_round_trip_rows(query, rows, get_flights)
-            result["diagnostics"].update(details)
-            result["diagnostics"]["conditional_return_rows"] = len(rows)
+        started = clock.monotonic()
+        with flight_session() as get_flights:
+            with FLIGHT_LIMIT:
+                rows = get_flights(query)
+            result["diagnostics"] = {"returned_rows": len(rows), "requested_journeys": len(legs), "complete_options": 0,
+                                     "initial_requests": 1, "initial_elapsed_seconds": round(clock.monotonic()-started, 3), "return_requests": 0}
+            if kind == "round-trip" and len(legs) == 2 and any(getattr(row, "outbound_selection", None) for row in rows):
+                rows, details = complete_round_trip_rows(query, rows, get_flights)
+                result["diagnostics"].update(details)
+                result["diagnostics"]["conditional_return_rows"] = len(rows)
         for row in rows:
             segments = []
             for segment in row.flights:

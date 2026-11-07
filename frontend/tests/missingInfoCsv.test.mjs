@@ -159,3 +159,52 @@ test("export guards spreadsheet formulas and retains Unicode context", () => {
   assert.deepEqual(previewMissingInfoCsv(exported, ctx).errors, []);
   assert.equal(parseDelimited(exported)[0].length, csvColumns.length);
 });
+
+test("explicit delete stages each saved user-entry kind; omitted rows stay unchanged", () => {
+  const ctx = context();
+  ctx.trip.offers = [{ id: 'manual', source: 'user', adults: 2, movement_ids: ['m1'], low: 10, high: 10, currency: 'MYR', label: 'My price' }];
+  ctx.trip.airport_transfer_estimates = [{ from_id: 'A', to_id: 'airport:AAA', adults: 2, mode: 'rail', low: 10, high: 10, currency: 'MYR', duration_minutes: 30 }];
+  ctx.trip.airport_connections = [{ from_airport: 'AAA', to_airport: 'BBB', mode: 'bus', duration_minutes: 45, fare_amount: 10, currency: 'MYR' }];
+  ctx.appliedGroups = [{ key: 'reusable:rule', ruleId: 'rule', component_ids: ['m1'], low: 20, high: 20, currency: 'MYR', label: 'Reusable', scope: ctx.groups[0].scope }];
+  const rows = [
+    edited(ctx, t => t.binding.key === 'component:m1', { action: 'delete' }),
+    edited(ctx, t => t.binding.key === 'reusable:rule', { action: 'delete' }),
+    edited(ctx, t => t.binding.kind === 'transfer' && t.binding.mode === 'rail', { action: 'delete' }),
+    edited(ctx, t => t.binding.kind === 'change', { action: 'delete' }),
+    edited(ctx, t => t.values.row_id === 'rate:TWD', { action: 'delete' }),
+  ];
+  const preview = previewMissingInfoCsv(csv(rows), ctx);
+  assert.deepEqual(preview.errors, []);
+  assert.equal(preview.changes.filter(c => c.operation === 'delete').length, 5);
+  const next = stageMissingInfoCsv(preview.changes, ctx.drafts, ctx.trip);
+  assert.deepEqual(Object.values(next.deletions).map(d => d.kind).sort(), ['offer', 'journey_rule', 'airport_transfer', 'airport_change', 'exchange_rate'].sort());
+  assert.equal(ctx.trip.offers.length, 1); // Preview/staging never mutate saved data.
+  const partial = previewMissingInfoCsv(csv([edited(ctx, t => t.binding.kind === 'transfer' && t.binding.mode === 'taxi', { price: '12' })]), ctx);
+  assert.deepEqual(stageMissingInfoCsv(partial.changes, ctx.drafts, ctx.trip).deletions, {});
+});
+
+test("delete refuses provider prices and blank placeholders; delete/update duplicates conflict", () => {
+  const ctx = context();
+  ctx.trip.offers = [{ id: 'provider', source: 'provider', movement_ids: ['m1'], low: 10, high: 10, currency: 'MYR', label: 'Provider' }];
+  const provider = edited(ctx, t => t.binding.key === 'component:m1', { action: 'delete' });
+  assert.match(previewMissingInfoCsv(csv([provider]), ctx).errors[0], /no user-entered value/);
+  assert.match(previewMissingInfoCsv(csv([edited(ctx, t => t.binding.kind === 'transfer' && t.binding.mode === 'rail', { action: 'delete' })]), ctx).errors[0], /no user-entered value/);
+  const rateDelete = edited(ctx, t => t.values.row_id === 'rate:TWD', { action: 'delete' });
+  const rateUpdate = edited(ctx, t => t.values.row_id === 'rate:TWD', { myr_per_unit: '.2' });
+  assert.match(previewMissingInfoCsv(csv([rateDelete, rateUpdate]), ctx).errors[0], /Conflicting duplicate/);
+  assert.match(previewMissingInfoCsv(csv([edited(ctx, t => t.values.row_id === 'rate:TWD', { action: 'delete', currency: 'USD' })]), ctx).errors[0], /Keep the existing currency/);
+  assert.match(previewMissingInfoCsv(csv([edited(ctx, t => t.values.row_id === 'rate:TWD', { action: 'erase' })]), ctx).errors[0], /blank action/);
+});
+
+test("delete can discard an unsaved CSV price; older CSV without action still imports", () => {
+  const ctx = context();
+  ctx.drafts.fares['component:m1'] = { component_ids: ['m1'], low: 5, high: 5, currency: 'MYR', label: 'Draft' };
+  const preview = previewMissingInfoCsv(csv([edited(ctx, t => t.binding.key === 'component:m1', { action: 'delete' })]), ctx);
+  assert.deepEqual(preview.errors, []);
+  const next = stageMissingInfoCsv(preview.changes, ctx.drafts, ctx.trip);
+  assert.deepEqual(next.fares, {}); assert.deepEqual(next.deletions, {});
+  const target = edited(ctx, t => t.binding.key === 'group', { price: '20' });
+  const columns = ['trip_id', 'revision', 'adults', 'row_id', 'type', 'price'];
+  const oldCsv = [columns.join(','), columns.map(c => `"${target.values[c]}"`).join(',')].join('\n');
+  assert.deepEqual(previewMissingInfoCsv(oldCsv, ctx).errors, []);
+});

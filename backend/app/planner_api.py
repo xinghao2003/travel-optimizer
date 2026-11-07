@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+from typing import Literal
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, model_validator
@@ -82,12 +83,18 @@ class SharedEstimatesRequest(BaseModel):
     expected_revision: int
 
 
+class MissingInfoDeletion(BaseModel):
+    kind: Literal["offer", "journey_rule", "exchange_rate", "airport_transfer", "airport_change"]
+    id: str = Field(min_length=1, max_length=1000)
+
+
 class ApplyChangesRequest(BaseModel):
     expected_revision: int
     connections: list[AirportConnection] | None = Field(default=None, max_length=120)
     transfers: list[AirportTransferEstimate] | None = Field(default=None, max_length=240)
     estimates: list[SharedFareValues] = Field(default_factory=list, max_length=5000)
     exchange_rates: dict[str, float] = Field(default_factory=dict)
+    deletions: list[MissingInfoDeletion] = Field(default_factory=list, max_length=5000)
 
     @model_validator(mode="after")
     def valid_rates(self):
@@ -418,7 +425,7 @@ def apply_missing_info(trip, request: ApplyChangesRequest):
     """Validate every kind before committing one revision; retain the full movement graph."""
     if trip["revision"] != request.expected_revision:
         raise HTTPException(409, "This trip changed. Reload it before saving.")
-    if request.connections is None and request.transfers is None and not request.estimates and not request.exchange_rates:
+    if request.connections is None and request.transfers is None and not request.estimates and not request.exchange_rates and not request.deletions:
         raise HTTPException(422, "No changes to apply.")
     updated = dict(trip)
     if request.exchange_rates:
@@ -432,6 +439,34 @@ def apply_missing_info(trip, request: ApplyChangesRequest):
         replaced = {o["id"] for o in offers}
         updated["offers"] = [o for o in trip.get("offers", []) if o["id"] not in replaced]+offers
         updated["journey_pricing_rules"] = reusable_journey_rules(trip, request.estimates)
+    # Delete only user-entered values in this trip. Provider data and schedules remain.
+    deletion_targets = {
+        "offer": {o["id"] for o in trip.get("offers", []) if o.get("source") == "user"},
+        "journey_rule": {r["id"] for r in trip.get("journey_pricing_rules", [])},
+        "exchange_rate": set(trip["spec"]["exchange_rates"])-{"MYR"},
+        "airport_change": {f'{c["from_airport"]}>{c["to_airport"]}' for c in trip.get("airport_connections", [])},
+        "airport_transfer": {json.dumps([e["from_id"], e["to_id"], e["adults"], e["mode"]], ensure_ascii=False, separators=(",", ":")) for e in trip.get("airport_transfer_estimates", [])},
+    }
+    removed = {kind: set() for kind in deletion_targets}
+    for deletion in request.deletions:
+        if deletion.id not in deletion_targets[deletion.kind]:
+            raise HTTPException(422, "A deletion must identify an existing user-entered value in this trip. MYR and provider data cannot be deleted.")
+        removed[deletion.kind].add(deletion.id)
+    if removed["exchange_rate"] & request.exchange_rates.keys():
+        raise HTTPException(422, "Do not update and delete the same exchange rate in one batch.")
+    if request.estimates and (removed["offer"] & {o["id"] for o in offers}
+            or any("journey-estimate:"+stable_id(e.scope.model_dump(mode="json")) in removed["journey_rule"] for e in request.estimates if e.scope)):
+        raise HTTPException(422, "Do not update and delete the same saved price in one batch.")
+    if removed["offer"]:
+        updated["offers"] = [o for o in updated.get("offers", []) if o["id"] not in removed["offer"]]
+    if removed["journey_rule"]:
+        updated["journey_pricing_rules"] = [r for r in updated.get("journey_pricing_rules", []) if r["id"] not in removed["journey_rule"]]
+    if removed["exchange_rate"]:
+        updated["spec"] = {**updated["spec"], "exchange_rates": {c: r for c, r in updated["spec"]["exchange_rates"].items() if c not in removed["exchange_rate"]}}
+    if removed["airport_change"]:
+        updated["airport_connections"] = [c for c in updated.get("airport_connections", []) if f'{c["from_airport"]}>{c["to_airport"]}' not in removed["airport_change"]]
+    if removed["airport_transfer"]:
+        updated["airport_transfer_estimates"] = [e for e in updated.get("airport_transfer_estimates", []) if json.dumps([e["from_id"], e["to_id"], e["adults"], e["mode"]], ensure_ascii=False, separators=(",", ":")) not in removed["airport_transfer"]]
     updated["revision"] += 1
     updated.pop("result", None)
     return updated

@@ -34,6 +34,18 @@ Use decimal numbers without currency symbols or thousands separators.
 Explicit `0` is a zero price. Blank cells leave current values unchanged;
 they do not erase a saved value or an existing draft.
 
+The `action` column accepts blank or `update` for normal edits. Set it to
+`delete` to remove the row's user-entered price, rate, transfer method or
+airport change. Removing a row from the CSV leaves its value unchanged.
+Older CSV text without the `action` column still works for updates.
+
+Deletions appear in Preview and are staged until **Apply**. Pending deletions
+have an **Undo** button. Only user-entered values can be deleted; retrieved
+journeys, provider quotes and the MYR rate are preserved. Removing a manual
+price lets other prices or rules apply again. Removing a conversion rate
+leaves totals in that currency incomplete, and removing an airport change
+can make affected journeys unusable.
+
 For a new fixed price, fill `price` and leave `max_price` blank. For a range,
 fill both. Journey prices also accept `open` in `max_price` for no upper limit.
 To replace an existing range or open price with a fixed price, set

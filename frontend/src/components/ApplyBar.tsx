@@ -10,7 +10,7 @@ const count = (n: number, word: string) => `${n} ${n === 1 ? word : `${word}s`}`
  * With invalid drafts, Apply is off and "Fix {k} values" goes to the first one.
  */
 export function ApplyBar({ counts, invalid, applying, error, busy, searchActive, onApply, onDiscard, onReload, onFocusInvalid }: {
-  counts: { airportChanges: number; transfers: number; prices: number; rates: number }; invalid: number; applying: boolean;
+  counts: { airportChanges: number; transfers: number; prices: number; rates: number; deletions: number }; invalid: number; applying: boolean;
   error: { text: string; reload: boolean } | null; busy: boolean;
   searchActive: boolean;
   onApply: () => void; onDiscard: () => void; onReload: () => void; onFocusInvalid: () => void;
@@ -24,8 +24,8 @@ export function ApplyBar({ counts, invalid, applying, error, busy, searchActive,
     observer.observe(element);
     return () => { observer.disconnect(); root.style.removeProperty("--apply-h"); };
   }, []);
-  const total = counts.airportChanges + counts.transfers + counts.prices + counts.rates;
-  const parts = [count(counts.airportChanges, "airport change"), count(counts.transfers, "airport transfer"), count(counts.prices, "price"), count(counts.rates, "exchange rate")].filter(part => !part.startsWith("0 "));
+  const total = counts.airportChanges + counts.transfers + counts.prices + counts.rates + counts.deletions;
+  const parts = [count(counts.airportChanges, "airport change"), count(counts.transfers, "airport transfer"), count(counts.prices, "price"), count(counts.rates, "exchange rate"), count(counts.deletions, "deletion")].filter(part => !part.startsWith("0 "));
   return <div ref={bar} className="p-apply-bar" role="region" aria-label="Changes not applied">
     <div className="p-container p-apply-row">
       <div className="p-apply-text">

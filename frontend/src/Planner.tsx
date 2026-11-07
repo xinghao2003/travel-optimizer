@@ -706,7 +706,7 @@ export default function Planner() {
   const transferKeys = (drafts: DraftState, rows = saved?.airport_transfer_rows ?? [], count = adults) =>
     rows.map(row => transferKey(row.from_id, row.to_id, count)).filter(key => key in drafts.transfers);
   const draftCounts = countDrafts({ ...tripDrafts.drafts, fares: fareDrafts, transfers: Object.fromEntries(transferKeys(tripDrafts.drafts).map(key => [key, tripDrafts.drafts.transfers[key]])) });
-  const draftTotal = draftCounts.airportChanges + draftCounts.transfers + draftCounts.prices + draftCounts.rates;
+  const draftTotal = draftCounts.airportChanges + draftCounts.transfers + draftCounts.prices + draftCounts.rates + draftCounts.deletions;
 
   async function shareTrips(scope: ExportScope, format: "pdf" | "html") {
     // Reserve the tab during the click so fetching saved trips cannot trigger a popup blocker.
@@ -840,7 +840,7 @@ export default function Planner() {
     const drafts = tripDrafts.read();
     const fares = canonicalFares(drafts.fares, templateOf);
     // Only drafts that Apply can send: fare drafts on components of the current options ("Other drafts" stay).
-    const hasChanges = Object.keys(drafts.airportChanges).length > 0 || transferKeys(drafts).length > 0 || activeFares(fares, knownComponents, adults).length > 0 || Object.keys(drafts.exchangeRates ?? {}).length > 0;
+    const hasChanges = Object.keys(drafts.airportChanges).length > 0 || transferKeys(drafts).length > 0 || activeFares(fares, knownComponents, adults).length > 0 || Object.keys(drafts.exchangeRates ?? {}).length > 0 || Object.keys(drafts.deletions ?? {}).length > 0;
     if (!tripId || busy) return;
     if (!hasChanges) {
       // The Apply bar counts every fare draft, so it shows while only "Other drafts" are left.
@@ -875,15 +875,17 @@ export default function Planner() {
           ...(sentTransfers.length ? { transfers: buildTransferEstimates(record.airport_transfer_rows ?? [], record.airport_transfer_estimates ?? [], drafts.transfers, record.spec.adults) } : {}),
           estimates,
           exchange_rates: drafts.exchangeRates ?? {},
+          deletions: Object.values(drafts.deletions ?? {}).map(({ kind, id }) => ({ kind, id })),
         };
         const applied = await api<{ trip: SavedTrip; job: Job | null; updating: boolean }>(`/trips/${tripId}/apply`, "POST", payload);
         if (!current()) return;
         accept(applied.trip);
-        if (Object.keys(drafts.exchangeRates ?? {}).length) {
+        if (Object.keys(drafts.exchangeRates ?? {}).length || Object.values(drafts.deletions ?? {}).some(d => d.kind === "exchange_rate")) {
           const next = { ...draftRef.current, exchange_rates: applied.trip.spec.exchange_rates };
           draftRef.current = next; setDraft(next);
           tripDrafts.clear("exchangeRates");
         }
+        tripDrafts.clear("deletions");
         setJob(applied.job);
         if (airportChanges) tripDrafts.clear("airportChanges");
         sentTransfers.forEach(key => tripDrafts.unstage("transfers", key));
@@ -1004,7 +1006,7 @@ export default function Planner() {
           <MissingInfoPanel searched={searched} allClear={allClear} needs={needs} needsText={needsText} airportChanges={airportChanges} connections={saved.airport_connections ?? []}
             csvActions={<MissingInfoCsv key={saved.id} context={{ trip: saved, groups: groups.journeys, appliedGroups: appliedSharedGroups, airportChanges,
               drafts: tripDrafts.drafts, canonical: id => templateOf.get(id) ?? id, offerFor, placeName }} busy={busy || dirty}
-              onStage={changes => tripDrafts.stageImported(stageMissingInfoCsv(changes, tripDrafts.read(), saved))} onUndoRate={currency => tripDrafts.unstage("exchangeRates", currency)} />}
+              onStage={changes => tripDrafts.stageImported(stageMissingInfoCsv(changes, tripDrafts.read(), saved))} onUndoRate={currency => tripDrafts.unstage("exchangeRates", currency)} onUndoDeletion={key => tripDrafts.unstage("deletions", key)} />}
             directions={directions} estimates={saved.airport_transfer_estimates ?? []} accessNote={nextSteps.find(step => step.id === "access-time")?.text ?? null}
             journeyGroups={groups.journeys} appliedGroups={appliedSharedGroups} adults={adults} rates={rates} draftRates={{ ...draft.exchange_rates, ...tripDrafts.drafts.exchangeRates }}
             grouping={journeyGrouping} onGrouping={changeJourneyGrouping} removeJourneyRule={removeJourneyRule} reuseJourneyEstimate={reuseJourneyEstimate}

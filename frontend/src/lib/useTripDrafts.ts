@@ -15,15 +15,15 @@ function load(tripId: string | null): Stored {
   if (!tripId) return { tripId, fares: {}, transfers: {}, airportChanges: {} };
   const inputs = record(read(inputsKey(tripId)));
   return { tripId, fares: record(read(faresKey(tripId))) as DraftState["fares"],
-    transfers: record(inputs.transfers) as DraftState["transfers"], airportChanges: record(inputs.airportChanges) as DraftState["airportChanges"], exchangeRates: record(inputs.exchangeRates) as Record<string, number> };
+    transfers: record(inputs.transfers) as DraftState["transfers"], airportChanges: record(inputs.airportChanges) as DraftState["airportChanges"], exchangeRates: record(inputs.exchangeRates) as Record<string, number>, deletions: record(inputs.deletions) as DraftState["deletions"] };
 }
-function save({ tripId, fares, transfers, airportChanges, exchangeRates }: Stored) {
+function save({ tripId, fares, transfers, airportChanges, exchangeRates, deletions }: Stored) {
   if (!tripId) return;
   // Without storage (private window, blocked site data) the drafts stay in memory for this page.
   try {
     if (Object.keys(fares).length) localStorage.setItem(faresKey(tripId), JSON.stringify(fares));
     else localStorage.removeItem(faresKey(tripId));
-    if (Object.keys(transfers).length || Object.keys(airportChanges).length || Object.keys(exchangeRates ?? {}).length) localStorage.setItem(inputsKey(tripId), JSON.stringify({ transfers, airportChanges, exchangeRates }));
+    if (Object.keys(transfers).length || Object.keys(airportChanges).length || Object.keys(exchangeRates ?? {}).length || Object.keys(deletions ?? {}).length) localStorage.setItem(inputsKey(tripId), JSON.stringify({ transfers, airportChanges, exchangeRates, deletions }));
     else localStorage.removeItem(inputsKey(tripId));
   } catch { /* Keep the drafts in memory. */ }
 }
@@ -78,7 +78,7 @@ export function useTripDrafts(tripId: string | null) {
     unstage(kind: DraftKind, key: string) { update(current => ({ [kind]: without<unknown>(current[kind] ?? {}, key) }) as Partial<DraftState>); },
     /** Removes every draft of the given kinds; all kinds without arguments (Discard). */
     clear(...kinds: DraftKind[]) {
-      update(() => Object.fromEntries((kinds.length ? kinds : ["fares", "transfers", "airportChanges", "exchangeRates"] as DraftKind[]).map(kind => [kind, {}])));
+      update(() => Object.fromEntries((kinds.length ? kinds : ["fares", "transfers", "airportChanges", "exchangeRates", "deletions"] as DraftKind[]).map(kind => [kind, {}])));
     },
   };
 }

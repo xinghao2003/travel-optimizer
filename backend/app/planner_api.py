@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -55,6 +56,13 @@ class SharedFareRequest(SharedFareValues):
 class SharedEstimatesRequest(BaseModel):
     estimates: list[SharedFareValues] = Field(min_length=1, max_length=5000)
     expected_revision: int
+
+
+class ApplyChangesRequest(BaseModel):
+    expected_revision: int
+    connections: list[AirportConnection] | None = Field(default=None, max_length=120)
+    transfers: list[AirportTransferEstimate] | None = Field(default=None, max_length=240)
+    estimates: list[SharedFareValues] = Field(default_factory=list, max_length=5000)
 
 
 def get_trip(id):
@@ -242,10 +250,7 @@ async def edit_fare(id: str, offer_id: str, offer: FareOffer):
     return await recalculate(id)
 
 
-async def save_shared_estimates(id: str, estimates: list[SharedFareValues], expected_revision: int):
-    trip = get_trip(id)
-    if trip["revision"] != expected_revision:
-        raise HTTPException(409, "This trip changed. Reload it before saving.")
+def shared_fare_offers(trip, estimates: list[SharedFareValues]):
     component_ids = [key for estimate in estimates for key in estimate.component_ids]
     ids = set(component_ids)
     if len(ids) != len(component_ids):
@@ -262,10 +267,17 @@ async def save_shared_estimates(id: str, estimates: list[SharedFareValues], expe
         raise HTTPException(422, "Every fare component must belong to this trip.")
     # Each amount is per component, never a bundle price for their union.
     adults = TripSpec.model_validate(trip["spec"]).adults
-    offers = [FareOffer(id="user:"+key, movement_ids=[key], kind="charge" if key in charges else "one-way",
+    return [FareOffer(id="user:"+key, movement_ids=[key], kind="charge" if key in charges else "one-way",
                         low=e.low, high=e.high, currency=e.currency, source="user",
                         adults=adults, estimated=True, label=e.label).model_dump(mode="json")
               for e in estimates for key in e.component_ids]
+
+
+async def save_shared_estimates(id: str, estimates: list[SharedFareValues], expected_revision: int):
+    trip = get_trip(id)
+    if trip["revision"] != expected_revision:
+        raise HTTPException(409, "This trip changed. Reload it before saving.")
+    offers = shared_fare_offers(trip, estimates)
     def update(record):
         if record["revision"] != expected_revision:
             raise HTTPException(409, "This trip changed. Reload it before saving.")
@@ -275,6 +287,51 @@ async def save_shared_estimates(id: str, estimates: list[SharedFareValues], expe
         return record
     store.update("trips", id, update)
     return await recalculate(id)
+
+
+def connection_payload(connections):
+    keys = [(item.from_airport, item.to_airport) for item in connections]
+    if len(keys) != len(set(keys)):
+        raise HTTPException(422, "Enter each directed airport pair only once.")
+    return [item.model_dump(mode="json") for item in connections]
+
+
+def transfer_payload(trip, estimates):
+    spec = TripSpec.model_validate(trip["spec"])
+    allowed = {(row["from_id"], row["to_id"]) for row in airport_transfer_rows(spec, (trip.get("snapshot") or {}).get("movements", []))}
+    keys = [(item.from_id, item.to_id, item.adults, item.mode) for item in estimates]
+    if len(keys) != len(set(keys)) or any((a, b) not in allowed for a, b, _, _ in keys):
+        raise HTTPException(422, "Enter each method once per airport/city direction and party size, using airports in this trip.")
+    return [item.model_dump(mode="json") for item in estimates]
+
+
+def apply_missing_info(trip, request: ApplyChangesRequest):
+    """Validate every kind before committing one revision; retain the full movement graph."""
+    if trip["revision"] != request.expected_revision:
+        raise HTTPException(409, "This trip changed. Reload it before saving.")
+    if request.connections is None and request.transfers is None and not request.estimates:
+        raise HTTPException(422, "No changes to apply.")
+    updated = dict(trip)
+    if request.connections is not None:
+        updated["airport_connections"] = connection_payload(request.connections)
+    if request.transfers is not None:
+        updated["airport_transfer_estimates"] = transfer_payload(updated, request.transfers)
+    if request.estimates:
+        offers = shared_fare_offers(trip, request.estimates)
+        replaced = {o["id"] for o in offers}
+        updated["offers"] = [o for o in trip.get("offers", []) if o["id"] not in replaced]+offers
+    updated["revision"] += 1
+    updated.pop("result", None)
+    return updated
+
+
+@router.post("/trips/{id}/apply")
+async def apply_changes(id: str, request: ApplyChangesRequest):
+    get_trip(id)
+    store.update("trips", id, lambda trip: apply_missing_info(trip, request))
+    await manager.recalculate(id)
+    response = await read_trip(id, compact=True)
+    return JSONResponse({"trip": json.loads(response.body), "job": None, "updating": False})
 
 
 @router.post("/trips/{id}/fares/batch")
@@ -297,11 +354,7 @@ async def delete_fare(id: str, offer_id: str):
 @router.put("/trips/{id}/airport-connections")
 async def update_airport_connections(id: str, request: UpdateAirportConnections):
     get_trip(id)
-    connections = request.connections
-    keys = [(item.from_airport, item.to_airport) for item in connections]
-    if len(keys) != len(set(keys)):
-        raise HTTPException(422, "Enter each directed airport pair only once.")
-    payload = [item.model_dump(mode="json") for item in connections]
+    payload = connection_payload(request.connections)
     store.update("trips", id, lambda trip: {**trip, "airport_connections": payload,
                                              "revision": trip["revision"]+1})
     return await recalculate(id)
@@ -371,12 +424,7 @@ async def update_airport_transfer_estimates(id: str, request: UpdateAirportTrans
     def update(trip):
         if request.expected_revision != trip["revision"]:
             raise HTTPException(409, "This trip changed. Reload it before saving.")
-        spec = TripSpec.model_validate(trip["spec"])
-        allowed = {(row["from_id"], row["to_id"]) for row in airport_transfer_rows(spec, (trip.get("snapshot") or {}).get("movements", []))}
-        keys = [(item.from_id, item.to_id, item.adults, item.mode) for item in request.estimates]
-        if len(keys) != len(set(keys)) or any((a, b) not in allowed for a, b, _, _ in keys):
-            raise HTTPException(422, "Enter each method once per airport/city direction and party size, using airports in this trip.")
-        trip["airport_transfer_estimates"] = [item.model_dump(mode="json") for item in request.estimates]
+        trip["airport_transfer_estimates"] = transfer_payload(trip, request.estimates)
         trip["revision"] += 1
         trip.pop("result", None)
         return trip

@@ -28,6 +28,7 @@ UTC = timezone.utc
 INF = float("inf")
 # The built-in id(): optimize uses `id` as a variable name.
 _object_key = id
+CHECKPOINT_VERSION = 1  # Bump when search-state semantics or its stored layout change.
 
 
 @lru_cache(maxsize=None)
@@ -327,9 +328,24 @@ class Label:
         return copy
 
 
+@dataclass
+class SearchCheckpoint:
+    """Solver-owned data, including pending and explored states, rather than only the frontier."""
+    signature: str | None = None
+    queue: deque | None = None
+    labels: dict | None = None
+    completed: list | None = None
+    expanded: int = 0
+    pruned: int = 0
+    price_calculations: int = 0
+    price_reuses: int = 0
+    resumed_from: int = 0
+
+
 def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer], rules: list[PricingRule],
              snapshot_revision: int = 0, trip_revision: int = 0, cancelled=None, label_limit: int | None = None,
-             finish_at_home: bool = True, include_dominated: bool = False) -> dict:
+             finish_at_home: bool = True, include_dominated: bool = False, *,
+             checkpoint: SearchCheckpoint | None = None, deadline: float | None = None) -> dict:
     started = clock.monotonic()
     next_progress = started + 5
     logger.debug("planner dp.start movements=%d offers=%d limit=%s", len(movements), len(offers), label_limit)
@@ -337,6 +353,12 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
     supplied, supplied_fares = supplied_positioning(spec)
     movements = [m for m in movements if m.source != SUPPLIED_SOURCE] + supplied
     offers = supplied_fares + offers
+    signature = None
+    if checkpoint is not None:
+        signature = stable_id(CHECKPOINT_VERSION, spec.model_dump(mode="json"),
+                              [m.model_dump(mode="json") for m in movements],
+                              [o.model_dump(mode="json") for o in offers],
+                              [r.model_dump(mode="json") for r in rules], finish_at_home)
     fare_index = _fare_index(offers, spec)
     places = spec.places()
     required = {v.place.id: (i, v.min_stay_hours) for i, v in enumerate(spec.visits)}
@@ -382,6 +404,16 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
     pruned = 0
     price_calculations = 0
     price_reuses = 0
+    if checkpoint is not None:
+        checkpoint.resumed_from = 0
+        if checkpoint.signature == signature and checkpoint.queue is not None:
+            queue, labels, completed = checkpoint.queue, checkpoint.labels, checkpoint.completed
+            expanded, pruned = checkpoint.expanded, checkpoint.pruned
+            price_calculations, price_reuses = checkpoint.price_calculations, checkpoint.price_reuses
+            checkpoint.resumed_from = expanded
+        # Rebuild lookup caches from the validated inputs. Saved label prices
+        # remain intact, and explored labels are not expanded again.
+        checkpoint.signature = signature
     # Checks that depend only on a scheduled journey (and the search phase) are computed once per journey. Journeys
     # without a schedule get new times for each label, so they are checked per label.
     timing_cache = {}
@@ -597,7 +629,8 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
                   stay_hours=stay_hours))
 
     while queue:
-        if (cancelled and cancelled()) or (label_limit is not None and expanded >= label_limit):
+        if ((cancelled and cancelled()) or (label_limit is not None and expanded >= label_limit)
+                or (deadline is not None and clock.monotonic() >= deadline)):
             break
         label = queue.popleft()
         expanded += 1
@@ -669,6 +702,11 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
                     expand(label, target, movement, dep, arr, home_date)
 
     logger.debug("planner dp.search.done expanded=%d pending=%d completed=%d prices=%d price_reuses=%d elapsed=%.2fs", expanded, len(queue), len(completed), price_calculations, price_reuses, clock.monotonic()-started)
+
+    if checkpoint is not None:
+        checkpoint.queue, checkpoint.labels, checkpoint.completed = queue, labels, completed
+        checkpoint.expanded, checkpoint.pruned = expanded, pruned
+        checkpoint.price_calculations, checkpoint.price_reuses = price_calculations, price_reuses
 
     def stay(label):
         return sum(s["hours"] for s in label.stays)

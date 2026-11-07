@@ -7,6 +7,7 @@ import itertools
 import logging
 import math
 import os
+import pickle
 import time as clock
 import uuid
 from datetime import date, datetime, time, timedelta, timezone
@@ -16,7 +17,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from .planner_models import AirportConnection, Charge, FareOffer, Movement, Place, PricingRule, Segment, TripSpec, stable_id
-from .planner_optimizer import bounds, optimize
+from .planner_optimizer import CHECKPOINT_VERSION, SearchCheckpoint, bounds, optimize
 from .planner_providers import fetch_flights, flight_query
 from .planner_store import PlannerStore, store
 from .planner_rail import RAIL_FALLBACK_SOURCE, fallback_task, prepare_rail_payload
@@ -669,7 +670,8 @@ class DiscoveryManager:
                 if old_ids == {m["id"] for m in snapshot["movements"]}:
                     snapshot["revision"] = old_revision
             base_limit = max(1000, int(os.environ.get("PLANNER_LABEL_BATCH", "25000")))
-            snapshot["label_limit"] = snapshot.get("label_limit", base_limit)+(base_limit if expand else 0)
+            snapshot["label_limit"] = max(snapshot.get("label_limit") or base_limit,
+                                          cached.get("expanded_labels", 0) if expand and cached else 0)+(base_limit if expand else 0)
             offers = [FareOffer.model_validate(o) for o in [*snapshot.get("offers", []), *trip.get("offers", [])]]
             # Last write of an offer ID wins (manual replacement of a provider offer).
             offers = list({o.id: o for o in offers}.values())
@@ -680,8 +682,21 @@ class DiscoveryManager:
 
             cancelled = check_cancelled if job_id else None
             logger.debug("planner optimize.dispatch trip=%s elapsed=%.2fs movements=%d offers=%d label_limit=%d", trip_id, clock.monotonic()-started, len(snapshot["movements"]), len(offers), snapshot["label_limit"])
-            result = await asyncio.to_thread(optimize, spec, airport_transfer_variants(snapshot["movements"], trip, spec, snapshot.get("roads", {}), airport_connections), offers,
-                                             [*self.rules(), *airport_transfer_rules(trip, spec)], snapshot["revision"], trip["revision"], cancelled, snapshot["label_limit"], include_dominated=include_dominated)
+            solver_movements = airport_transfer_variants(snapshot["movements"], trip, spec, snapshot.get("roads", {}), airport_connections)
+            solver_rules = [*self.rules(), *airport_transfer_rules(trip, spec)]
+            def solve():
+                # These bytes are created by this application, never accepted
+                # from HTTP input. Pickle preserves shared labels/movements.
+                payload = self.store.load_optimizer_checkpoint(trip_id, CHECKPOINT_VERSION)
+                checkpoint = pickle.loads(payload) if payload is not None else SearchCheckpoint()
+                result = optimize(spec, solver_movements, offers, solver_rules, snapshot["revision"], trip["revision"],
+                                  cancelled, snapshot["label_limit"], include_dominated=include_dominated, checkpoint=checkpoint)
+                self.store.save_optimizer_checkpoint(trip_id, CHECKPOINT_VERSION,
+                    pickle.dumps(checkpoint, protocol=5) if not result["optimization_complete"] else None)
+                logger.debug("planner checkpoint trip=%s resumed_from=%d expanded=%d pending=%d", trip_id,
+                             checkpoint.resumed_from, result["expanded_labels"], result["remaining_labels"])
+                return result
+            result = await asyncio.to_thread(solve)
             logger.debug("planner optimize.return trip=%s elapsed=%.2fs expanded=%d completed=%d routes=%d bundles=%d", trip_id, clock.monotonic()-started, result["expanded_labels"], result["feasible_count"], len(result["routes"]), len(result.get("bundle_candidates", [])))
             result["coverage"] = snapshot.get("coverage", {})
             result["coverage"]["unresolved_movements"] = [{"id": m["id"], "from_id": m["from_id"], "to_id": m["to_id"], "assumptions": m["assumptions"]} for m in snapshot["movements"] if not m.get("usable", True)]
@@ -709,7 +724,8 @@ class DiscoveryManager:
             job = self.store.get("jobs", job_id)
             if job is None or job["trip_id"] != trip_id or job["discovery_key"] != spec.discovery_key():
                 raise ValueError("Start a new search after changing discovery inputs.")
-            job["snapshot"]["label_limit"] = job["snapshot"].get("label_limit", 25000)+max(1000, int(os.environ.get("PLANNER_LABEL_BATCH", "25000")))
+            job["snapshot"]["label_limit"] = max(job["snapshot"].get("label_limit") or 25000,
+                                                  (trip.get("result") or {}).get("expanded_labels", 0))+max(1000, int(os.environ.get("PLANNER_LABEL_BATCH", "25000")))
             if job["cursor"] == len(job["queue"]):
                 latest = {t["key"]: t for t in job["queue"][:job["cursor"]]}
                 retries = [{k: v for k, v in t.items() if k != "outcome"} for t in latest.values() if t.get("outcome") == "failed"]

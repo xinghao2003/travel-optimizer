@@ -36,7 +36,9 @@ class PlannerStore:
                     PRIMARY KEY(collection,id));
                 CREATE TABLE IF NOT EXISTS provider_cache (
                     key TEXT PRIMARY KEY, payload TEXT NOT NULL, expires REAL NOT NULL);
-                PRAGMA user_version=1;
+                CREATE TABLE IF NOT EXISTS optimizer_checkpoints (
+                    trip_id TEXT PRIMARY KEY, version INTEGER NOT NULL, payload BLOB NOT NULL);
+                PRAGMA user_version=2;
             """)
             self._ready = True
         try:
@@ -71,6 +73,20 @@ class PlannerStore:
     def delete(self, collection: str, id: str):
         with self._lock, self._connect() as db:
             db.execute("DELETE FROM records WHERE collection=? AND id=?", (collection, id))
+            if collection == "trips":
+                db.execute("DELETE FROM optimizer_checkpoints WHERE trip_id=?", (id,))
+
+    def load_optimizer_checkpoint(self, trip_id: str, version: int):
+        with self._lock, self._connect() as db:
+            row = db.execute("SELECT payload FROM optimizer_checkpoints WHERE trip_id=? AND version=?", (trip_id, version)).fetchone()
+            return row[0] if row else None
+
+    def save_optimizer_checkpoint(self, trip_id: str, version: int, payload: bytes | None):
+        with self._lock, self._connect() as db:
+            if payload is None:
+                db.execute("DELETE FROM optimizer_checkpoints WHERE trip_id=?", (trip_id,))
+            else:
+                db.execute("INSERT OR REPLACE INTO optimizer_checkpoints VALUES(?,?,?)", (trip_id, version, payload))
 
     def update(self, collection: str, id: str, transform):
         with self._lock:

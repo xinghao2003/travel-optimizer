@@ -1,0 +1,163 @@
+"""Export Python solver calls and expected responses for native-TS comparison.
+
+Public fixtures come from existing tests. Optional saved-trip input is read-only
+and is written only below ignored data/diagnostics, never to public assets.
+"""
+import argparse
+import asyncio
+import copy
+import importlib
+import io
+import json
+import random
+from pathlib import Path
+import sqlite3
+import sys
+import time
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path[:0] = [str(ROOT / "backend"), str(ROOT / "backend/tests")]
+from app import planner_optimizer as optimizer
+from app.planner_results import expand_trip
+
+
+def normalized(args, kwargs):
+    spec, movements, offers, rules, *rest = args
+    positional = dict(zip(("snapshot_revision", "trip_revision", "cancelled", "label_limit", "finish_at_home", "include_dominated"), rest))
+    options = {**positional, **kwargs}
+    return {"spec": spec.model_dump(mode="json"), "movements": [m.model_dump(mode="json") for m in movements],
+            "offers": [o.model_dump(mode="json") for o in offers], "rules": [r.model_dump(mode="json") for r in rules],
+            **{key: options[key] for key in ("snapshot_revision", "trip_revision", "label_limit", "finish_at_home", "include_dominated") if key in options}}
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--database", type=Path)
+    options = parser.parse_args()
+    cases, pricing = [], []
+    original = optimizer.optimize
+    original_price = optimizer.price_path
+    depth = 0
+    def capture(*args, **kwargs):
+        nonlocal depth
+        data = normalized(args, kwargs)
+        depth += 1
+        try:
+            result = original(*args, **kwargs)
+        finally:
+            depth -= 1
+        # Time-mocked interruption tests are not repeatable as fresh native runs.
+        if kwargs.get("deadline") is None and not kwargs.get("cancelled"):
+            cases.append({"name": f"fixture-{len(cases)+1}", "input": data, "expected": result})
+        return result
+    def capture_price(*args, **kwargs):
+        result = original_price(*args, **kwargs)
+        if depth == 0:
+            path, offers, spec, rules, *extra = args
+            data = normalized((spec, path, offers, rules), {})
+            data["extra"] = [c.model_dump(mode="json") for c in (extra[0] if extra else kwargs.get("extra") or [])]
+            output = dict(result)
+            output["high_cents"] = None if output["high_cents"] == float("inf") else output["high_cents"]
+            output["uncertainty_key"] = list(output["uncertainty_key"])
+            pricing.append({"name": f"pricing-{len(pricing)+1}", "input": data, "expected": output})
+        return result
+    optimizer.optimize, optimizer.price_path = capture, capture_price
+    try:
+        planner = importlib.import_module("test_planner")
+        positioning = importlib.import_module("test_positioning")
+        transfers = importlib.import_module("test_airport_transfers")
+        checkpoint = importlib.import_module("test_optimizer_checkpoint")
+        journey_pricing = importlib.import_module("test_journey_pricing")
+        suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(cls) for cls in
+            (planner.OptimizerTests, positioning.PositioningTests, transfers.AirportTransferTests, checkpoint.CheckpointTests, journey_pricing.JourneyPricingTests))
+        stream = io.StringIO()
+        result = unittest.TextTestRunner(stream=stream).run(suite)
+        if not result.wasSuccessful():
+            raise RuntimeError(stream.getvalue())
+    finally:
+        optimizer.optimize, optimizer.price_path = original, original_price
+    directory = ROOT / "frontend/tests/fixtures"
+    directory.mkdir(exist_ok=True)
+    from datetime import date, datetime, timedelta, timezone
+    from app.planner_models import FareOffer, Movement, Place, PricingRule, TripSpec, Visit
+    rng = random.Random(2525466)
+    generated = []
+    for index in range(200):
+        count = rng.randint(1, 4)
+        places = [Place(id=f"city-{i}", name=f"City {i}", latitude=3+i, longitude=101+i,
+                        timezone=rng.choice(["UTC", "Asia/Kuala_Lumpur", "Europe/Berlin", "America/New_York"])) for i in range(count+1)]
+        base = datetime(2027, 3, 12, tzinfo=timezone.utc)
+        spec = TripSpec(home=places[0], visits=[Visit(place=p, min_stay_hours=rng.choice([0, 2, 6])) for p in places[1:]],
+            start_date=date(2027, 3, 12), end_date=date(2027, 3, 15), date_mode=rng.choice(["fixed", "flexible"]),
+            departure_start="00:00", departure_end="23:59:59", adults=rng.randint(1, 5), modes=["flight", "rail"],
+            ordered_visits=rng.choice([True, False]), budget_myr=rng.choice([None, 100, 300]), allow_overnight=rng.choice([True, False]))
+        movements, offers = [], []
+        for a in places:
+            for b in places:
+                if a == b: continue
+                for n in range(rng.randint(1, 3)):
+                    dep = base+timedelta(hours=rng.randint(0, 84), minutes=rng.choice([0, 15, 45]))
+                    movement = Movement(id=f"m-{a.id}-{b.id}-{n}", from_id=a.id, to_id=b.id, mode=rng.choice(spec.modes), departure=dep,
+                        arrival=dep+timedelta(minutes=rng.choice([45, 90, 150])), duration_minutes=1, source="generated")
+                    movements.append(movement)
+                    low = rng.choice([None, 0, 12.35, 30, 70])
+                    high = None if low is None or rng.random() < .15 else low+rng.choice([0, 0, 20])
+                    offers.append(FareOffer(id="fare:"+movement.id, movement_ids=[movement.id], low=low, high=high))
+        if len(movements) >= 2 and index % 3 == 0:
+            pair = rng.sample(movements, 2)
+            offers.append(FareOffer(id="bundle", movement_ids=[m.id for m in pair], kind="round-trip", low=20, high=20))
+        data = normalized((spec, movements, offers, []), {"include_dominated": index % 5 == 0})
+        expected = original(spec, movements, offers, [], include_dominated=index % 5 == 0)
+        generated.append({"name":f"generated-{index+1}", "input":data, "expected":expected})
+    (directory / "native-solver.json").write_text(json.dumps({"cases": cases, "pricing": pricing, "generated":generated}, separators=(",", ":"), allow_nan=False), encoding="utf-8")
+    print(json.dumps({"fixture_calls": len(cases), "pricing_calls": len(pricing), "generated_cases":len(generated), "original_tests": result.testsRun}), flush=True)
+
+    if options.database:
+        from app import planner_discovery as discovery
+        db = sqlite3.connect(options.database.resolve().as_uri()+"?mode=ro", uri=True)
+        try:
+            rows = db.execute("select payload from records where collection='trips'").fetchall()
+            trips = [expand_trip(json.loads(row[0])) for row in rows]
+            trip = max(trips, key=lambda value: len((value.get("snapshot") or {}).get("movements", [])))
+            rules = [json.loads(row[0]) for row in db.execute("select payload from records where collection='rules'")]
+        finally:
+            db.close()
+        class Inputs:
+            def get(self, collection, identifier):
+                assert collection == "trips" and identifier == trip["id"]
+                return copy.deepcopy(trip)
+            def list(self, collection):
+                assert collection == "rules"
+                return copy.deepcopy(rules)
+            def load_optimizer_checkpoint(self, *_): return None
+            def put(self, *_): raise AssertionError("Read-only benchmark tried to save")
+        class Captured(Exception): pass
+        saved = {}
+        def intercept(*args, **kwargs):
+            saved.update(args=args, kwargs=kwargs)
+            raise Captured()
+        discovery.optimize = intercept
+        try:
+            asyncio.run(discovery.DiscoveryManager(Inputs()).recalculate(trip["id"]))
+        except Captured:
+            pass
+        finally:
+            discovery.optimize = original
+        data = normalized(saved["args"], saved["kwargs"])
+        data["label_limit"] = None
+        spec, moves, offers, rules = data["spec"], data["movements"], data["offers"], data["rules"]
+        from app.planner_models import TripSpec, Movement, FareOffer, PricingRule
+        start = time.perf_counter()
+        result = original(TripSpec.model_validate(spec), [Movement.model_validate(m) for m in moves],
+            [FareOffer.model_validate(o) for o in offers], [PricingRule.model_validate(r) for r in rules],
+            snapshot_revision=data.get("snapshot_revision", 0), trip_revision=data.get("trip_revision", 0))
+        artifact = {"name": "saved-trip", "input": data, "expected": result, "native_python_seconds": time.perf_counter()-start}
+        output = ROOT / "data/diagnostics/native-comparison"
+        output.mkdir(parents=True, exist_ok=True)
+        (output / "saved-trip.json").write_text(json.dumps(artifact, separators=(",", ":"), allow_nan=False), encoding="utf-8")
+        print(json.dumps({"saved_movements": len(moves), "saved_offers": len(offers), "native_python_seconds": artifact["native_python_seconds"], "expanded": result["expanded_labels"], "routes": len(result["routes"])}), flush=True)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,40 @@
+.browser-poc { max-width: 1100px; margin: 0 auto; padding: 32px 24px 60px; line-height: 1.5; }
+.browser-poc header, .browser-poc .section-heading, .browser-poc .route-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.browser-poc h1 { font-size: 28px; font-weight: 650; margin: 2px 0 10px; }
+.browser-poc h2 { font-size: 19px; font-weight: 600; }
+.browser-poc h3 { font-weight: 600; }
+.browser-poc .eyebrow, .browser-poc .hint, .browser-poc .metrics, .browser-poc footer { color: var(--muted-foreground); font-size: 13px; }
+.browser-poc a { text-decoration: underline; text-underline-offset: 3px; }
+.browser-poc section { margin-top: 28px; padding: 22px 0; border-top: 1px solid var(--border); }
+.browser-poc .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 16px; margin: 18px 0; }
+.browser-poc label { font-size: 14px; }
+.browser-poc .fields label, .browser-poc .actions > label { display: flex; flex-direction: column; gap: 6px; }
+.browser-poc input:not([type=checkbox]), .browser-poc select { color: var(--foreground); background: var(--card); border: 1px solid var(--input); border-radius: 6px; min-height: 38px; padding: 6px 9px; }
+.browser-poc .checks { display: flex; flex-wrap: wrap; gap: 12px 24px; margin: 10px 0; }
+.browser-poc .checks label { display: flex; align-items: center; gap: 7px; }
+.browser-poc input[type=checkbox] { width: 16px; height: 16px; }
+.browser-poc .visits > span { font-size: 14px; }
+.browser-poc .actions { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; margin-top: 24px; }
+.browser-poc .actions input { width: 100px; }
+.browser-poc button { min-height: 38px; padding: 7px 13px; border: 1px solid var(--border); border-radius: 6px; background: var(--card); font-size: 14px; cursor: pointer; }
+.browser-poc button.primary { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); }
+.browser-poc button:disabled { opacity: .45; cursor: default; }
+.browser-poc :focus-visible { outline: 2px solid var(--chart); outline-offset: 3px; }
+.browser-poc .status { margin-top: 16px; }
+.browser-poc .error, .browser-poc .warning { color: var(--warning); padding: 12px; background: var(--warning-bg); border-radius: 6px; margin-top: 12px; overflow-wrap: anywhere; }
+.browser-poc .error { color: var(--destructive); background: var(--destructive-bg); }
+.browser-poc .routes { list-style: none; padding: 0; }
+.browser-poc .routes > li { padding: 18px 0; border-bottom: 1px solid var(--border); }
+.browser-poc .routes ol { list-style: decimal; padding-left: 22px; margin-top: 14px; }
+.browser-poc .routes ol li { margin: 10px 0; }
+.browser-poc .routes li span, .browser-poc .routes small { display: block; color: var(--muted-foreground); font-size: 13px; }
+.browser-poc .example { display: inline-block; font-size: 12px; font-weight: 400; padding: 2px 7px; background: var(--warning-bg); color: var(--warning); border-radius: 5px; }
+.browser-poc details { margin-top: 20px; }
+.browser-poc summary { cursor: pointer; }
+.browser-poc table { width: 100%; text-align: left; margin: 16px 0; font-size: 14px; }
+.browser-poc th, .browser-poc td { padding: 10px 8px; border-bottom: 1px solid var(--border); }
+.browser-poc pre { max-height: 500px; overflow: auto; font-size: 12px; margin-top: 10px; }
+.browser-poc details > p { margin: 12px 0; }
+.browser-poc footer { margin-top: 36px; border-top: 1px solid var(--border); padding-top: 16px; }
+.browser-poc footer p { margin-top: 10px; }
+@media (max-width: 600px) { .browser-poc { padding: 20px 16px; } .browser-poc h1 { font-size: 24px; } .browser-poc .fields { grid-template-columns: 1fr 1fr; } }

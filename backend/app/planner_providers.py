@@ -15,7 +15,7 @@ FLIGHT_LIMIT = threading.BoundedSemaphore(3)
 
 
 @contextmanager
-def flight_session():
+def flight_session(timeout=None):
     """Keep the initial query and its conditional returns on one HTTP client."""
     from fast_flights import Query, get_flights
     from fast_flights.fetcher import URL
@@ -28,7 +28,7 @@ def flight_session():
             return client.get(URL, params=params).text
 
     # Match the pinned fast-flights 3.1.0 transport settings.
-    with Client(impersonate="chrome_145", impersonate_os="macos", referer=True, cookie_store=True) as client:
+    with Client(impersonate="chrome_145", impersonate_os="macos", referer=True, cookie_store=True, timeout=timeout) as client:
         session = Session()
         yield lambda query: get_flights(query, integration=session)
 
@@ -101,7 +101,7 @@ def complete_round_trip_rows(query, rows, get_flights):
                        "return_errors": errors}
 
 
-def fetch_flights(legs: list[dict], adults, kind, departure_start, departure_end):
+def fetch_flights(legs: list[dict], adults, kind, departure_start, departure_end, *, timeout=None):
     import airportsdata
     query = flight_query(legs, adults, kind, departure_start, departure_end)
     result = {"status": "empty", "options": [], "search_url": query.url(), "kind": kind}
@@ -114,7 +114,7 @@ def fetch_flights(legs: list[dict], adults, kind, departure_start, departure_end
     try:
         _install_price_tolerant_parser()
         started = clock.monotonic()
-        with flight_session() as get_flights:
+        with (flight_session() if timeout is None else flight_session(timeout)) as get_flights:
             with FLIGHT_LIMIT:
                 rows = get_flights(query)
             result["diagnostics"] = {"returned_rows": len(rows), "requested_journeys": len(legs), "complete_options": 0,

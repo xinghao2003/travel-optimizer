@@ -1,5 +1,7 @@
 # Wayfinder Routes
 
+Browser-first experiment: see [the isolated prototype instructions](docs/browser-prototype.md).
+
 A local multimodal trip optimizer that compares total party transportation cost with hours spent in required cities, including positioning from home and back.
 
 ## Trip setup and results

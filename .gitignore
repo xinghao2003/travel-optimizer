@@ -24,3 +24,10 @@ data/geonames/cities500.download
 # Local browser captures and diagnostic scratch files
 /.playwright-mcp/
 /data/diagnostics/
+
+# Isolated browser prototype build output and local Vercel settings
+/frontend/public/browser-python/
+/frontend/dist-poc/
+/.vercel/
+/frontend/tests/fixtures/native-solver.json
+.vercel

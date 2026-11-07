@@ -1,0 +1,16 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "npm --prefix frontend ci",
+  "buildCommand": "uv run python tools/prepare_browser_poc.py && npm --prefix frontend run build:poc",
+  "devCommand": "uv run python tools/prepare_browser_poc.py && npm --prefix frontend run dev:poc",
+  "outputDirectory": "frontend/dist-poc",
+  "rewrites": [{ "source": "/", "destination": "/prototype.html" }],
+  "functions": {
+    "api/flights.py": {
+      "maxDuration": 60,
+      "includeFiles": "backend/app/{__init__,planner_providers,flight_search,places}.py",
+      "excludeFiles": "{backend/data/**,data/**,frontend/**,backend/tests/**}"
+    }
+  }
+}

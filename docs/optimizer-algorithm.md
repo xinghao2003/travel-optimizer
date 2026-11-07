@@ -36,8 +36,11 @@ the cheapest fare for each journey. Completed routes receive a final Pareto
 filter. All completed flight histories remain eligible to generate combined
 ticket queries, including histories whose current prices are dominated.
 
-A label allowance limits work. Reaching it explicitly returns an incomplete
-search; checking more combinations reruns with a larger allowance. A complete
+A label allowance limits work in request mode. Reaching it explicitly returns
+an incomplete search; checking more combinations resumes a matching checkpoint
+with a larger allowance. [Timed mode](timed-search.md) replaces count allowances
+with a round deadline and also checkpoints unfinished work. Changed solver
+inputs start a fresh search over the graph. A complete
 result applies to the retrieved graph and modeled assumptions, not every
 service or ticket available worldwide.
 

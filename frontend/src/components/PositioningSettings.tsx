@@ -1,3 +1,5 @@
+import { TemporalInput } from "./ui/temporal-input";
+import { Select, SelectItem } from "./ui/select";
 import { useId, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { Field, PlacePicker } from "./PlannerForms";
@@ -108,9 +110,9 @@ function GatewayPositioning({ draft, gateway, direction, edit }: {
       <h4>How to travel</h4>
       <p className="p-hint">Only transport types turned on for this trip are listed.</p>
       <div className="p-group-fields">{allowed.map(mode => <Field key={mode} label={modeLabel(mode)}>
-        <select value={valueOf(mode)} onChange={e => changePolicy(mode, e.target.value as PolicyValue)}>
-          {(Object.keys(policyLabels) as PolicyValue[]).map(value => <option key={value} value={value}>{policyLabels[value]}</option>)}
-        </select>
+        <Select value={valueOf(mode)} onValueChange={value => changePolicy(mode, value as PolicyValue)}>
+          {(Object.keys(policyLabels) as PolicyValue[]).map(value => <SelectItem key={value} value={value}>{policyLabels[value]}</SelectItem>)}
+        </Select>
       </Field>)}</div>
       {allowed.filter(mode => valueOf(mode) === "supplied" && !group.some(s => s.mode === mode)).map(mode =>
         <p className="p-notice" key={mode}>{modeLabel(mode)}: only your journeys are allowed here, but you have not added one. It gives no options.</p>)}
@@ -128,10 +130,10 @@ function GatewayPositioning({ draft, gateway, direction, edit }: {
       <details className="p-add-form">
         <summary>Add your journey</summary>
         <div className="p-group-fields">
-          <Field label="Transport"><select value={formMode ?? ""} onChange={e => setForm(f => ({ ...f, mode: e.target.value as Mode }))}>{allowed.map(mode => <option key={mode} value={mode}>{modeLabel(mode)}</option>)}</select></Field>
+          <Field label="Transport"><Select value={formMode ?? ""} onValueChange={value => setForm(f => ({ ...f, mode: value as Mode }))}>{allowed.map(mode => <SelectItem key={mode} value={mode}>{modeLabel(mode)}</SelectItem>)}</Select></Field>
           <Field label="Name (optional)"><input maxLength={160} value={form.label} onChange={e => setForm(f => ({ ...f, label: e.target.value }))} /></Field>
-          <Field label={`Departs (${origin.name} time)`}><input type="datetime-local" value={form.departure} onChange={e => setForm(f => ({ ...f, departure: e.target.value }))} /></Field>
-          <Field label={`Arrives (${destination.name} time)`}><input type="datetime-local" value={form.arrival} onChange={e => setForm(f => ({ ...f, arrival: e.target.value }))} /></Field>
+          <Field label={`Departs (${origin.name} time)`}><TemporalInput type="datetime-local" value={form.departure} onValueChange={value => setForm(f => ({ ...f, departure: value }))} /></Field>
+          <Field label={`Arrives (${destination.name} time)`}><TemporalInput type="datetime-local" value={form.arrival} onValueChange={value => setForm(f => ({ ...f, arrival: value }))} /></Field>
           <Field label={`Price for ${adults} (optional)`}><input inputMode="decimal" placeholder="Not priced" value={form.fare} onChange={e => setForm(f => ({ ...f, fare: e.target.value }))} /></Field>
           <Field label="Currency"><input maxLength={3} value={form.currency} onChange={e => setForm(f => ({ ...f, currency: e.target.value.toUpperCase() }))} /></Field>
         </div>
@@ -159,10 +161,10 @@ export function PositioningSettings({ draft, edit, homeTimesError }: { draft: Tr
     <div className="p-subhead"><h3>Home times{home ? ` (${home.timezone})` : ""}</h3><InfoTip topic="home times">Blank means any time on that day. Also applies with flexible dates.</InfoTip></div>
     <div className="p-group-fields">
       <Field label={<>Leave home after{start && <span className="sr-only"> on {start}</span>}</>} unit={start ? `on ${start}` : undefined}>
-        <input type="time" value={draft.home_departure_earliest ?? ""} onChange={e => edit({ ...draft, home_departure_earliest: e.target.value || null })} />
+        <TemporalInput type="time" value={draft.home_departure_earliest ?? ""} onValueChange={value => edit({ ...draft, home_departure_earliest: value || null })} />
       </Field>
       <Field label={<>Be home by{end && <span className="sr-only"> on {end}</span>}</>} unit={end ? `on ${end}` : undefined} error={homeTimesError}>
-        <input type="time" value={draft.home_arrival_latest ?? ""} onChange={e => edit({ ...draft, home_arrival_latest: e.target.value || null })} />
+        <TemporalInput type="time" value={draft.home_arrival_latest ?? ""} onValueChange={value => edit({ ...draft, home_arrival_latest: value || null })} />
       </Field>
     </div>
     {home && (["outbound", "return"] as const).flatMap(direction => (direction === "outbound" ? draft.departures : draft.arrivals)

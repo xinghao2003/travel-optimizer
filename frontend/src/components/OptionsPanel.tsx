@@ -1,3 +1,4 @@
+import { Select, SelectItem } from "./ui/select";
 import { lazy, Suspense, useEffect, useId, useRef, useState, type ComponentProps } from "react";
 import { CircleAlert, Info } from "lucide-react";
 import { Button } from "./ui/button";
@@ -143,11 +144,11 @@ export function OptionsPanel({ result, displayRoutes, numbers, refinement, selec
         <p className="p-options-count">{best} best option{best === 1 ? "" : "s"}{weaker.size > 0 && ` · ${weaker.size} weaker`}</p>
         <div className="p-options-sort">
           <label htmlFor={sortId}>Sort</label>
-          <select id={sortId} value={ranking} onChange={event => onRanking(event.target.value)}>
-            <option value="cheapest">Lowest price</option>
-            <option value="stay">Most time in cities</option>
-            <option value="balanced">Best balance</option>
-          </select>
+          <Select id={sortId} value={ranking} onValueChange={value => onRanking(value)}>
+            <SelectItem value="cheapest">Lowest price</SelectItem>
+            <SelectItem value="stay">Most time in cities</SelectItem>
+            <SelectItem value="balanced">Best balance</SelectItem>
+          </Select>
           <InfoTip topic="sorting" align="end">Lowest price uses the highest possible price. Best balance uses weighted distance to the cheapest price and most city time, scaled using priced best options. Options without an upper price come last. Showing weaker options and changing chart axes do not change that scale. Sorting does not change which options are best.</InfoTip>
         </div>
         <div className="p-check-row">

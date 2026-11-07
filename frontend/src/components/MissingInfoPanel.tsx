@@ -1,3 +1,5 @@
+import { TemporalInput } from "./ui/temporal-input";
+import { Select, SelectItem } from "./ui/select";
 import { useEffect, useRef, useState } from "react";
 import { CircleCheck } from "lucide-react";
 import { Button } from "./ui/button";
@@ -73,10 +75,10 @@ function AirportChange({ row, connection, adults, drafts }: { row: AirportChange
     </div>
     <div className="p-mi-fields" role="group" aria-label={`Airport change ${pair}`}>
       <Field label="Way" error={errorOf("mode")}>
-        <select {...fieldProps("mode")} value={shown.mode} onChange={event => change("mode", event.target.value)}>
-          <option value="">Choose</option>
-          {transferModes.map(mode => <option value={mode} key={mode}>{modeLabel(mode)}</option>)}
-        </select>
+        <Select {...fieldProps("mode")} value={shown.mode} onValueChange={value => change("mode", value)}>
+          <SelectItem value="">Choose</SelectItem>
+          {transferModes.map(mode => <SelectItem value={mode} key={mode}>{modeLabel(mode)}</SelectItem>)}
+        </Select>
       </Field>
       <Field label="Time (min)" error={errorOf("duration")}>
         <input {...fieldProps("duration")} type="text" inputMode="numeric" value={shown.duration} onChange={event => change("duration", event.target.value)} />
@@ -138,12 +140,12 @@ function Connections({ places, gaps, assumed, placeName, zoneOf, busy, onAdd, on
     finally { setSaving(false); }
   }
   const from = places.find(place => place.id === form.from), to = places.find(place => place.id === form.to);
-  const placeSelect = (key: "from" | "to") => <select id={`connection-${key}`} value={form[key]} onChange={event => set({ [key]: event.target.value })}>
-    <option value="">Choose a place</option>
-    {places.map(place => <option key={place.id} value={place.id}>{place.name}</option>)}
-  </select>;
+  const placeSelect = (key: "from" | "to") => <Select id={`connection-${key}`} value={form[key]} onValueChange={value => set({ [key]: value })}>
+    <SelectItem value="">Choose a place</SelectItem>
+    {places.map(place => <SelectItem key={place.id} value={place.id}>{place.name}</SelectItem>)}
+  </Select>;
   const dateField = (key: "departure" | "arrival", label: string) => <Field label={label} error={errors[key]}>
-    <input type="datetime-local" value={form[key]} onChange={event => set({ [key]: event.target.value })} />
+    <TemporalInput type="datetime-local" value={form[key]} onValueChange={value => set({ [key]: value })} />
   </Field>;
   return <MissingSection id="connections-title" title="Connections between cities" status={gaps.length ? count(gaps.length, "gap") : undefined}
     tip="No direct journey was found in either direction. Routes through other places can still connect these cities. A connection you add is assumed to exist.">
@@ -171,9 +173,9 @@ function Connections({ places, gaps, assumed, placeName, zoneOf, busy, onAdd, on
       <div className="p-group-fields">
         <Field label="From">{placeSelect("from")}</Field>
         <Field label="To" error={errors.places}>{placeSelect("to")}</Field>
-        <Field label="Transport"><select id="connection-mode" value={form.mode} onChange={event => set({ mode: event.target.value as Mode })}>
-          {modes.map(mode => <option key={mode} value={mode}>{modeLabel(mode)}</option>)}
-        </select></Field>
+        <Field label="Transport"><Select id="connection-mode" value={form.mode} onValueChange={value => set({ mode: value as Mode })}>
+          {modes.map(mode => <SelectItem key={mode} value={mode}>{modeLabel(mode)}</SelectItem>)}
+        </Select></Field>
         <fieldset className="p-mi-radios">
           <legend className="sr-only">Times</legend>
           <label className="p-check"><input type="radio" name="connection-times" checked={!form.fixed} onChange={() => set({ fixed: false })} />Any time</label>

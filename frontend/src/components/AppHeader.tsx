@@ -1,3 +1,4 @@
+import { Select, SelectItem } from "./ui/select";
 import { CircleAlert, CircleCheck, Compass, Copy, Ellipsis, LoaderCircle, Plus, RefreshCw } from "lucide-react";
 import { Button } from "./ui/button";
 import { ThemeChoice } from "./theme-provider";
@@ -28,10 +29,10 @@ export function AppHeader({ trips, currentId, unsaved, status, statusTone, disab
       <h1 className="sr-only">Wayfinder Routes</h1>
       <div className="p-trip-picker">
         <label className="p-narrow-sr" htmlFor="trip-select">Trip</label>
-        <select id="trip-select" value={currentId ?? ""} disabled={disabled} onChange={event => { if (event.target.value) onOpen(event.target.value); }}>
-          {unsaved && <option value="">New trip (not saved)</option>}
-          {trips.map(trip => <option key={trip.id} value={trip.id}>{trip.name} · {dateRange(trip.start_date, trip.end_date)}</option>)}
-        </select>
+        <Select id="trip-select" value={currentId ?? ""} disabled={disabled} onValueChange={value => { if (value) onOpen(value); }}>
+          {unsaved && <SelectItem value="">New trip (not saved)</SelectItem>}
+          {trips.map(trip => <SelectItem key={trip.id} value={trip.id}>{trip.name} · {dateRange(trip.start_date, trip.end_date)}</SelectItem>)}
+        </Select>
       </div>
       <Button type="button" variant="secondary" size="sm" className="p-header-button" disabled={disabled} onClick={onNew}><Plus size={15} aria-hidden="true" /><span className="p-narrow-sr">New trip</span></Button>
       <p className="p-save-status" data-tone={statusTone} aria-live="polite"><StatusIcon size={15} aria-hidden="true" className={statusTone === "busy" ? "p-spin" : undefined} /><span className="p-narrow-sr">{status}</span></p>

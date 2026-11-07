@@ -1,3 +1,4 @@
+import { Select, SelectItem } from "./ui/select";
 import { ChevronDown } from "lucide-react";
 import { cloneElement, isValidElement, lazy, Suspense, useEffect, useId, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { Button } from "./ui/button";
@@ -316,14 +317,14 @@ export function RulesEditor({ rules, places, placeName, busy, onSave, onDelete }
     </li>)}</ul>}
     <div className="p-group-fields">
       <Field label="Rule name" error={errors.name}><input id="rule-name" maxLength={120} value={form.name} onChange={event => set({ name: event.target.value })} /></Field>
-      <Field label="Transport"><select value={form.mode} onChange={event => set({ mode: event.target.value })}>
-        {ruleModes.map(mode => <option key={mode} value={mode}>{modeLabel(mode)}</option>)}
-      </select></Field>
+      <Field label="Transport"><Select value={form.mode} onValueChange={value => set({ mode: value })}>
+        {ruleModes.map(mode => <SelectItem key={mode} value={mode}>{modeLabel(mode)}</SelectItem>)}
+      </Select></Field>
       {(["from_id", "to_id"] as const).map(key => <Field key={key} label={key === "from_id" ? "From" : "To"}>
-        <select value={form[key]} onChange={event => set({ [key]: event.target.value })}>
-          <option value="">Any place</option>
-          {placeOptions(form[key]).map(([id, name]) => <option key={id} value={id}>{name}</option>)}
-        </select>
+        <Select value={form[key]} onValueChange={value => set({ [key]: value })}>
+          <SelectItem value="">Any place</SelectItem>
+          {placeOptions(form[key]).map(([id, name]) => <SelectItem key={id} value={id}>{name}</SelectItem>)}
+        </Select>
       </Field>)}
       <Field label="Service or operator (optional)" info={<InfoTip topic="service or operator">Matches an operator or service name. Use &lsquo;Airport access&rsquo; or &lsquo;Airport egress&rsquo; for airport transfers.</InfoTip>}>
         <input value={form.service} onChange={event => set({ service: event.target.value })} />
@@ -331,13 +332,13 @@ export function RulesEditor({ rules, places, placeName, busy, onSave, onDelete }
       <Field label="Country of departure (optional, 2 letters)" error={errors.country_code}>
         <input maxLength={2} value={form.country_code} onChange={event => set({ country_code: event.target.value.toUpperCase() })} />
       </Field>
-      <Field label="Pricing"><select value={form.kind} onChange={event => set({ kind: event.target.value as RuleForm["kind"] })}>
-        <option value="fixed">Fixed or range</option><option value="per-km">Per km</option>
-      </select></Field>
+      <Field label="Pricing"><Select value={form.kind} onValueChange={value => set({ kind: value as RuleForm["kind"] })}>
+        <SelectItem value="fixed">Fixed or range</SelectItem><SelectItem value="per-km">Per km</SelectItem>
+      </Select></Field>
       <FixedPriceFields value={{ low: form.low, high: form.high, currency: form.currency }} errors={errors} onChange={set} />
-      <Field label="Charged"><select value={form.unit} onChange={event => set({ unit: event.target.value as RuleForm["unit"] })}>
-        <option value="person">Per person</option><option value="party">Per group</option><option value="vehicle">Per vehicle</option>
-      </select></Field>
+      <Field label="Charged"><Select value={form.unit} onValueChange={value => set({ unit: value as RuleForm["unit"] })}>
+        <SelectItem value="person">Per person</SelectItem><SelectItem value="party">Per group</SelectItem><SelectItem value="vehicle">Per vehicle</SelectItem>
+      </Select></Field>
       {form.unit === "vehicle" && <Field label="Seats per vehicle" error={errors.capacity}>
         <input type="text" inputMode="numeric" value={form.capacity} onChange={event => set({ capacity: event.target.value })} />
       </Field>}

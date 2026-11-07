@@ -1,3 +1,5 @@
+import { TemporalInput } from "./ui/temporal-input";
+import { Select, SelectItem } from "./ui/select";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { ChevronDown, GripVertical, LoaderCircle, Play } from "lucide-react";
 import { Button } from "./ui/button";
@@ -141,11 +143,11 @@ export function TripSettings({ draft, edit, places, errors, transitConfigured, s
       <div className="p-setting p-setting-wide p-dates">
         <div className="p-date-range">
           <Field label="Start date" info={<InfoTip topic="dates">Dates use your home city's time.</InfoTip>}>
-            <input type="date" value={draft.start_date} onChange={e => edit({ ...draft, start_date: e.target.value })} />
+            <TemporalInput type="date" value={draft.start_date} onValueChange={value => edit({ ...draft, start_date: value })} />
           </Field>
           <span className="p-date-to" aria-hidden="true">to</span>
           <Field label="End date" error={errors.dates}>
-            <input type="date" min={draft.start_date} value={draft.end_date} onChange={e => edit({ ...draft, end_date: e.target.value })} />
+            <TemporalInput type="date" min={draft.start_date} value={draft.end_date} onValueChange={value => edit({ ...draft, end_date: value })} />
           </Field>
         </div>
         <fieldset className="p-radio-group">
@@ -199,10 +201,10 @@ export function TripSettings({ draft, edit, places, errors, transitConfigured, s
           <fieldset className="p-time-range">
             <legend>Leave between<InfoTip topic="departure times">Local time at each departure city. Applies to the scheduled departure of flights, trains and buses. Your journeys to start and end cities can be outside these times.</InfoTip></legend>
             <div className="p-time-inputs">
-              <input id="setting-departure-start" type="time" aria-label="Earliest departure" value={draft.departure_start} onChange={e => edit({ ...draft, departure_start: e.target.value })} />
+              <TemporalInput id="setting-departure-start" type="time" aria-label="Earliest departure" value={draft.departure_start} onValueChange={value => edit({ ...draft, departure_start: value })} />
               <span aria-hidden="true">and</span>
-              <input type="time" aria-label="Latest departure" aria-invalid={errors.departureWindow ? true : undefined} aria-describedby={errors.departureWindow ? windowErrorId : undefined}
-                value={draft.departure_end} onChange={e => edit({ ...draft, departure_end: e.target.value })} />
+              <TemporalInput type="time" aria-label="Latest departure" aria-invalid={errors.departureWindow ? true : undefined} aria-describedby={errors.departureWindow ? windowErrorId : undefined}
+                value={draft.departure_end} onValueChange={value => edit({ ...draft, departure_end: value })} />
             </div>
             {errors.departureWindow && <p id={windowErrorId} className="p-field-error">{errors.departureWindow}</p>}
           </fieldset>
@@ -250,7 +252,7 @@ export function TripSettings({ draft, edit, places, errors, transitConfigured, s
           </div>
           {rail?.enabled && <>
             <div className="p-group-fields">
-              <Field label="Copy from the week starting" hint="Blank: today"><input type="date" value={rail.reference_date ?? ""} onChange={e => edit({ ...draft, rail_fallback: { ...rail, reference_date: e.target.value || null } })} /></Field>
+              <Field label="Copy from the week starting" hint="Blank: today"><TemporalInput type="date" value={rail.reference_date ?? ""} onValueChange={value => edit({ ...draft, rail_fallback: { ...rail, reference_date: value || null } })} /></Field>
               <NumberField label="Maximum date shift (days)" value={rail.max_shift_days} integer min={7} max={365} onChange={n => { if (n !== null) edit({ ...draft, rail_fallback: { ...rail, max_shift_days: n } }); }} />
               <NumberField label="Station search radius (km)" value={rail.station_radius_km} min={1} max={50} onChange={n => { if (n !== null) edit({ ...draft, rail_fallback: { ...rail, station_radius_km: n } }); }} />
             </div>
@@ -260,10 +262,10 @@ export function TripSettings({ draft, edit, places, errors, transitConfigured, s
 
         <SettingsGroup title="Search size" summary={summaries.searchSize}>
           <div className="p-group-fields">
-            <Field label="Limit each round by" hint={searchActive ? "Changes apply to the next round." : undefined}><select value={roundMinutes === null ? "requests" : "minutes"}
-              onChange={event => onRoundMinutes(event.target.value === "minutes" ? 10 : null)}>
-              <option value="requests">Requests</option><option value="minutes">Minutes</option>
-            </select></Field>
+            <Field label="Limit each round by" hint={searchActive ? "Changes apply to the next round." : undefined}><Select value={roundMinutes === null ? "requests" : "minutes"}
+              onValueChange={value => onRoundMinutes(value === "minutes" ? 10 : null)}>
+              <SelectItem value="requests">Requests</SelectItem><SelectItem value="minutes">Minutes</SelectItem>
+            </Select></Field>
             {roundMinutes === null ? <NumberField label="Requests per search batch" value={batchSize} min={1} max={500} integer
               info={<InfoTip topic="requests per search batch">The search pauses after this many new requests to data providers. Search more runs the next batch. Saved results are reused.</InfoTip>}
               onChange={n => { if (n !== null) onBatchSize(n); }} /> :
@@ -334,11 +336,11 @@ function Appointments({ draft, edit }: { draft: TripDraft; edit: (value: TripDra
       </li>;
     })}</ul>}
     <div className="p-group-fields">
-      <Field label="City"><select value={form.place_id} onChange={e => setForm(f => ({ ...f, place_id: e.target.value }))}>
-        <option value="">Choose a city</option>{cities.map(place => <option value={place.id} key={place.id}>{place.name}</option>)}
-      </select></Field>
-      <Field label={`Starts (${city?.name ?? "city"} time)`}><input type="datetime-local" value={form.start} onChange={e => setForm(f => ({ ...f, start: e.target.value }))} /></Field>
-      <Field label="Ends"><input type="datetime-local" value={form.end} min={form.start || undefined} onChange={e => setForm(f => ({ ...f, end: e.target.value }))} /></Field>
+      <Field label="City"><Select value={form.place_id} onValueChange={value => setForm(f => ({ ...f, place_id: value }))}>
+        <SelectItem value="">Choose a city</SelectItem>{cities.map(place => <SelectItem value={place.id} key={place.id}>{place.name}</SelectItem>)}
+      </Select></Field>
+      <Field label={`Starts (${city?.name ?? "city"} time)`}><TemporalInput type="datetime-local" value={form.start} onValueChange={value => setForm(f => ({ ...f, start: value }))} /></Field>
+      <Field label="Ends"><TemporalInput type="datetime-local" value={form.end} min={form.start || undefined} onValueChange={value => setForm(f => ({ ...f, end: value }))} /></Field>
     </div>
     <div className="p-form-actions">
       <Button type="button" size="sm" variant="secondary" disabled={!cities.length} onClick={add}>Add appointment</Button>

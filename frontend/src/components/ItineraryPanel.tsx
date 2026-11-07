@@ -1,3 +1,4 @@
+import { Select, SelectItem } from "./ui/select";
 import { lazy, Suspense, useId, useRef, useState, type ComponentProps } from "react";
 import { ArrowLeft, ChevronDown, CircleAlert } from "lucide-react";
 import { Button } from "./ui/button";
@@ -237,7 +238,7 @@ function CombinedTicket({ route, adults, placeName, zoneOf, links, onSave }: {
         {errors.flights && <span id={flightsError} className="p-field-error">{errors.flights}</span>}
       </fieldset>
       <div className="p-combined-fields">
-        <Field label="Ticket type"><select value={kind} onChange={event => setKind(event.target.value as typeof kind)}><option value="multi-city">Multi-city</option><option value="round-trip">Round trip</option></select></Field>
+        <Field label="Ticket type"><Select value={kind} onValueChange={value => setKind(value as typeof kind)}><SelectItem value="multi-city">Multi-city</SelectItem><SelectItem value="round-trip">Round trip</SelectItem></Select></Field>
         <FixedPriceFields label={`Price for ${adultsText(adults)}`} value={price} errors={errors} onChange={setPrice} />
       </div>
       <Button type="button" size="sm" disabled={busy} onClick={() => void save()}>{busy ? "Saving…" : "Save combined ticket"}</Button>
@@ -302,10 +303,10 @@ export function ItineraryPanel({ isWide, searched, route, displayRoutes, numbers
       <h2 id="itinerary-title" tabIndex={-1}>{title}</h2>
       {others.length > 0 && <div className="p-itin-compare">
         <label htmlFor={compareId}>Compare with</label>
-        <select id={compareId} value={compared?.id ?? ""} onChange={event => onCompare(event.target.value || null)}>
-          <option value="">None</option>
-          {others.map(item => <option value={item.id} key={item.id}>Option {optionNumber(numbers.get(item.id) ?? 0)} · {priceText(item)} · {hoursText(item.stay_hours)} h</option>)}
-        </select>
+        <Select id={compareId} value={compared?.id ?? ""} onValueChange={value => onCompare(value || null)}>
+          <SelectItem value="">None</SelectItem>
+          {others.map(item => <SelectItem value={item.id} key={item.id}>Option {optionNumber(numbers.get(item.id) ?? 0)} · {priceText(item)} · {hoursText(item.stay_hours)} h</SelectItem>)}
+        </Select>
       </div>}
     </div>
     <div className="p-itin-price"><span className="p-itin-total">{priceText(route)}</span><Chips chips={chips} /></div>

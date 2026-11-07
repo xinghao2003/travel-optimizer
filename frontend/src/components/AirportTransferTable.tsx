@@ -1,3 +1,4 @@
+import { Select, SelectItem } from "./ui/select";
 import { useEffect, useRef, useState, type FocusEvent } from "react";
 import { CircleAlert } from "lucide-react";
 import { Field, MissingSection, PriceFields, Staged, focusNextPrice } from "./PlannerForms";
@@ -84,7 +85,7 @@ function Direction({ direction, estimates, draftRates, addRate, ...props }: Omit
   const way = (row: TransferRowDraft) => `${label} ${modeLabel(row.mode)}`;
   const fieldProps = (index: number, field: keyof TransferRowDraft) => ({
     id: id(index, field), name: field, "data-index": index,
-    onFocus: (event: FocusEvent<HTMLInputElement | HTMLSelectElement>) => { started.current = { index, field, value: event.target.value }; },
+    onFocus: (event: FocusEvent<HTMLInputElement | HTMLButtonElement>) => { started.current = { index, field, value: event.target.value }; },
   });
 
   return <div className="p-mi-item" onKeyDown={event => {
@@ -106,9 +107,9 @@ function Direction({ direction, estimates, draftRates, addRate, ...props }: Omit
     {direction.rateCurrencies.map(currency => <RateField key={currency} currency={currency} id={transferRateId(from_id, to_id, currency)} added={draftRates[currency] !== undefined} addRate={addRate} />)}
     {rows.map((row, index) => <div className="p-mi-fields" role="group" aria-label={way(row)} key={index}>
       <Field label="Way" error={errorOf(index, "mode")}>
-        <select {...fieldProps(index, "mode")} value={row.mode} onChange={event => change(index, "mode", event.target.value)}>
-          {transferModes.map(mode => <option value={mode} key={mode}>{modeLabel(mode)}</option>)}
-        </select>
+        <Select {...fieldProps(index, "mode")} value={row.mode} onValueChange={value => change(index, "mode", value)}>
+          {transferModes.map(mode => <SelectItem value={mode} key={mode}>{modeLabel(mode)}</SelectItem>)}
+        </Select>
       </Field>
       <Field label="Time (min)" error={errorOf(index, "duration")}>
         <input {...fieldProps(index, "duration")} type="text" inputMode="numeric" placeholder={row.mode === "taxi" ? "Road time" : "Required"} value={row.duration} onChange={event => change(index, "duration", event.target.value)} />

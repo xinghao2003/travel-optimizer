@@ -1,0 +1,46 @@
+/* Shared controls also appear in portals outside .optimizer. Use the site's semantic theme tokens. */
+.p-select-trigger { display: inline-flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; width: 100%; height: 36px; padding: 7px 10px; border: 1px solid var(--input); border-radius: 6px; background: var(--card); color: var(--foreground); box-shadow: 0 1px 2px var(--shadow-color); font: inherit; text-align: left; cursor: pointer; }
+.p-select-trigger > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.p-select-trigger svg { flex-shrink: 0; color: var(--muted-foreground); }
+.p-select-trigger:hover:not(:disabled), .p-temporal-toggle:hover:not(:disabled) { background: var(--muted-surface); }
+.p-select-trigger:disabled, .p-temporal-toggle:disabled { opacity: .5; cursor: not-allowed; }
+.p-select-trigger:focus-visible, .p-control-popup :focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.p-select-trigger[aria-invalid=true] { border-color: var(--destructive); }
+.p-control-popup { z-index: 100; max-width: calc(100vw - 24px); border: 1px solid var(--border); border-radius: 8px; background: var(--card); color: var(--foreground); box-shadow: 0 8px 24px var(--shadow-color); font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+.p-select-popup { min-width: var(--radix-select-trigger-width); max-height: min(320px, var(--radix-select-content-available-height)); overflow: hidden; }
+.p-select-viewport { padding: 4px; }
+.p-select-item { position: relative; display: flex; align-items: center; min-height: 32px; padding: 6px 30px 6px 8px; border-radius: 4px; cursor: pointer; user-select: none; overflow-wrap: anywhere; }
+.p-select-item[data-highlighted] { outline: none; background: var(--muted-surface); }
+.p-select-item[data-state=checked] { font-weight: 600; }
+.p-select-item[data-disabled] { opacity: .5; cursor: not-allowed; }
+.p-select-check { position: absolute; right: 8px; display: grid; place-items: center; }
+.p-select-scroll { display: grid; place-items: center; height: 20px; color: var(--muted-foreground); }
+.p-temporal { min-width: 0; width: 100%; }
+.p-temporal-control { position: relative; min-width: 0; }
+.optimizer .p-temporal-control input { padding-right: 38px; font-variant-numeric: tabular-nums; }
+.p-temporal-toggle { position: absolute; right: 1px; top: 1px; bottom: 1px; display: grid; place-items: center; width: 34px; padding: 0; border: 0; border-radius: 0 5px 5px 0; background: transparent; color: var(--muted-foreground); cursor: pointer; }
+.p-calendar-popup { padding: 12px; max-height: var(--radix-popover-content-available-height); overflow-y: auto; }
+.p-calendar-popup .rdp-root { --rdp-accent-color: var(--primary); --rdp-accent-background-color: var(--muted-surface); --rdp-day-height: 34px; --rdp-day-width: 34px; --rdp-day_button-height: 32px; --rdp-day_button-width: 32px; --rdp-day_button-border-radius: 5px; --rdp-selected-border: 0; --rdp-outside-opacity: .5; --rdp-today-color: var(--foreground); --rdp-nav_button-height: 28px; --rdp-nav_button-width: 28px; --rdp-nav-height: 34px; margin: 0; font-size: 13px; }
+.p-calendar-popup .rdp-month_caption { height: 34px; font-size: 13px; }
+.p-calendar-popup .rdp-weekday { color: var(--muted-foreground); font-size: 11px; font-weight: 500; }
+.p-calendar-popup .rdp-day_button { font: inherit; cursor: pointer; }
+.p-calendar-popup .rdp-day_button:hover:not(:disabled), .p-calendar-popup .rdp-button_previous:hover:not(:disabled), .p-calendar-popup .rdp-button_next:hover:not(:disabled) { background: var(--muted-surface); }
+.p-calendar-popup .rdp-selected .rdp-day_button { background: var(--primary); color: var(--primary-foreground); font-weight: 600; }
+.p-calendar-popup .rdp-today:not(.rdp-selected) .rdp-day_button { box-shadow: inset 0 0 0 1px var(--input); }
+.p-calendar-popup .rdp-chevron { fill: var(--muted-foreground); width: 18px; height: 18px; }
+.p-time-picker { display: flex; align-items: flex-end; gap: 8px; min-width: 160px; }
+.rdp-root + .p-time-picker { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.p-time-picker > label { display: grid; flex: 1; gap: 4px; color: var(--muted-foreground); font-size: 12px; }
+.p-time-picker > span { padding-bottom: 8px; }
+.p-time-picker .p-select-trigger { font-size: 13px; }
+.p-calendar-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border); }
+.p-calendar-actions button { padding: 4px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--foreground); font: inherit; cursor: pointer; }
+.p-calendar-actions button:hover:not(:disabled) { background: var(--muted-surface); }
+.p-calendar-actions button:disabled { opacity: .5; cursor: not-allowed; }
+@media (max-width: 599px) {
+  .p-select-trigger { min-height: 44px; font-size: 16px; }
+  .p-select-item { min-height: 44px; }
+  .p-temporal-toggle { width: 40px; }
+  .optimizer .p-temporal-control input { padding-right: 44px; }
+  .p-calendar-popup .rdp-root { --rdp-day-height: 38px; --rdp-day-width: 38px; --rdp-day_button-height: 36px; --rdp-day_button-width: 36px; }
+}

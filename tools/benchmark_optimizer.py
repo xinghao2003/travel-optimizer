@@ -133,8 +133,12 @@ def main():
                   else module.optimize(*captured["args"], **captured["kwargs"]))
         row = {"wall_seconds": time.perf_counter()-start, "cpu_seconds": time.process_time()-cpu,
                "peak_process_bytes": peak_memory_bytes(), "expanded_labels": result["expanded_labels"],
+               "pruned_labels": result["pruned_labels"], "feasible_count": result["feasible_count"],
                "optimization_complete": result["optimization_complete"], "routes": len(result["routes"])}
         row["result_sha256"] = hashlib.sha256(json.dumps(result, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+        solution = {key: value for key, value in result.items()
+                    if key not in {"expanded_labels", "pruned_labels", "remaining_labels", "label_limit"}}
+        row["solution_sha256"] = hashlib.sha256(json.dumps(solution, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
         output["runs"].append(row)
         if profiler:
             profiler.dump_stats(str(options.profile))

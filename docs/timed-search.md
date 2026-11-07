@@ -29,6 +29,13 @@ works on saved schedules and makes no provider requests.
 
 ## What is saved
 
+The Apply bar can now coordinate edits with an active round. It pauses safely,
+saves all draft categories together, restarts from the full saved graph, and
+continues within the original remaining allowance. It does not reset the timer
+or provider counters. Expired rounds save edits and wait for explicit
+continuation. See [Apply during a search](apply-during-search.md) for the flow
+and weaker-route recovery experiments.
+
 Provider discovery retains its query queue, cursor, collected schedules and
 fares, and counters. The optimizer additionally checkpoints:
 
@@ -120,7 +127,8 @@ rendering cover both round controls and status output. Interactive browser
 verification was unavailable because the browser automation host was not
 running in this session.
 
-Final checks passed 121 backend tests and 80 frontend tests. The production
+After the coordinated Apply integration, checks passed 131 backend tests and
+82 frontend tests. The production
 build passed with the existing large-chunk warning. SQLite ResourceWarnings
 remain in passing persistence tests. No new provider calls were used for these
 checks, and interactive browser clicks remain an unverified gate.

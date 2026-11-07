@@ -13,6 +13,7 @@ from app import planner_discovery as discovery, planner_optimizer as optimizer
 from app.main import app
 from app.planner_discovery import DiscoveryManager
 from app.planner_store import PlannerStore
+from app.planner_models import Visit
 from test_planner import HOME, A, dt, fare, movement, trip
 from test_timed_search import Clock, query
 
@@ -64,6 +65,30 @@ class ApplyChangesTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 409)
         self.assertEqual(self.store.get('trips', self.record['id']), before)
 
+    async def test_edit_on_existing_best_route_can_promote_another_route_through_bundle_pricing(self):
+        self.record['spec'] = trip(modes=['flight']).model_dump(mode='json')
+        moves = [movement('out', HOME, A, dt(10), dt(10, 10)),
+                 movement('bundled-return', A, HOME, dt(12, 16), dt(12, 17)),
+                 movement('other-return', A, HOME, dt(12, 16), dt(12, 17))]
+        offers = [fare('out', 100), fare('bundled-return', 100), fare('other-return', 1),
+                  fare('bundle', 50, ['out', 'bundled-return'], kind='round-trip')]
+        self.record['snapshot'].update(movements=[m.model_dump(mode='json') for m in moves],
+                                       offers=[o.model_dump(mode='json') for o in offers])
+        self.store.put('trips', self.record['id'], self.record)
+        before = await self.manager.recalculate(self.record['id'])
+        self.assertEqual(len(before['routes']), 1)
+        self.assertEqual(before['routes'][0]['movements'][-1]['id'], 'bundled-return')
+        self.assertEqual(before['routes'][0]['total_cost_myr'], 50)
+        # Edit a journey already visible in the best route. The unseen route
+        # benefits differently because the earlier best used a bundled ticket.
+        response = await self.apply({'expected_revision': 1,
+            'estimates': [{'component_ids': ['out'], 'low': 1, 'high': 1}]})
+        self.assertEqual(response.status_code, 200, response.text)
+        result = self.store.get('trips', self.record['id'])['result']
+        self.assertEqual(len(result['routes']), 1)
+        self.assertEqual(result['routes'][0]['movements'][-1]['id'], 'other-return')
+        self.assertEqual(result['routes'][0]['total_cost_myr'], 2)
+
     async def test_all_categories_commit_one_revision(self):
         with patch.object(self.manager, 'recalculate', wraps=self.manager.recalculate) as recalculate:
             response = await self.apply({'expected_revision': 1,
@@ -75,6 +100,36 @@ class ApplyChangesTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(saved['revision'], 2)
         self.assertEqual(saved['airport_connections'][0]['fare_amount'], 13.25)
         self.assertEqual(len(saved['offers']), 2)
+
+    async def test_airport_time_edit_recovers_a_previously_unusable_saved_journey(self):
+        home = HOME.model_copy(update={'airport_codes': ['KUL'], 'flight_code': 'KUL'})
+        city = A.model_copy(update={'airport_codes': ['PUS'], 'flight_code': 'PUS'})
+        spec = trip().model_copy(update={'home': home, 'departures': [home], 'arrivals': [home],
+                                        'visits': [Visit(place=city)]})
+        segments = [dict(mode='flight', from_id='KUL', to_id='GMP', from_name='KUL', to_name='GMP',
+                         departure=dt(10, 10).isoformat(), arrival=dt(10, 11).isoformat()),
+                    dict(mode='flight', from_id='ICN', to_id='PUS', from_name='ICN', to_name='PUS',
+                         departure=dt(10, 12).isoformat(), arrival=dt(10, 13).isoformat())]
+        changing = discovery.flight_movement(home, city, segments, spec, {})
+        self.assertFalse(changing.usable)
+        moves = [self.moves[0], changing, self.moves[-1]]
+        self.record.update(spec=spec.model_dump(mode='json'), airport_connections=[
+            dict(from_airport='GMP', to_airport='ICN', mode='rail', duration_minutes=90, fare_amount=0)],
+            airport_transfer_estimates=[dict(from_id=home.id, to_id='airport:KUL', adults=1, mode='taxi', duration_minutes=10, low=0, high=0, currency='MYR'),
+                dict(from_id='airport:PUS', to_id=city.id, adults=1, mode='taxi', duration_minutes=10, low=0, high=0, currency='MYR')])
+        self.record['snapshot'].update(movements=[m.model_dump(mode='json') for m in moves],
+            offers=[fare(m.id, 1 if m.id != 'best' else 10).model_dump(mode='json') for m in moves])
+        self.store.put('trips', self.record['id'], self.record)
+        before = await self.manager.recalculate(self.record['id'])
+        self.assertEqual(len(before['routes']), 1)
+        self.assertEqual(before['routes'][0]['movements'][0]['id'], 'best')
+        response = await self.apply({'expected_revision': 1, 'connections': [
+            dict(from_airport='GMP', to_airport='ICN', mode='rail', duration_minutes=15, fare_amount=0)]})
+        self.assertEqual(response.status_code, 200, response.text)
+        result = self.store.get('trips', self.record['id'])['result']
+        recovered = [r for r in result['routes'] if any((m.get('template_id') or m['id']) == changing.id for m in r['movements'])]
+        self.assertTrue(recovered)
+        self.assertEqual(recovered[0]['total_cost_myr'], 2)
 
     async def wait_for_job(self, id):
         while task := self.manager.running.get(id):

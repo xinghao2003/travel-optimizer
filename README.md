@@ -44,6 +44,13 @@ Under **More settings › Search size**, choose **Minutes** to run the whole sea
 
 In request mode, optimization defaults to **25,000 expanded labels**. Hitting the limit is explicitly marked "Not all combinations were checked". **Check more combinations** increases the allowance and resumes a matching optimizer checkpoint. Changed inputs restart from the saved graph, rather than searching only the previous frontier. Accommodation, sightseeing hours, and reliability remain later phases.
 
+While a search runs, Missing info remains editable. **Apply and continue**
+pauses safely, saves all Apply-bar drafts together, and recalculates from the
+full saved graph within the same remaining round allowance. Previously weaker
+routes can become best under the new inputs. If time expires, edits remain
+saved and the round waits for explicit continuation. See
+[Apply during a search](docs/apply-during-search.md).
+
 ## Run on Windows
 
 Use uv and Node.js 20.19+ or 22.12+. The root `pyproject.toml` declares Python 3.13 and the backend dependencies; `uv.lock` records the resolved versions.

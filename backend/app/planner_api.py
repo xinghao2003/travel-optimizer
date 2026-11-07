@@ -21,12 +21,14 @@ class UpdateTrip(BaseModel):
 
 class SearchRequest(BaseModel):
     budget: int = Field(default=100, ge=1, le=500)
+    minutes: float | None = Field(default=None, gt=0, le=1440, allow_inf_nan=False)
 
 
 class OptimizationRequest(BaseModel):
     expand: bool = False
     include_dominated: bool = False
     compact: bool = False
+    minutes: float | None = Field(default=None, gt=0, le=1440, allow_inf_nan=False)
 
 
 class UpdateAirportConnections(BaseModel):
@@ -172,7 +174,7 @@ async def delete_trip(id: str):
 async def start_search(id: str, request: SearchRequest):
     get_trip(id)
     try:
-        return manager.start(id, request.budget)
+        return manager.start(id, request.budget, minutes=request.minutes)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
 
@@ -191,7 +193,7 @@ async def continue_search(id: str, request: SearchRequest):
     if job is None:
         raise HTTPException(404, "Search not found.")
     try:
-        return manager.start(job["trip_id"], request.budget, id)
+        return manager.start(job["trip_id"], request.budget, id, minutes=request.minutes)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
 
@@ -206,7 +208,7 @@ async def cancel_search(id: str):
 @router.post("/trips/{id}/optimize")
 async def recalculate(id: str, request: OptimizationRequest = OptimizationRequest()):
     get_trip(id)
-    result = await manager.recalculate(id, expand=request.expand, include_dominated=request.include_dominated)
+    result = await manager.recalculate(id, expand=request.expand, include_dominated=request.include_dominated, minutes=request.minutes)
     result.pop("bundle_candidates", None)
     return await asyncio.to_thread(lambda: JSONResponse(compact_result(result) if request.compact else result))
 

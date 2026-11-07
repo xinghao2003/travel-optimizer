@@ -582,6 +582,7 @@ class DiscoveryManager:
         self.optimization_locks = {}
         self.published_inputs = {}
         self.optimization_cadence = {}
+        self.round_deadlines = {}
         self.http_limit = asyncio.Semaphore(2)
 
     def rules(self):
@@ -609,8 +610,10 @@ class DiscoveryManager:
         job["queue"] = job["queue"][:job["cursor"]]+future
         job["manual_quote_queries"] = sum(link["kind"] == "multi-city" for link in job.get("bundle_links", []))
 
-    async def recalculate(self, trip_id, snapshot=None, expand=False, job_id=None, include_dominated=False):
+    async def recalculate(self, trip_id, snapshot=None, expand=False, job_id=None, include_dominated=False, minutes=None):
         started = clock.monotonic()
+        deadline = started+minutes*60 if minutes is not None else self.round_deadlines.get(job_id)
+        timed = deadline is not None
         logger.debug("planner recalculate.wait trip=%s job=%s", trip_id, job_id)
         lock = self.optimization_locks.setdefault(trip_id, asyncio.Lock())
         waited_for_solver = lock.locked()
@@ -681,7 +684,8 @@ class DiscoveryManager:
                 return job_id in self.cancelled_jobs
 
             cancelled = check_cancelled if job_id else None
-            logger.debug("planner optimize.dispatch trip=%s elapsed=%.2fs movements=%d offers=%d label_limit=%d", trip_id, clock.monotonic()-started, len(snapshot["movements"]), len(offers), snapshot["label_limit"])
+            label_limit = None if timed else snapshot["label_limit"]
+            logger.debug("planner optimize.dispatch trip=%s elapsed=%.2fs movements=%d offers=%d label_limit=%s", trip_id, clock.monotonic()-started, len(snapshot["movements"]), len(offers), label_limit)
             solver_movements = airport_transfer_variants(snapshot["movements"], trip, spec, snapshot.get("roads", {}), airport_connections)
             solver_rules = [*self.rules(), *airport_transfer_rules(trip, spec)]
             def solve():
@@ -690,7 +694,7 @@ class DiscoveryManager:
                 payload = self.store.load_optimizer_checkpoint(trip_id, CHECKPOINT_VERSION)
                 checkpoint = pickle.loads(payload) if payload is not None else SearchCheckpoint()
                 result = optimize(spec, solver_movements, offers, solver_rules, snapshot["revision"], trip["revision"],
-                                  cancelled, snapshot["label_limit"], include_dominated=include_dominated, checkpoint=checkpoint)
+                                  cancelled, label_limit, include_dominated=include_dominated, checkpoint=checkpoint, deadline=deadline)
                 self.store.save_optimizer_checkpoint(trip_id, CHECKPOINT_VERSION,
                     pickle.dumps(checkpoint, protocol=5) if not result["optimization_complete"] else None)
                 logger.debug("planner checkpoint trip=%s resumed_from=%d expanded=%d pending=%d", trip_id,
@@ -711,7 +715,8 @@ class DiscoveryManager:
             logger.debug("planner recalculate.done trip=%s elapsed=%.2fs", trip_id, clock.monotonic()-started)
             return result
 
-    def start(self, trip_id, budget=100, job_id=None):
+    def start(self, trip_id, budget=100, job_id=None, *, minutes=None):
+        round_started = clock.monotonic()
         trip = self.store.get("trips", trip_id)
         if trip is None:
             raise KeyError(trip_id)
@@ -724,8 +729,9 @@ class DiscoveryManager:
             job = self.store.get("jobs", job_id)
             if job is None or job["trip_id"] != trip_id or job["discovery_key"] != spec.discovery_key():
                 raise ValueError("Start a new search after changing discovery inputs.")
-            job["snapshot"]["label_limit"] = max(job["snapshot"].get("label_limit") or 25000,
-                                                  (trip.get("result") or {}).get("expanded_labels", 0))+max(1000, int(os.environ.get("PLANNER_LABEL_BATCH", "25000")))
+            if minutes is None:
+                job["snapshot"]["label_limit"] = max(job["snapshot"].get("label_limit") or 25000,
+                                                      (trip.get("result") or {}).get("expanded_labels", 0))+max(1000, int(os.environ.get("PLANNER_LABEL_BATCH", "25000")))
             if job["cursor"] == len(job["queue"]):
                 latest = {t["key"]: t for t in job["queue"][:job["cursor"]]}
                 retries = [{k: v for k, v in t.items() if k != "outcome"} for t in latest.values() if t.get("outcome") == "failed"]
@@ -746,6 +752,10 @@ class DiscoveryManager:
                    "cursor": 0, "snapshot": snapshot, "requests": 0, "cache_hits": 0, "outcomes": {}, "messages": [], "bundle_links": [], "created": clock.time()}
         self.separate_manual_quotes(job, spec)
         job.update(status="queued", batch_budget=budget, batch_requests=0)
+        job.update(time_budget_seconds=minutes*60 if minutes is not None else None,
+                   round_started_at=clock.time(), round_elapsed_seconds=0, pause_reason=None)
+        if minutes is not None:
+            self.round_deadlines[job["id"]] = round_started+minutes*60
         job["transit_configured"] = bool(transitous.contact_url)
         message = "Transitous is disabled until its contact URL is configured and routing use coordinated. No transit requests were sent."
         if any(m in TRANSIT_MODES for m in spec.modes) and not transitous.contact_url:
@@ -764,7 +774,14 @@ class DiscoveryManager:
 
     def public(self, job):
         latest = {t["key"]: t for t in job["queue"][:job["cursor"]]}
-        return {k: v for k, v in job.items() if k not in {"queue", "snapshot"}} | {"processed": job["cursor"], "pending": len(job["queue"])-job["cursor"], "failed_queries": sum(t.get("outcome") == "failed" for t in latest.values()), "graph_revision": job["snapshot"]["revision"]}
+        result = {k: v for k, v in job.items() if k not in {"queue", "snapshot"}} | {"processed": job["cursor"], "pending": len(job["queue"])-job["cursor"], "failed_queries": sum(t.get("outcome") == "failed" for t in latest.values()), "graph_revision": job["snapshot"]["revision"]}
+        if job["id"] in self.round_deadlines:
+            result["round_elapsed_seconds"] = max(0, job["time_budget_seconds"]+clock.monotonic()-self.round_deadlines[job["id"]])
+        return result
+
+    def time_expired(self, job):
+        deadline = self.round_deadlines.get(job["id"])
+        return deadline is not None and clock.monotonic() >= deadline
 
     def cancel(self, job_id):
         self.cancelled_jobs.add(job_id)
@@ -976,6 +993,12 @@ class DiscoveryManager:
                            trip.get("airport_connections", []), pricing_rules,
                            snapshot["movements"], snapshot.get("offers", []),
                            snapshot.get("roads", {}), snapshot.get("label_limit"))
+        if self.time_expired(job):
+            # Persist collected data, but do not launch a new solve after the
+            # deadline or replace useful options with a zero-work result.
+            job["optimization_pending"] = (self.published_inputs.get(job["id"]) != inputs
+                                            or not (trip.get("result") or {}).get("optimization_complete", False))
+            return
         cadence = self.optimization_cadence.get(job["id"])
         controls = (trip["revision"], pricing_rules, snapshot.get("label_limit"))
         if (not final and job.get("status") == "running" and cadence and cadence["seconds"] >= 1
@@ -989,7 +1012,8 @@ class DiscoveryManager:
             logger.debug("planner optimize.deferred job=%s cursor=%d max_cursor=%d wait_seconds=%.2f reason=amortize_solve", job["id"], job["cursor"], cadence["cursor"]+16,
                          max(0, cadence["seconds"]-(clock.monotonic()-cadence["finished"])))
             return
-        if self.published_inputs.get(job["id"]) == inputs and trip.get("result"):
+        if (self.published_inputs.get(job["id"]) == inputs and trip.get("result")
+                and (job.get("time_budget_seconds") is None or trip["result"].get("optimization_complete"))):
             logger.debug("planner optimize.reuse job=%s reason=unchanged_inputs", job["id"])
             result = copy.deepcopy(trip["result"])
             refresh_quote_freshness(result, now)
@@ -998,9 +1022,11 @@ class DiscoveryManager:
             self.store.put("trips", trip["id"], trip)
         else:
             solve_started = clock.monotonic()
+            job["phase"] = "optimization"
             result = await self.recalculate(trip["id"], snapshot, job_id=job["id"])
             self.optimization_cadence[job["id"]] = {"cursor": job["cursor"], "seconds": clock.monotonic()-solve_started,
                                                      "controls": controls, "finished": clock.monotonic()}
+        job["optimization_pending"] = not result.get("optimization_complete", True)
         known = {t["key"] for t in job["queue"]} | {stable_id(link["kind"], link["legs"]) for link in job["bundle_links"]}
         # Include dominated complete histories too: an undiscovered bundle can
         # make them cheaper than the current one-way frontier.
@@ -1082,7 +1108,21 @@ class DiscoveryManager:
         job["status"] = "running"
         self.store.put("jobs", job["id"], job)
         try:
-            while job["cursor"] < len(job["queue"]) and job["batch_requests"] < job["batch_budget"]:
+            if job.get("time_budget_seconds") is not None and job.get("optimization_pending"):
+                # Finish the paused graph before adding schedules that would
+                # invalidate its checkpoint. The fresh round has a new deadline.
+                await self.publish(job, spec, final=True)
+            published_final = False
+            while (not self.time_expired(job)
+                   and (job.get("time_budget_seconds") is not None or job["batch_requests"] < job["batch_budget"])):
+                if job["cursor"] == len(job["queue"]):
+                    if job.get("time_budget_seconds") is None:
+                        break
+                    await self.publish(job, spec, final=True)
+                    published_final = True
+                    if (job["cursor"] == len(job["queue"]) or self.time_expired(job)
+                            or job["status"] in {"cancelled", "superseded"}):
+                        break
                 if job["id"] in self.cancelled_jobs:
                     job["status"] = "cancelled"
                     break
@@ -1090,7 +1130,11 @@ class DiscoveryManager:
                 if TripSpec.model_validate(current_spec).discovery_key() != job["discovery_key"]:
                     job["status"] = "superseded"
                     break
+                if self.time_expired(job):
+                    break
                 task = job["queue"][job["cursor"]]
+                published_final = False
+                job["phase"] = "discovery"
                 task_started = clock.monotonic()
                 logger.debug("planner query.start job=%s cursor=%d/%d kind=%s key=%s", job["id"], job["cursor"], len(job["queue"]), task["kind"], task["key"])
                 try:
@@ -1119,6 +1163,8 @@ class DiscoveryManager:
                     if link not in job["bundle_links"]:
                         job["bundle_links"].append(link)
                 collected = self.ingest(task, outcome, spec, job["snapshot"])
+                if collected:
+                    job["optimization_pending"] = True
                 if task["kind"] == "transit" and status in {"empty", "success"} and not collected:
                     probe = fallback_task(task, spec, datetime.now(ZoneInfo(spec.places()[task["from_id"]].timezone)).date())
                     if probe and probe["key"] not in {t["key"] for t in job["queue"]}:
@@ -1146,10 +1192,14 @@ class DiscoveryManager:
                     break
                 await asyncio.sleep(0)
             # The job stays running until the last options are calculated: Search more can't start before.
-            await self.publish(job, spec, final=True)
+            if not published_final:
+                await self.publish(job, spec, final=True)
             if job["status"] == "running":
                 # The last publish can add combined-ticket searches.
-                job["status"] = "complete" if job["cursor"] == len(job["queue"]) else "paused"
+                job["status"] = "complete" if (job["cursor"] == len(job["queue"])
+                    and (job.get("time_budget_seconds") is None or not job.get("optimization_pending"))) else "paused"
+                if job["status"] == "paused":
+                    job["pause_reason"] = "time" if self.time_expired(job) else "requests"
             self.store.put("jobs", job["id"], job)
         except asyncio.CancelledError:
             job["status"] = "interrupted"
@@ -1161,6 +1211,10 @@ class DiscoveryManager:
             job["messages"].append(f"Planner: {type(exc).__name__}: {str(exc)[:180]}")
             self.store.put("jobs", job["id"], job)
         finally:
+            if job["id"] in self.round_deadlines:
+                job["round_elapsed_seconds"] = self.public(job)["round_elapsed_seconds"]
+                self.store.put("jobs", job["id"], job)
+            self.round_deadlines.pop(job["id"], None)
             self.running.pop(job["id"], None)
             self.live_jobs.pop(job["id"], None)
             self.published_inputs.pop(job["id"], None)

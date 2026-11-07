@@ -118,6 +118,7 @@ def main():
         discovery.optimize = original
     # This tool compares fresh solves, including older optimizer sources.
     captured["kwargs"].pop("checkpoint", None)
+    captured["kwargs"].pop("deadline", None)
     if options.label_limit is not None:
         captured["args"][7] = options.label_limit
     captured["kwargs"]["include_dominated"] = options.include_dominated

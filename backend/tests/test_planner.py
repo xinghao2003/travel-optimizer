@@ -135,6 +135,55 @@ class DiscoveryDateTests(unittest.TestCase):
 
 
 class OptimizerTests(unittest.TestCase):
+    def test_unreachable_connections_are_pruned_before_pricing(self):
+        spec = trip()
+        outward = movement("out", HOME, A, dt(10), dt(10, 10))
+        back = movement("back", A, HOME, dt(12, 16), dt(12, 17))
+        dead = [movement(f"late-{i}", HOME, A, dt(10), dt(12, 17)+timedelta(minutes=i)) for i in range(10)]
+        moves = [outward, *dead, back]
+        with patch("app.planner_optimizer.price_path", wraps=price_path) as prices:
+            # Without the timetable bound, dead branches exhaust this allowance.
+            result = optimize(spec, moves, [fare(m.id, 10) for m in moves], [], label_limit=6)
+        self.assertTrue(result["optimization_complete"])
+        self.assertEqual([m["id"] for m in result["routes"][0]["movements"]], ["out", "back"])
+        priced_movements = {m.id for call in prices.call_args_list for m in call.args[0]}
+        self.assertFalse(priced_movements & {m.id for m in dead})
+
+    def test_latest_connection_and_minimum_stay_equality_are_feasible(self):
+        spec = trip(visits=[Visit(place=A, min_stay_hours=24), Visit(place=B, min_stay_hours=24)], ordered_visits=True)
+        moves = [movement("out", HOME, A, dt(10), dt(10, 10)),
+                 movement("ab", A, B, dt(11, 10), dt(11, 11)),
+                 movement("back", B, HOME, dt(12, 11), dt(12, 12))]
+        result = optimize(spec, moves, [fare(m.id, 10) for m in moves], [])
+        self.assertEqual(len(result["routes"]), 1)
+        self.assertEqual(result["routes"][0]["stay_hours"], 48)
+
+    def test_road_connection_bound_keeps_generated_departures(self):
+        spec = trip(visits=[Visit(place=A, min_stay_hours=12), Visit(place=B, min_stay_hours=12)],
+                    ordered_visits=True, modes=["flight", "bus"], departure_start=time(9), departure_end=time(17))
+        moves = [movement("out", HOME, A, dt(10), dt(10, 10)),
+                 Movement(id="road", from_id=A.id, to_id=B.id, duration_minutes=90, mode="bus", source="fixture"),
+                 movement("back", B, HOME, dt(12), dt(12, 10))]
+        result = optimize(spec, moves, [fare(m.id, 10) for m in moves], [], include_dominated=True)
+        self.assertTrue(result["optimization_complete"])
+        self.assertTrue(result["routes"])
+        for route in [*result["routes"], *result["dominated_routes"]]:
+            road = route["movements"][1]
+            self.assertEqual(road["template_id"], "road")
+            self.assertTrue(time(9) <= datetime.fromisoformat(road["departure"]).time() <= time(17))
+
+    def test_own_car_recovery_via_another_gateway_is_kept(self):
+        parking, arrival = place("parking"), place("arrival")
+        spec = trip(departures=[parking], arrivals=[arrival], modes=["flight", "rail", "car"],
+                    cars={"own_enabled": True})
+        moves = [movement("park", HOME, parking, dt(10), dt(10, 10), "car", vehicle_kind="own"),
+                 movement("out", parking, A, dt(10, 11), dt(10, 12)),
+                 movement("back", A, arrival, dt(12), dt(12, 10)),
+                 movement("recover", arrival, parking, dt(12, 11), dt(12, 12), "rail"),
+                 movement("drive-home", parking, HOME, dt(12, 13), dt(12, 14), "car", vehicle_kind="own")]
+        result = optimize(spec, moves, [fare(m.id, 10) for m in moves], [])
+        self.assertEqual([m["id"] for m in result["routes"][0]["movements"]], [m.id for m in moves])
+
     def test_open_ended_itinerary_stays_keep_json_timestamps(self):
         spec = trip()
         out = movement("out", HOME, A, dt(10), dt(10, 10))

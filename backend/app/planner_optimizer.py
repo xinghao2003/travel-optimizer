@@ -432,6 +432,64 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
             usable = by_position[position] = [entry for entry in entries if entry[1] is None or (threshold is not None and entry[1] >= threshold)]
         return usable
 
+    def targets(city, phase, mask, departure_gateway, arrival_gateway, return_mask, own_location=None):
+        if phase == 0:
+            return [departure_gateway]
+        if phase == 1:
+            # The first unvisited city is the next one for an ordered trip.
+            return [id for id, (i, _) in required.items() if not mask & (1 << i)][:1 if spec.ordered_visits else None]
+        if phase == 2:
+            return list(dict.fromkeys([arrival_gateway, *[id for id, (i, _) in required.items()
+                                                         if not return_mask & (1 << i)]]))
+        return [id for id in dict.fromkeys([spec.home.id, *([own_location] if own_location else [])]) if id != city]
+
+    @lru_cache(maxsize=None)
+    def latest_arrival(city, phase, mask, reward, departure_gateway, arrival_gateway, return_mask, revisiting):
+        """Latest arrival that could still finish, using optimistic future travel.
+
+        Ignore commitments, vehicle restrictions, fixed home dates, and road
+        departure windows. Roads can leave at any instant, a superset of their
+        generated events. This can retain impossible states, but cannot reject
+        a feasible continuation. Own-car recovery has extra phase-3 stops and
+        bypasses this bound in add(). Fares never enter the calculation.
+        """
+        minimum = required[city][1] if reward and not revisiting else 0
+        if phase == 0 and city == departure_gateway:
+            next_mask = mask | ((1 << required[city][0]) if city in required else 0)
+            return latest_arrival(city, 1, next_mask, city in required, departure_gateway,
+                                  arrival_gateway, return_mask, revisiting)
+        if phase == 1 and mask == full_mask:
+            if not finish_at_home:
+                return end-timedelta(hours=minimum)
+            deadlines = (latest_arrival(city, 2, mask, reward, departure_gateway, gateway.id,
+                                       (1 << required[city][0]) if city in required else 0, revisiting)
+                         for gateway in spec.arrivals)
+            return max((value for value in deadlines if value is not None), default=None)
+        if phase == 2 and city == arrival_gateway:
+            return latest_arrival(city, 3, mask, reward, departure_gateway, arrival_gateway, return_mask, revisiting)
+        if phase == 3 and city == spec.home.id:
+            return end
+        best = None
+        for target in targets(city, phase, mask, departure_gateway, arrival_gateway, return_mask):
+            next_reward = phase in {1, 2} and target in required
+            next_mask = mask | ((1 << required[target][0]) if next_reward else 0)
+            next_return = return_mask | ((1 << required[target][0]) if phase == 2 and target in required else 0)
+            deadline = latest_arrival(target, phase, next_mask, next_reward, departure_gateway,
+                                      arrival_gateway, next_return, phase == 2 and target in required)
+            if deadline is None:
+                continue
+            edge = prepared.get((city, target, phase))
+            if edge is None:
+                edge = prepared[city, target, phase] = prepare(city, target, phase)
+            for movement, dep, arr, _ in edge[0]:
+                if dep is None:
+                    dep = deadline-timedelta(minutes=movement.duration_minutes)
+                elif arr > deadline:
+                    continue
+                if best is None or dep > best:
+                    best = dep
+        return best-timedelta(hours=minimum) if best is not None else None
+
     def flight_entry(movement):
         """A flight's part of a label's bundle history: endpoints, local flight date, and its combined-ticket id."""
         entry = history_cache.get(movement.id)
@@ -483,6 +541,12 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
 
     def add(label):
         nonlocal pruned
+        if not spec.cars.own_enabled:
+            deadline = latest_arrival(label.city, label.phase, label.mask, label.reward,
+                                      label.departure_gateway, label.arrival_gateway, label.return_mask, label.revisiting)
+            if deadline is None or label.arrival > deadline:
+                pruned += 1
+                return
         quote(label)
         if "flight" not in spec.modes and not bundle_ids and spec.budget_myr is not None and label.price["low_cents"] > cents(spec.budget_myr):
             return
@@ -575,19 +639,14 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
             quote(closed)
             completed.append(closed)
             continue
-        # `required` keeps the list order, so with ordered visits the next city is the first one not visited yet.
-        targets = ([label.departure_gateway] if label.phase == 0 else
-                   [id for id, (i, _) in required.items() if not label.mask & (1 << i)][:1 if spec.ordered_visits else None] if label.phase == 1 else
-                   list(dict.fromkeys([label.arrival_gateway, *[id for id, (i, _) in required.items()
-                                      if not label.return_mask & (1 << i)]])) if label.phase == 2 else
-                   [id for id in dict.fromkeys([spec.home.id, *([label.own_location] if label.own_used and label.own_location != spec.home.id else [])]) if id != label.city])
         minimum = required[label.city][1] if label.reward and not label.revisiting else 0
         ready = label.arrival+timedelta(hours=minimum)
         commitments = [c for c in spec.commitments if c.place_id == label.city] if label.reward and not label.revisiting else []
         if any(label.arrival > c.start.astimezone(UTC) for c in commitments):
             continue
         ready = max([ready, *(c.end.astimezone(UTC) for c in commitments)])
-        for target in targets:
+        for target in targets(label.city, label.phase, label.mask, label.departure_gateway, label.arrival_gateway,
+                              label.return_mask, label.own_location if label.own_used else None):
             for template, dep, arr, home_date in ready_entries(label.city, target, label.phase, ready):
                 if label.phase == 3 and label.own_used and label.own_location == label.city != spec.home.id and target == spec.home.id and template.vehicle_kind != "own":
                     continue

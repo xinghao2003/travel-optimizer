@@ -13,7 +13,7 @@ import { CircleCheck, LoaderCircle } from "lucide-react";
 import type { AppliedSharedFareGroup } from "./components/MissingFaresTable";
 import { groupMissingFares } from "./lib/missingFares";
 import { activeFares, airportChangeFieldId, buildAirportConnections, buildTransferEstimates, canonicalFares, canonicalIds, countDrafts, invalidDraftFields, knownComponentIds, savedTransferRows, sameTransferRows, transferFieldId, transferKey, transferRateId, type DraftPrice, type DraftState, type DraftTarget, type PriceValue, type SharedFare } from "./lib/drafts";
-import { useTripDrafts, type DraftKind } from "./lib/useTripDrafts";
+import { useTripDrafts } from "./lib/useTripDrafts";
 import { airportChangeRows, appError, assumedConnections, buildNextSteps, cityGaps, needsInputCount, optionNumber, optionsEmptyState, partySizeNotice, purchaseAmount, routeSignature, searchDetails, searchState, settingsFooter, sortRoutes, splitGroups, staySumWarning, transferDirections, transitSearchModes, unresolvedAccessJourneys, validateDraft, type AppError, type OptionsTarget } from "./lib/present";
 import { api, blankTrip, defaultBatchSize, modes, type AirportTransferMode, type Charge, type Job, type Movement, type Offer, type PricingRule, type Result, type Route, type SavedSummary, type SavedTrip, type TripDraft } from "./lib/planner";
 import { useMediaQuery } from "./lib/useMediaQuery";
@@ -33,8 +33,6 @@ const resultRoutes = (result: Result | null) => [...(result?.routes ?? []), ...(
  * that change with every estimate edit; prices are staged and saved on template ids.
  */
 const templatesOf = (result: Result | null) => new Map(resultRoutes(result).flatMap(route => route.movements.map(movement => [movement.id, movement.template_id ?? movement.id] as const)));
-/** The kinds of drafts in the order Apply sends them (F4), with their names in the Apply bar's failure text. */
-const applyOrder: [DraftKind, string][] = [["airportChanges", "Airport changes"], ["transfers", "Airport transfers"], ["fares", "Prices"]];
 
 export default function Planner() {
   const [draft, setDraft] = useState<TripDraft>(blankTrip);
@@ -76,7 +74,8 @@ export default function Planner() {
   // Typed prices, airport transfers and airport changes of the open trip, kept in this browser until Apply (F4).
   const tripDrafts = useTripDrafts(saved?.id ?? null);
   // Apply bar (C9): the step that Apply runs, and why the last Apply stopped.
-  const [applyState, setApplyState] = useState<{ step: number; steps: number } | null>(null);
+  const [applyState, setApplyState] = useState(false);
+  const applyBusy = useRef(false);
   const [applyError, setApplyError] = useState<{ text: string; reload: boolean } | null>(null);
   const draftRef = useRef(draft);
   const savedRef = useRef(saved);
@@ -221,18 +220,21 @@ export default function Planner() {
   useEffect(() => {
     if (!job || !["running", "queued"].includes(job.status)) return;
     let active = true, fetching = false;
+    let updatingOptions = !!job.updating_options;
     const token = session.current;
     async function poll() {
       if (fetching) return;
       fetching = true;
       try {
         const status = await api<Job & { graph_revision: number }>(`/searches/${job!.id}`);
-        if (!active || token !== session.current) return;
+        if (!active || token !== session.current || applyBusy.current) return;
+        const optionsUpdated = updatingOptions && !status.updating_options;
+        updatingOptions = !!status.updating_options;
         setJob(status);
         setError(current => current === pollError ? null : current);
-        if (status.graph_revision > (savedRef.current?.snapshot?.revision ?? -1) || !["running", "queued"].includes(status.status)) {
+        if (optionsUpdated || status.graph_revision > (savedRef.current?.snapshot?.revision ?? -1) || !["running", "queued"].includes(status.status)) {
           const record = await api<SavedTrip>(`/trips/${job!.trip_id}`);
-          if (active && token === session.current && !pendingSave.current && (!savedRef.current || record.revision >= savedRef.current.revision)) accept(record);
+          if (active && token === session.current && !applyBusy.current && !pendingSave.current && (!savedRef.current || record.revision >= savedRef.current.revision)) accept(record);
         }
       } catch { if (active) setError(current => current ?? pollError); }
       finally { fetching = false; }
@@ -332,13 +334,6 @@ export default function Planner() {
     const updated = await api<Result>(`/trips/${record.id}/fares/${encodeURIComponent(offer.id)}`, "PUT", offer);
     const next = await api<SavedTrip>(`/trips/${record.id}`);
     if (savedRef.current?.id === record.id) { accept(next); acceptResult(updated, record.id); setSaveStatus("Combined ticket saved · options updated"); }
-  }
-  async function applySharedFares(estimates: SharedFare[]) {
-    const record = await saveSpec();
-    const updated = await api<Result>(`/trips/${record.id}/fares/estimates`, "POST", { estimates, expected_revision: record.revision });
-    const next = await api<SavedTrip>(`/trips/${record.id}`);
-    if (savedRef.current?.id === record.id) { accept(next); acceptResult(updated, record.id); setSaveStatus("Shared estimates saved · frontier recalculated"); }
-    return updated;
   }
   async function removePrice(id: string) {
     if (!savedRef.current) return;
@@ -503,7 +498,7 @@ export default function Planner() {
 
   // C3.1 row 2 ("Updating options…") is for a save in progress. After a refused save nothing runs until the next
   // edit or Retry save, so the strip shows the search state; the header ("Not saved") and the banner report it (C13).
-  const strip = searchState({ invalid, dirty: dirty && saveStatus !== "Not saved", saved, result, job, minutes: roundMinutes });
+  const strip = searchState({ invalid, dirty: dirty && saveStatus !== "Not saved", saved, result, job, minutes: roundMinutes, applying: applyState });
   const details = searchDetails({ saved, job, result });
   // A saved trip with marked fields does not save until they are fixed. A new trip saves only with
   // Save without searching or Search transport, so its edits keep "Not saved yet" (C13).
@@ -680,9 +675,8 @@ export default function Planner() {
     setFocusTarget([...invalidFields(drafts).slice(0, 1), "missing-title"]);
   }
   /**
-   * Apply (F4, C9): sends the drafts in the order airport changes → transfers → fares, each kind after a trip save, and
-   * removes the drafts that the server took. Drafts it can't send now (transfers for another party size, fares on
-   * components outside the options) stay. The first failure stops the run and keeps the drafts not sent.
+   * Apply all sendable drafts in one transaction. The server coordinates a running round and returns its state.
+   * Drafts for another party size or components outside the saved data stay in this browser.
    * The session token is checked after every request, so a trip opened meanwhile is never changed.
    */
   function applyDrafts() {
@@ -690,11 +684,9 @@ export default function Planner() {
     const drafts = tripDrafts.read();
     const fares = canonicalFares(drafts.fares, templateOf);
     // Only drafts that Apply can send: fare drafts on components of the current options ("Other drafts" stay).
-    const sendable: Record<DraftKind, boolean> = { airportChanges: Object.keys(drafts.airportChanges).length > 0, transfers: transferKeys(drafts).length > 0,
-      fares: activeFares(fares, knownComponents).length > 0 };
-    const kinds = applyOrder.filter(([kind]) => sendable[kind]);
+    const hasChanges = Object.keys(drafts.airportChanges).length > 0 || transferKeys(drafts).length > 0 || activeFares(fares, knownComponents).length > 0;
     if (!tripId || busy) return;
-    if (!kinds.length) {
+    if (!hasChanges) {
       // The Apply bar counts every fare draft, so it shows while only "Other drafts" are left.
       if (Object.keys(fares).length) setApplyError({ text: "No change matches the current options. Undo the drafts under Missing info › Other drafts, or change the trip back.", reload: false });
       return;
@@ -713,54 +705,37 @@ export default function Planner() {
     void act(async () => {
       const token = session.current;
       const current = () => token === session.current && savedRef.current?.id === tripId;
-      let latest: Result | null = null, done = 0;
+      applyBusy.current = true;
+      setApplyState(true);
       try {
-        for (const [kind] of kinds) {
-          setApplyState({ step: done + 1, steps: kinds.length });
-          if (kind === "airportChanges") {
-            const record = await saveSpec();
-            if (!current()) return;
-            const connections = buildAirportConnections(record.airport_connections ?? [], drafts.airportChanges);
-            const updated = await api<Result>(`/trips/${tripId}/airport-connections`, "PUT", { connections });
-            if (!current()) return;
-            const next = await api<SavedTrip>(`/trips/${tripId}`);
-            if (!current()) return;
-            accept(next); acceptResult(updated, tripId); latest = updated;
-            tripDrafts.clear(kind);
-          } else if (kind === "transfers") {
-            const record = await saveSpec();
-            if (!current()) return;
-            // The drafts for the saved party size and directions; drafts for other party sizes stay.
-            const sent = transferKeys(drafts, record.airport_transfer_rows ?? [], record.spec.adults);
-            if (sent.length) {
-              const estimates = buildTransferEstimates(record.airport_transfer_rows ?? [], record.airport_transfer_estimates ?? [], drafts.transfers, record.spec.adults);
-              const updated = await api<SavedTrip>(`/trips/${tripId}/airport-transfer-estimates`, "PUT", { estimates, expected_revision: record.revision });
-              if (!current()) return;
-              accept(updated);
-              if (updated.result) { acceptResult(updated.result, tripId); latest = updated.result; }
-              sent.forEach(key => tripDrafts.unstage("transfers", key));
-            }
-          } else {
-            // The earlier steps can change the options, so the known components come from the latest data.
-            const active = activeFares(fares, knownComponentIds(savedRef.current, resultRoutes(latest ?? result)));
-            if (active.length) {
-              latest = await applySharedFares(active);
-              if (!current()) return;
-              // Only the sent components leave the drafts; drafts on other components stay under "Other drafts".
-              active.flatMap(fare => fare.component_ids).forEach(unstageComponent);
-            }
-          }
-          done++;
-        }
+        const record = await saveSpec();
+        if (!current()) return;
+        const airportChanges = Object.keys(drafts.airportChanges).length > 0;
+        const sentTransfers = transferKeys(drafts, record.airport_transfer_rows ?? [], record.spec.adults);
+        const estimates = activeFares(fares, knownComponentIds(record, resultRoutes(result)));
+        const payload = {
+          expected_revision: record.revision,
+          ...(airportChanges ? { connections: buildAirportConnections(record.airport_connections ?? [], drafts.airportChanges) } : {}),
+          ...(sentTransfers.length ? { transfers: buildTransferEstimates(record.airport_transfer_rows ?? [], record.airport_transfer_estimates ?? [], drafts.transfers, record.spec.adults) } : {}),
+          estimates,
+        };
+        const applied = await api<{ trip: SavedTrip; job: Job | null; updating: boolean }>(`/trips/${tripId}/apply`, "POST", payload);
+        if (!current()) return;
+        accept(applied.trip);
+        setJob(applied.job);
+        if (airportChanges) tripDrafts.clear("airportChanges");
+        sentTransfers.forEach(key => tripDrafts.unstage("transfers", key));
+        estimates.flatMap(fare => fare.component_ids).forEach(unstageComponent);
         // Before a search there are no options to count.
-        setSaveStatus(savedRef.current?.snapshot ? `Applied · ${before} → ${latest?.routes.length ?? before} best options` : "Applied");
+        setSaveStatus(applied.updating ? (applied.job && ["queued", "running"].includes(applied.job.status)
+          ? "Changes saved · updating options" : "Changes saved · continue the round to update options")
+          : savedRef.current?.snapshot ? `Applied · ${before} → ${applied.trip.result?.routes.length ?? before} best options` : "Applied");
         setFocusTarget([focus, "options-title"]);
       } catch (err) {
         if (!current()) return;
         const message = (err instanceof Error ? err.message : String(err)).replace(/\.$/, "");
-        const text = kinds.map(([, name], index) => index < done ? `${name} applied.` : index === done ? `${name} not applied: ${message}.` : `${name} not applied.`).join(" ");
-        setApplyError({ text, reload: (err as { status?: number }).status === 409 });
-      } finally { setApplyState(null); }
+        setApplyError({ text: `Could not finish Apply: ${message}. Your drafts are kept.`, reload: (err as { status?: number }).status === 409 });
+      } finally { applyBusy.current = false; setApplyState(false); }
     }, "apply");
   }
   // Journey prices › Add rate (F2): writes the trip's exchange rates; autosave saves and recalculates.
@@ -871,7 +846,7 @@ export default function Planner() {
     </>}
     <footer className="p-footer">Wayfinder Routes · Flights via fast-flights · Scheduled transit via <a href="https://transitous.org/sources/" target="_blank" rel="noreferrer">Transitous sources</a> · Road estimates via OSRM · Cities © GeoNames · Airports © airportsdata · Map © OpenStreetMap contributors</footer></main>
     </div>
-    {showApplyBar && <ApplyBar counts={draftCounts} invalid={invalidCount} applying={applyState} error={applyError} busy={busy}
+    {showApplyBar && <ApplyBar counts={draftCounts} invalid={invalidCount} applying={applyState} error={applyError} busy={busy} searchActive={active}
       onApply={applyDrafts} onDiscard={discardDrafts} onReload={() => { setApplyError(null); reloadTrip(); }} onFocusInvalid={() => focusInvalid()} />}
   </div>;
 }

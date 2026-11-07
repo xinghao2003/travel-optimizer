@@ -35,6 +35,24 @@ test("timed rounds show time, pending optimizer continuation and the selected ne
   assert.equal(settingsSummaries(blankTrip(), 1, 10).searchSize.summary, "10 minutes per round");
 });
 
+test("Apply status distinguishes saved edits, updating old options and an expired round", () => {
+  const job = { id: "j", trip_id: "t", status: "running", processed: 10, pending: 5, failed_queries: 0,
+    requests: 10, cache_hits: 0, messages: [], bundle_links: [], time_budget_seconds: 600, updating_options: true };
+  const props = { invalid: false, dirty: false, saved: { snapshot: { coverage: {} } }, job,
+    result: { discovery_required: false, optimization_complete: true, coverage: {} } };
+  const applying = searchState({ ...props, applying: true });
+  assert.equal(applying.id, "applying");
+  assert.match(applying.text, /current operation/);
+  const updating = searchState(props);
+  assert.equal(updating.id, "updating-options");
+  assert.match(updating.text, /Previous options/);
+  assert.equal(updating.actions[0].run, "stop");
+  const expired = searchState({ ...props, job: { ...job, status: "paused", pending: 0 } });
+  assert.match(expired.text, /Changes saved/);
+  assert.equal(expired.actions[0].label, "Continue for 10 minutes");
+  assert.equal(expired.secondary, null);
+});
+
 // One stored trip in its two response shapes. GET /trips/{id} empties snapshot.movements and
 // adds the fields that read_trip computes; PUT /trips/{id} returns the movements and, of those
 // fields, only airport_transfer_rows (not needed here).

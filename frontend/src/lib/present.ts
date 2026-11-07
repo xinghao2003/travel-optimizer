@@ -282,12 +282,13 @@ export type SearchState = {
 };
 
 /** The status strip (C3.1): the first matching row of the state table, plus the "Check more combinations" line. */
-export function searchState({ invalid, dirty, saved, result, job, minutes }: {
+export function searchState({ invalid, dirty, saved, result, job, minutes, applying = false }: {
   invalid: boolean; dirty: boolean;
   saved: Pick<SavedTrip, "snapshot"> | null;
   result: Pick<Result, "discovery_required" | "optimization_complete" | "coverage"> | null;
   job: Job | null;
   minutes?: number | null;
+  applying?: boolean;
 }): SearchState {
   const status = job?.status;
   const searched = !!saved?.snapshot || !!job;
@@ -311,6 +312,8 @@ export function searchState({ invalid, dirty, saved, result, job, minutes }: {
 
   if (invalid) return { ...state("invalid", "warn", "Fix the marked fields. Options show the last saved trip."), secondary: null };
   if (dirty && result) return { ...state("updating", "busy", "Updating options…"), secondary: null };
+  if (applying) return { ...state("applying", "busy", "Applying changes. Waiting for the current operation to finish…"), secondary: null };
+  if (active && job?.updating_options) return state("updating-options", "busy", "Updating options with your changes. Previous options are shown until recalculated.", [stop], { secondary: null });
   if (status === "queued") return state("queued", "busy", "Starting the search…", [stop]);
   if (status === "running" && job!.time_budget_seconds != null) {
     const remaining = Math.max(0, Math.ceil((job!.time_budget_seconds - (job!.round_elapsed_seconds ?? 0)) / 60));
@@ -324,6 +327,8 @@ export function searchState({ invalid, dirty, saved, result, job, minutes }: {
   // never searched as discovery_required, because no saved search matches the trip yet.
   if (!searched) return state("not-searched", "info", "Not searched yet.", [{ label: "Search transport", run: "search" }]);
   if (stale) return state("stale", "warn", "Your trip changed. Search again to include the changes. Options shown use the earlier search.", [{ label: "Search again", run: "search" }]);
+  if (job?.updating_options && ["paused", "cancelled", "interrupted"].includes(status!)) return state(status === "cancelled" ? "stopped" : status!, "info",
+    "Changes saved. Continue the round to update options.", [timedContinue], { secondary: null });
   if (job?.time_budget_seconds != null && ["paused", "cancelled", "interrupted"].includes(status!) && (pending > 0 || job.optimization_pending)) {
     const id = status === "cancelled" ? "stopped" : status!;
     const text = status === "interrupted" ? "The server stopped. Saved progress can continue."

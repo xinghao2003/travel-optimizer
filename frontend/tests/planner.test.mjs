@@ -22,6 +22,23 @@ test("a trip read asks for the compact record, and optimize sends compact: true"
   assert.deepEqual(JSON.parse(requests[1].init.body), { expand: true, compact: true });
 });
 
+test("one Apply request carries every category and expands its nested compact result", async () => {
+  const body = { expected_revision: 3, connections: [], transfers: [],
+    estimates: [{ component_ids: ["previously-weaker"], low: 1, high: 1, currency: "MYR" }] };
+  const requests = respond(JSON.stringify({ trip: { id: "t1", revision: 4, result: {
+    routes: [{ id: "new-best", movements: [0], purchases: [0], extra_charges: [] }],
+    _shared_route_data: { version: 1, movements: [{ id: "previously-weaker" }], purchases: [{ id: "corrected", low: 1 }], extra_charges: [] },
+  } }, job: { id: "j", status: "queued", updating_options: true }, updating: true }), 202);
+  const response = await api("/trips/t1/apply", "POST", body);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, "/api/v2/trips/t1/apply");
+  assert.deepEqual(JSON.parse(requests[0].init.body), body);
+  assert.deepEqual(response.trip.result.routes[0].movements, [{ id: "previously-weaker" }]);
+  assert.deepEqual(response.trip.result.routes[0].purchases, [{ id: "corrected", low: 1 }]);
+  assert.equal(response.trip.result._shared_route_data, undefined);
+  assert.equal(response.updating, true);
+});
+
 test("an error page that is not JSON gives the status, not a SyntaxError", async () => {
   respond("<html><body>502 Bad Gateway</body></html>", 502);
   await assert.rejects(api("/trips/t1", "PUT", {}), { message: "Request failed (502)", status: 502, path: "/trips/t1" });

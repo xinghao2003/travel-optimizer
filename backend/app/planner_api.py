@@ -328,10 +328,11 @@ def apply_missing_info(trip, request: ApplyChangesRequest):
 @router.post("/trips/{id}/apply")
 async def apply_changes(id: str, request: ApplyChangesRequest):
     get_trip(id)
-    store.update("trips", id, lambda trip: apply_missing_info(trip, request))
-    await manager.recalculate(id)
+    job = await manager.apply_changes(id, lambda trip: apply_missing_info(trip, request))
     response = await read_trip(id, compact=True)
-    return JSONResponse({"trip": json.loads(response.body), "job": None, "updating": False})
+    return JSONResponse({"trip": json.loads(response.body), "job": job,
+                         "updating": bool(job and job.get("updating_options"))},
+                        status_code=202 if job and job["status"] in {"queued", "running"} else 200)
 
 
 @router.post("/trips/{id}/fares/batch")

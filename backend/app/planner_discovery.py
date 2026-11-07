@@ -583,6 +583,8 @@ class DiscoveryManager:
         self.published_inputs = {}
         self.optimization_cadence = {}
         self.round_deadlines = {}
+        self.applying_jobs = set()
+        self.edit_locks = {}
         self.http_limit = asyncio.Semaphore(2)
 
     def rules(self):
@@ -681,7 +683,7 @@ class DiscoveryManager:
             now = datetime.now(UTC)
             offers = [o.model_copy(update={"estimated": True, "label": "Stale quote: "+o.label}) if o.source == "provider" and o.expires_at and o.expires_at.astimezone(UTC) < now else o for o in offers]
             def check_cancelled():
-                return job_id in self.cancelled_jobs
+                return job_id in self.cancelled_jobs or job_id in self.applying_jobs
 
             cancelled = check_cancelled if job_id else None
             label_limit = None if timed else snapshot["label_limit"]
@@ -782,6 +784,68 @@ class DiscoveryManager:
     def time_expired(self, job):
         deadline = self.round_deadlines.get(job["id"])
         return deadline is not None and clock.monotonic() >= deadline
+
+    def resume_edited_round(self, job, deadline):
+        """Restart the same round, keeping its query counters and original deadline."""
+        if job["status"] in {"cancelled", "superseded", "interrupted", "failed"}:
+            return
+        spec = TripSpec.model_validate(self.store.trip_spec(job["trip_id"]))
+        if spec.discovery_key() != job["discovery_key"]:
+            job["status"] = "superseded"
+        elif deadline is not None and clock.monotonic() >= deadline:
+            job.update(status="paused", pause_reason="time",
+                       round_elapsed_seconds=max(0, job["time_budget_seconds"]+clock.monotonic()-deadline))
+        else:
+            if deadline is not None:
+                self.round_deadlines[job["id"]] = deadline
+            job.update(status="queued", pause_reason=None)
+            self.live_jobs[job["id"]] = job
+            self.running[job["id"]] = asyncio.create_task(self.run(job, spec))
+        self.store.put("jobs", job["id"], job)
+
+    async def apply_changes(self, trip_id, transform):
+        """Quiesce active work, apply one transaction, then use only the remaining round."""
+        async with self.edit_locks.setdefault(trip_id, asyncio.Lock()):
+            job = next((j for j in self.live_jobs.values() if j["trip_id"] == trip_id), None)
+            task = self.running.get(job["id"]) if job else None
+            was_active = task is not None and not task.done()
+            deadline = self.round_deadlines.get(job["id"]) if job else None
+            if was_active:
+                self.applying_jobs.add(job["id"])
+                if job.get("phase") == "optimization":
+                    job["optimization_pending"] = True
+                job["phase"] = "applying"
+            try:
+                if was_active:
+                    # Finish/store an in-flight response. Cancellation of this
+                    # HTTP caller must not throw that provider response away.
+                    await asyncio.shield(task)
+                async with self.optimization_locks.setdefault(trip_id, asyncio.Lock()):
+                    trip = self.store.update("trips", trip_id, transform)
+                    self.store.save_optimizer_checkpoint(trip_id, CHECKPOINT_VERSION, None)
+                if job is None and trip.get("latest_job_id"):
+                    candidate = self.store.get("jobs", trip["latest_job_id"])
+                    if candidate and candidate["discovery_key"] == TripSpec.model_validate(trip["spec"]).discovery_key():
+                        job = candidate
+                if job:
+                    job.update(optimization_pending=True, updating_options=True)
+                    if not was_active and job.get("time_budget_seconds") is not None:
+                        # Applying to a paused/finished timed job does not grant
+                        # another round or silently run outside its allowance.
+                        if job["status"] == "complete":
+                            job.update(status="paused", pause_reason="changes")
+                    self.store.put("jobs", job["id"], job)
+            finally:
+                if was_active:
+                    self.applying_jobs.discard(job["id"])
+                    if task.done():
+                        self.resume_edited_round(job, deadline)
+            if not was_active and (job is None or job.get("time_budget_seconds") is None):
+                result = await self.recalculate(trip_id)
+                if job:
+                    job.update(optimization_pending=not result["optimization_complete"], updating_options=False)
+                    self.store.put("jobs", job["id"], job)
+            return self.public(job) if job else None
 
     def cancel(self, job_id):
         self.cancelled_jobs.add(job_id)
@@ -985,7 +1049,7 @@ class DiscoveryManager:
             return
         trip["snapshot"] = snapshot
         self.store.put("trips", trip["id"], trip)
-        if job["id"] in self.cancelled_jobs:
+        if job["id"] in self.cancelled_jobs or job["id"] in self.applying_jobs:
             return
         # Empty/unsupported provider responses still update coverage, but do not
         # change the optimization problem. Avoid solving the same graph again.
@@ -1029,6 +1093,7 @@ class DiscoveryManager:
             self.optimization_cadence[job["id"]] = {"cursor": job["cursor"], "seconds": clock.monotonic()-solve_started,
                                                      "controls": controls, "finished": clock.monotonic()}
         job["optimization_pending"] = not result.get("optimization_complete", True)
+        job["updating_options"] = False
         known = {t["key"] for t in job["queue"]} | {stable_id(link["kind"], link["legs"]) for link in job["bundle_links"]}
         # Include dominated complete histories too: an undiscovered bundle can
         # make them cheaper than the current one-way frontier.
@@ -1110,7 +1175,8 @@ class DiscoveryManager:
         job["status"] = "running"
         self.store.put("jobs", job["id"], job)
         try:
-            if job.get("time_budget_seconds") is not None and job.get("optimization_pending"):
+            if ((job.get("time_budget_seconds") is not None and job.get("optimization_pending"))
+                    or job.get("updating_options")):
                 # Finish the paused graph before adding schedules that would
                 # invalidate its checkpoint. The fresh round has a new deadline.
                 await self.publish(job, spec, final=True)
@@ -1127,6 +1193,8 @@ class DiscoveryManager:
                         break
                 if job["id"] in self.cancelled_jobs:
                     job["status"] = "cancelled"
+                    break
+                if job["id"] in self.applying_jobs:
                     break
                 current_spec = self.store.trip_spec(job["trip_id"])
                 if TripSpec.model_validate(current_spec).discovery_key() != job["discovery_key"]:
@@ -1202,6 +1270,8 @@ class DiscoveryManager:
                     and (job.get("time_budget_seconds") is None or not job.get("optimization_pending"))) else "paused"
                 if job["status"] == "paused":
                     job["pause_reason"] = "time" if self.time_expired(job) else "requests"
+                if job["id"] in self.applying_jobs:
+                    job.update(status="paused", pause_reason="applying")
             self.store.put("jobs", job["id"], job)
         except asyncio.CancelledError:
             job["status"] = "interrupted"

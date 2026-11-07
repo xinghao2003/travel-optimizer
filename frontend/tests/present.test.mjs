@@ -9,6 +9,21 @@ const {
 } = await loadTs("../src/lib/present.ts");
 const { blankTrip } = await loadTs("../src/lib/planner.ts");
 
+test("minimum stays must be explicitly positive for every city", () => {
+  for (const value of [0, -1, NaN, Infinity, 8761]) {
+    assert.match(validateDraft({ ...blankTrip(), visits: [{ place: { id: "city" }, min_stay_hours: value }] }).stays, /minimum stay/);
+  }
+  assert.equal(validateDraft({ ...blankTrip(), visits: [{ place: { id: "city" }, min_stay_hours: .5 }] }).stays, undefined);
+});
+
+test("calculation safety pause explains partial results and offers continuation", () => {
+  const state = searchState({ invalid: false, dirty: false, saved: { snapshot: {} },
+    result: { optimization_complete: false }, job: { status: "paused", pause_reason: "calculation", optimization_pending: true, pending: 0, time_budget_seconds: 600 } });
+  assert.match(state.text, /safety limit.*Partial options/);
+  assert.equal(state.actions[0].run, "continue");
+  assert.equal(state.secondary, null);
+});
+
 test("timed rounds show time, pending optimizer continuation and the selected next allowance", () => {
   const job = { id: "j", trip_id: "t", status: "paused", processed: 10, pending: 0, failed_queries: 0,
     requests: 10, cache_hits: 0, messages: [], bundle_links: [], batch_budget: 1, batch_requests: 10,
@@ -529,7 +544,7 @@ test("draft validation lists errors in the order the settings footer reports the
   assert.deepEqual(validateDraft(draftTrip(sameDay)), { homeTimes: "Be home after you leave home." });
   assert.deepEqual(validateDraft(draftTrip({ ...sameDay, end_date: "2026-12-05" })), {});
   assert.deepEqual(validateDraft(draftTrip({ adults: 0, budget_myr: -1, visits: [{ place: place("GMP", "Seoul"), min_stay_hours: 9000 }] })), {
-    stays: "Enter 0 to 8,760 hours.", adults: "Enter 1 to 9 adults.", budget: "Enter 0 or more, or leave it blank.",
+    stays: "Enter a minimum stay greater than 0 and up to 8,760 hours for each city.", adults: "Enter 1 to 9 adults.", budget: "Enter 0 or more, or leave it blank.",
   });
 });
 

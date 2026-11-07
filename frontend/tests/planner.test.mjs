@@ -13,6 +13,14 @@ function respond(body, status = 200) {
 }
 const unreachable = "Can't reach the planner server. Check that it is running, then try again.";
 
+test("a stalled read has a timeout and reports a retryable error", async () => {
+  globalThis.fetch = async (_url, init) => {
+    assert.ok(init.signal instanceof AbortSignal);
+    throw new DOMException("Timed out", "TimeoutError");
+  };
+  await assert.rejects(api('/trips/t1'), { message: 'The planner took too long to respond. Try opening the trip again.' });
+});
+
 test("a trip read asks for the compact record, and optimize sends compact: true", async () => {
   const requests = respond(JSON.stringify({ id: "t1" }));
   assert.deepEqual(await api("/trips/t1"), { id: "t1" });

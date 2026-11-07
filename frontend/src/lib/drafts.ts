@@ -10,7 +10,7 @@ export type TransferRowDraft = { mode: AirportTransferMode; low: string; high: s
 /** A typed airport change, keyed "{FROM}>{TO}". A null draft clears or removes the saved one. */
 export type AirportChangeDraft = { mode: AirportTransferMode | ""; duration: string; fare: string; currency: string };
 /** All drafts of one trip (F4): fare drafts by key, transfer drafts by `transferKey`, airport-change drafts by "{FROM}>{TO}". */
-export type DraftState = { fares: Record<string, SharedFare>; transfers: Record<string, TransferRowDraft[]>; airportChanges: Record<string, AirportChangeDraft | null> };
+export type DraftState = { fares: Record<string, SharedFare>; transfers: Record<string, TransferRowDraft[]>; airportChanges: Record<string, AirportChangeDraft | null>; exchangeRates?: Record<string, number> };
 
 /** A ticket row of the itinerary (E9.4): the component that Set price stages, its charge, and whether it has your own price. */
 export type DraftTarget = { componentId: string | null; charge: Charge | null; ownPrice: boolean };
@@ -244,5 +244,5 @@ export function buildAirportConnections(saved: AirportConnection[], drafts: Reco
 
 /** Number of drafts of each kind: airport changes and transfer directions with a draft, and fare drafts. */
 export function countDrafts(drafts: DraftState) {
-  return { airportChanges: Object.keys(drafts.airportChanges).length, transfers: Object.keys(drafts.transfers).length, prices: Object.keys(drafts.fares).length };
+  return { airportChanges: Object.keys(drafts.airportChanges).length, transfers: Object.keys(drafts.transfers).length, prices: Object.keys(drafts.fares).length, rates: Object.keys(drafts.exchangeRates ?? {}).length };
 }

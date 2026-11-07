@@ -349,7 +349,8 @@ class SearchCheckpoint:
 def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer], rules: list[PricingRule],
              snapshot_revision: int = 0, trip_revision: int = 0, cancelled=None, label_limit: int | None = None,
              finish_at_home: bool = True, include_dominated: bool = False, *,
-             checkpoint: SearchCheckpoint | None = None, deadline: float | None = None) -> dict:
+             checkpoint: SearchCheckpoint | None = None, deadline: float | None = None,
+             expansion_budget: int | None = None) -> dict:
     started = clock.monotonic()
     next_progress = started + 5
     logger.debug("planner dp.start movements=%d offers=%d limit=%s", len(movements), len(offers), label_limit)
@@ -420,6 +421,7 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
         checkpoint.signature = signature
     # Checks that depend only on a scheduled journey (and the search phase) are computed once per journey. Journeys
     # without a schedule get new times for each label, so they are checked per label.
+    round_start_expanded = expanded
     timing_cache = {}
     prepared = {}
     history_cache = {}
@@ -634,6 +636,7 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
 
     while queue:
         if ((cancelled and cancelled()) or (label_limit is not None and expanded >= label_limit)
+                or (expansion_budget is not None and expanded - round_start_expanded >= expansion_budget)
                 or (deadline is not None and clock.monotonic() >= deadline)):
             break
         label = queue.popleft()
@@ -816,4 +819,6 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
             "optimality_scope": "Retrieved schedules, fare offers, and road departures at readiness / connection / return-boundary events"}
     if include_dominated:
         response["dominated_routes"] = [r for r in results if r["budget_status"] != "over" and r["id"] not in frontier_ids]
+    if expansion_budget is not None:
+        response["safety_limit_reached"] = bool(queue) and expanded - round_start_expanded >= expansion_budget
     return response

@@ -334,6 +334,8 @@ export function searchState({ invalid, dirty, saved, result, job, minutes, apply
   if (stale) return state("stale", "warn", "Your trip changed. Search again to include the changes. Options shown use the earlier search.", [{ label: "Search again", run: "search" }]);
   if (job?.updating_options && ["paused", "cancelled", "interrupted"].includes(status!)) return state(status === "cancelled" ? "stopped" : status!, "info",
     "Changes saved. Continue the round to update options.", [timedContinue], { secondary: null });
+  if (status === "paused" && job?.pause_reason === "calculation") return state("paused", "info",
+    "Calculation paused at the safety limit. Partial options are shown. Continue to check more combinations.", [timedContinue], { secondary: null });
   if (job?.time_budget_seconds != null && ["paused", "cancelled", "interrupted"].includes(status!) && (pending > 0 || job.optimization_pending)) {
     const id = status === "cancelled" ? "stopped" : status!;
     const text = status === "interrupted" ? "The server stopped. Saved progress can continue."
@@ -804,7 +806,7 @@ export function validateDraft(draft: TripDraft): Record<string, string> {
   if (!draft.departure_start || !draft.departure_end) errors.departureWindow = "Enter both departure times.";
   else if (hhmm(draft.departure_end) <= hhmm(draft.departure_start)) errors.departureWindow = "The latest departure must be after the earliest.";
   if (draft.start_date === draft.end_date && draft.home_departure_earliest && draft.home_arrival_latest && hhmm(draft.home_arrival_latest) <= hhmm(draft.home_departure_earliest)) errors.homeTimes = "Be home after you leave home.";
-  if (draft.visits.some(visit => !(visit.min_stay_hours >= 0 && visit.min_stay_hours <= 8760))) errors.stays = "Enter 0 to 8,760 hours.";
+  if (draft.visits.some(visit => !(Number.isFinite(visit.min_stay_hours) && visit.min_stay_hours > 0 && visit.min_stay_hours <= 8760))) errors.stays = "Enter a minimum stay greater than 0 and up to 8,760 hours for each city.";
   if (!Number.isInteger(draft.adults) || draft.adults < 1 || draft.adults > 9) errors.adults = "Enter 1 to 9 adults.";
   if (draft.budget_myr !== null && !(draft.budget_myr >= 0)) errors.budget = "Enter 0 or more, or leave it blank.";
   return errors;

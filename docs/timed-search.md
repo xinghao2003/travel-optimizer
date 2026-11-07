@@ -7,7 +7,12 @@ optimization, publication, and saving. A round finishes early if no work
 remains. It pauses near its deadline otherwise.
 
 In timed mode, the provider-query batch allowance and expanded-state allowance
-do not stop the round. Provider concurrency limits, request timeouts, supported
+do not stop the round. A safety limit of 100,000 additional expanded states per
+calculation applies in both modes (`PLANNER_SOLVE_BATCH`). Reaching it pauses
+the round with partial options and a checkpoint; Continue resumes that work.
+Each continuation can grow the saved checkpoint further. The limit bounds work
+per calculation, not total memory across repeated continuations.
+Provider concurrency limits, request timeouts, supported
 query types, and serial follow-up policies remain unchanged. Selecting
 **Requests** uses the existing count-based behavior: 100 uncached query tasks
 per batch by default, and a 25,000-state initial optimizer allowance. One query

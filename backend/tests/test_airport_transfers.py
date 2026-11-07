@@ -110,7 +110,9 @@ class AirportTransferApiTests(unittest.IsolatedAsyncioTestCase):
             db = PlannerStore(Path(folder)/'api.sqlite')
             with patch.object(endpoints, 'store', db):
                 async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
-                    response = await client.post('/api/v2/trips', json=fixture.spec.model_dump(mode='json'))
+                    spec = fixture.spec.model_dump(mode='json')
+                    spec['visits'][0]['min_stay_hours'] = 1
+                    response = await client.post('/api/v2/trips', json=spec)
                     self.assertEqual(response.status_code, 201)
                     record = response.json()
                     self.assertTrue(record['airport_transfer_rows'])

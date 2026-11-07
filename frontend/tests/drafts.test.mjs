@@ -122,8 +122,8 @@ test("airport connection drafts report the first invalid value with the pair", (
 
 test("draft counts by kind", () => {
   assert.deepEqual(countDrafts({ fares: { a: fare(["1"]), b: fare(["2"]) }, transfers: { [transferKey("KUL", "airport:KUL", 2)]: [] }, airportChanges: { "GMP>ICN": null } }),
-    { airportChanges: 1, transfers: 1, prices: 2 });
-  assert.deepEqual(countDrafts({ fares: {}, transfers: {}, airportChanges: {} }), { airportChanges: 0, transfers: 0, prices: 0 });
+    { airportChanges: 1, transfers: 1, prices: 2, rates: 0 });
+  assert.deepEqual(countDrafts({ fares: {}, transfers: {}, airportChanges: {}, exchangeRates: { TWD: .15 } }), { airportChanges: 0, transfers: 0, prices: 0, rates: 1 });
 });
 
 test("undoing one component removes it from every fare draft", () => {

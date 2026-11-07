@@ -10,8 +10,8 @@ import { dateModeText, formatLocal, modeLabel, settingsSummaries, staySumWarning
 import { localInputToISO, modes, type Place, type TripDraft, type TripSpec } from "../lib/planner";
 
 const count = (n: number, word: string) => `${n} ${n === 1 ? word : `${word}s`}`;
-/** "2 days", "1.5 days" or "no minimum": the minimum stay of a city in days. */
-const stayDays = (hours: number) => hours > 0 ? count(Number((hours / 24).toFixed(1)), "day") : "no minimum";
+/** The minimum stay of a city in days, after a value has been entered. */
+const stayDays = (hours: number) => hours > 0 ? count(Number((hours / 24).toFixed(1)), "day") : "";
 
 /**
  * Trip settings (C4): the core fields, More settings (G) and the sticky footer with the search actions.
@@ -128,12 +128,14 @@ export function TripSettings({ draft, edit, places, errors, transitConfigured, s
             }}><GripVertical size={16} aria-hidden="true" /></button>}
           <span className="p-visit-name">{ordered && `${i + 1}. `}{[visit.place.name, visit.place.country_code].filter(Boolean).join(" · ")}</span>
           <NumberField className="p-stay-field" label={<><span className="sr-only">Minimum stay in {visit.place.name}: </span>At least</>} unit="h" hint={stayDays(visit.min_stay_hours)}
-            value={visit.min_stay_hours} min={0} max={8760} message="Enter 0 to 8,760 hours."
+            value={visit.min_stay_hours || null} min={0} max={8760} optional placeholder="Required"
+            error={visit.min_stay_hours > 0 ? undefined : "Enter a minimum stay greater than 0 hours."}
+            message="Enter a minimum stay greater than 0 and up to 8,760 hours."
             onChange={n => edit({ ...draft, visits: visits.map((item, j) => j === i ? { ...item, min_stay_hours: n ?? 0 } : item) })} />
           <button type="button" className="p-icon-button" aria-label={`Remove ${visit.place.name}`} onClick={() => removeVisit(visit.place)}>×</button>
         </li>)}</ul>}
         {visits.length > 1 && <label className="p-check"><input type="checkbox" checked={!!draft.ordered_visits} onChange={e => edit({ ...draft, ordered_visits: e.target.checked })} />Visit in this order</label>}
-        {visits.length > 1 && visits.some(visit => visit.min_stay_hours !== firstStay) && <button type="button" className="p-text-button"
+        {visits.length > 1 && firstStay > 0 && visits.some(visit => visit.min_stay_hours !== firstStay) && <button type="button" className="p-text-button"
           onClick={() => edit({ ...draft, visits: visits.map(visit => ({ ...visit, min_stay_hours: firstStay })) })}>Use {firstStay} h for all cities</button>}
         <p className="p-field-status" aria-live="polite">{visitStatus}</p>
       </div>

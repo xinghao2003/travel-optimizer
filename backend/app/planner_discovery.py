@@ -697,7 +697,8 @@ class DiscoveryManager:
                 payload = self.store.load_optimizer_checkpoint(trip_id, CHECKPOINT_VERSION)
                 checkpoint = pickle.loads(payload) if payload is not None else SearchCheckpoint()
                 result = optimize(spec, solver_movements, offers, solver_rules, snapshot["revision"], trip["revision"],
-                                  cancelled, label_limit, include_dominated=include_dominated, checkpoint=checkpoint, deadline=deadline)
+                                  cancelled, label_limit, include_dominated=include_dominated, checkpoint=checkpoint, deadline=deadline,
+                                  expansion_budget=max(1, int(os.environ.get("PLANNER_SOLVE_BATCH", "100000"))))
                 self.store.save_optimizer_checkpoint(trip_id, CHECKPOINT_VERSION,
                     pickle.dumps(checkpoint, protocol=5) if not result["optimization_complete"] else None)
                 logger.debug("planner checkpoint trip=%s resumed_from=%d expanded=%d pending=%d", trip_id,
@@ -1094,6 +1095,8 @@ class DiscoveryManager:
             self.optimization_cadence[job["id"]] = {"cursor": job["cursor"], "seconds": clock.monotonic()-solve_started,
                                                      "controls": controls, "finished": clock.monotonic()}
         job["optimization_pending"] = not result.get("optimization_complete", True)
+        if result.get("safety_limit_reached"):
+            job.update(status="paused", pause_reason="calculation")
         job["updating_options"] = False
         known = {t["key"] for t in job["queue"]} | {stable_id(link["kind"], link["legs"]) for link in job["bundle_links"]}
         # Include dominated complete histories too: an undiscovered bundle can
@@ -1176,13 +1179,12 @@ class DiscoveryManager:
         job["status"] = "running"
         self.store.put("jobs", job["id"], job)
         try:
-            if ((job.get("time_budget_seconds") is not None and job.get("optimization_pending"))
-                    or job.get("updating_options")):
+            if job.get("optimization_pending") or job.get("updating_options"):
                 # Finish the paused graph before adding schedules that would
                 # invalidate its checkpoint. The fresh round has a new deadline.
                 await self.publish(job, spec, final=True)
             published_final = False
-            while (not self.time_expired(job)
+            while (job["status"] == "running" and not self.time_expired(job)
                    and (job.get("time_budget_seconds") is not None or job["batch_requests"] < job["batch_budget"])):
                 if job["cursor"] == len(job["queue"]):
                     if job.get("time_budget_seconds") is None:
@@ -1190,7 +1192,7 @@ class DiscoveryManager:
                     await self.publish(job, spec, final=True)
                     published_final = True
                     if (job["cursor"] == len(job["queue"]) or self.time_expired(job)
-                            or job["status"] in {"cancelled", "superseded"}):
+                            or job["status"] in {"cancelled", "superseded", "paused"}):
                         break
                 if job["id"] in self.cancelled_jobs:
                     job["status"] = "cancelled"
@@ -1259,11 +1261,11 @@ class DiscoveryManager:
                 if job["cursor"] % 4 == 0 or task["kind"] == "road":
                     await self.publish(job, spec)
                     self.store.put("jobs", job["id"], job)
-                if job["status"] in {"cancelled", "superseded"}:
+                if job["status"] in {"cancelled", "superseded", "paused"}:
                     break
                 await asyncio.sleep(0)
             # The job stays running until the last options are calculated: Search more can't start before.
-            if not published_final:
+            if not published_final and job.get("pause_reason") != "calculation":
                 await self.publish(job, spec, final=True)
             if job["status"] == "running":
                 # The last publish can add combined-ticket searches.

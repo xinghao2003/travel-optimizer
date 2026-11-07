@@ -2,6 +2,8 @@ import { AppHeader } from "./components/AppHeader";
 import { ApplyBar } from "./components/ApplyBar";
 import { ItineraryPanel } from "./components/ItineraryPanel";
 import { MissingInfoPanel } from "./components/MissingInfoPanel";
+import { MissingInfoCsv } from "./components/MissingInfoCsv";
+import { stageMissingInfoCsv } from "./lib/missingInfoCsv";
 import { OptionsPanel } from "./components/OptionsPanel";
 import { ErrorBanner } from "./components/ErrorBanner";
 import { ExportDialog } from "./components/ExportDialog";
@@ -143,6 +145,8 @@ export default function Planner() {
     const record = await api<SavedTrip>(`/trips/${id}`);
     if (token !== session.current) return;
     accept(record, true); setSaveStatus("Saved");
+    // Settings and saved options are available before status/recalculation finish.
+    setLoadingTrip(false);
     // Settings open for a trip that was never searched; otherwise the trip bar shows their summary.
     setSettingsOpen(!record.snapshot && !record.latest_job_id);
     let status: Job | null = null;
@@ -181,9 +185,10 @@ export default function Planner() {
   }
   useEffect(() => {
     let active = true;
-    void Promise.all([api<{ trips: SavedSummary[] }>("/trips"), api<{ rules: PricingRule[] }>("/pricing-rules"), fetch("/api/data").then(r => r.json())]).then(async ([trips, data, config]) => {
+    void Promise.all([api<{ trips: SavedSummary[] }>("/trips"), api<{ rules: PricingRule[] }>("/pricing-rules"), fetch("/api/data", { signal: AbortSignal.timeout(15000) }).then(r => r.json())]).then(async ([trips, data, config]) => {
       if (!active) return;
       setSummaries(trips.trips); setRules(data.rules); setTransitConfigured(config.transit_routing_configured);
+      setInitialLoad(false);
       const id = localStorage.getItem("wayfinder:last-trip");
       if (id && trips.trips.some(t => t.id === id)) await openTrip(id);
     }).catch(err => { if (active) setError(appError(err)); }).finally(() => { if (active) setInitialLoad(false); });
@@ -197,6 +202,8 @@ export default function Planner() {
     const spec = draftRef.current;
     if (!spec.home || !spec.visits.length) throw new Error("Choose a home/base and at least one required destination.");
     if (!spec.modes.length) throw new Error("Select at least one mode.");
+    const stayError = validateDraft(spec).stays;
+    if (stayError) throw new Error(stayError);
     const stamp = version.current, token = session.current;
     const current = savedRef.current;
     if (current && !dirtyRef.current) return current;
@@ -648,7 +655,7 @@ export default function Planner() {
   const transferKeys = (drafts: DraftState, rows = saved?.airport_transfer_rows ?? [], count = adults) =>
     rows.map(row => transferKey(row.from_id, row.to_id, count)).filter(key => key in drafts.transfers);
   const draftCounts = countDrafts({ ...tripDrafts.drafts, fares: fareDrafts, transfers: Object.fromEntries(transferKeys(tripDrafts.drafts).map(key => [key, tripDrafts.drafts.transfers[key]])) });
-  const draftTotal = draftCounts.airportChanges + draftCounts.transfers + draftCounts.prices;
+  const draftTotal = draftCounts.airportChanges + draftCounts.transfers + draftCounts.prices + draftCounts.rates;
 
   async function shareTrips(scope: ExportScope, format: "pdf" | "html") {
     // Reserve the tab during the click so fetching saved trips cannot trigger a popup blocker.
@@ -782,7 +789,7 @@ export default function Planner() {
     const drafts = tripDrafts.read();
     const fares = canonicalFares(drafts.fares, templateOf);
     // Only drafts that Apply can send: fare drafts on components of the current options ("Other drafts" stay).
-    const hasChanges = Object.keys(drafts.airportChanges).length > 0 || transferKeys(drafts).length > 0 || activeFares(fares, knownComponents, adults).length > 0;
+    const hasChanges = Object.keys(drafts.airportChanges).length > 0 || transferKeys(drafts).length > 0 || activeFares(fares, knownComponents, adults).length > 0 || Object.keys(drafts.exchangeRates ?? {}).length > 0;
     if (!tripId || busy) return;
     if (!hasChanges) {
       // The Apply bar counts every fare draft, so it shows while only "Other drafts" are left.
@@ -816,10 +823,16 @@ export default function Planner() {
           ...(airportChanges ? { connections: buildAirportConnections(record.airport_connections ?? [], drafts.airportChanges) } : {}),
           ...(sentTransfers.length ? { transfers: buildTransferEstimates(record.airport_transfer_rows ?? [], record.airport_transfer_estimates ?? [], drafts.transfers, record.spec.adults) } : {}),
           estimates,
+          exchange_rates: drafts.exchangeRates ?? {},
         };
         const applied = await api<{ trip: SavedTrip; job: Job | null; updating: boolean }>(`/trips/${tripId}/apply`, "POST", payload);
         if (!current()) return;
         accept(applied.trip);
+        if (Object.keys(drafts.exchangeRates ?? {}).length) {
+          const next = { ...draftRef.current, exchange_rates: applied.trip.spec.exchange_rates };
+          draftRef.current = next; setDraft(next);
+          tripDrafts.clear("exchangeRates");
+        }
         setJob(applied.job);
         if (airportChanges) tripDrafts.clear("airportChanges");
         sentTransfers.forEach(key => tripDrafts.unstage("transfers", key));
@@ -839,9 +852,10 @@ export default function Planner() {
       } finally { applyBusy.current = false; setApplyState(false); }
     }, "apply");
   }
-  // Journey prices › Add rate (F2): writes the trip's exchange rates; autosave saves and recalculates.
+  // Exchange rates join the other Missing info drafts and are saved by Apply.
   function addRate(currency: string, rate: number) {
-    edit({ ...draftRef.current, exchange_rates: { ...draftRef.current.exchange_rates, [currency]: rate } });
+    const current = tripDrafts.read();
+    tripDrafts.stageImported({ ...current, exchangeRates: { ...current.exchangeRates, [currency]: rate } });
   }
   // Apply bar › Discard: removes every draft of this trip after a confirm. The bar closes, so focus goes to the panel in view.
   function discardDrafts() {
@@ -937,8 +951,11 @@ export default function Planner() {
             onAction={runAction} onEditAirportChange={key => { chooseTab("missing"); setFocusTarget([airportChangeFieldId(key, "mode"), "missing-title"]); }} onBack={backToOptions} />}</div>
         <div id="panel-missing" className="p-side-panel" role="tabpanel" aria-labelledby="tab-missing" tabIndex={0} hidden={tab !== "missing"} inert={!!applyState}>{visited.includes("missing") &&
           <MissingInfoPanel searched={searched} allClear={allClear} needs={needs} needsText={needsText} airportChanges={airportChanges} connections={saved.airport_connections ?? []}
+            csvActions={<MissingInfoCsv key={saved.id} context={{ trip: saved, groups: groups.journeys, appliedGroups: appliedSharedGroups, airportChanges,
+              drafts: tripDrafts.drafts, canonical: id => templateOf.get(id) ?? id, offerFor, placeName }} busy={busy || dirty}
+              onStage={changes => tripDrafts.stageImported(stageMissingInfoCsv(changes, tripDrafts.read(), saved))} onUndoRate={currency => tripDrafts.unstage("exchangeRates", currency)} />}
             directions={directions} estimates={saved.airport_transfer_estimates ?? []} accessNote={nextSteps.find(step => step.id === "access-time")?.text ?? null}
-            journeyGroups={groups.journeys} appliedGroups={appliedSharedGroups} adults={adults} rates={rates} draftRates={draft.exchange_rates}
+            journeyGroups={groups.journeys} appliedGroups={appliedSharedGroups} adults={adults} rates={rates} draftRates={{ ...draft.exchange_rates, ...tripDrafts.drafts.exchangeRates }}
             grouping={journeyGrouping} onGrouping={changeJourneyGrouping} removeJourneyRule={removeJourneyRule} reuseJourneyEstimate={reuseJourneyEstimate}
             drafts={tripDrafts} fares={fareDrafts} canonical={id => templateOf.get(id) ?? id} offerFor={offerFor} places={places} placeName={placeName} zoneOf={zoneOf}
             stagePrice={stagePrice} stageComponent={stageComponent} removePrice={id => void act(() => removePrice(id), "price")} addRate={addRate}

@@ -15,15 +15,15 @@ function load(tripId: string | null): Stored {
   if (!tripId) return { tripId, fares: {}, transfers: {}, airportChanges: {} };
   const inputs = record(read(inputsKey(tripId)));
   return { tripId, fares: record(read(faresKey(tripId))) as DraftState["fares"],
-    transfers: record(inputs.transfers) as DraftState["transfers"], airportChanges: record(inputs.airportChanges) as DraftState["airportChanges"] };
+    transfers: record(inputs.transfers) as DraftState["transfers"], airportChanges: record(inputs.airportChanges) as DraftState["airportChanges"], exchangeRates: record(inputs.exchangeRates) as Record<string, number> };
 }
-function save({ tripId, fares, transfers, airportChanges }: Stored) {
+function save({ tripId, fares, transfers, airportChanges, exchangeRates }: Stored) {
   if (!tripId) return;
   // Without storage (private window, blocked site data) the drafts stay in memory for this page.
   try {
     if (Object.keys(fares).length) localStorage.setItem(faresKey(tripId), JSON.stringify(fares));
     else localStorage.removeItem(faresKey(tripId));
-    if (Object.keys(transfers).length || Object.keys(airportChanges).length) localStorage.setItem(inputsKey(tripId), JSON.stringify({ transfers, airportChanges }));
+    if (Object.keys(transfers).length || Object.keys(airportChanges).length || Object.keys(exchangeRates ?? {}).length) localStorage.setItem(inputsKey(tripId), JSON.stringify({ transfers, airportChanges, exchangeRates }));
     else localStorage.removeItem(inputsKey(tripId));
   } catch { /* Keep the drafts in memory. */ }
 }
@@ -54,6 +54,8 @@ export function useTripDrafts(tripId: string | null) {
   }
   return {
     drafts,
+    /** Import a validated batch in one render and one local-storage write. */
+    stageImported(drafts: DraftState) { update(() => drafts); },
     read: (): DraftState => latest.current.tripId === tripId ? latest.current : empty,
     /** Stages a fare under `key` with the overlap rule of stageFare; `saved` is the price in use now (a user price). */
     stageFare(key: string, fare: SharedFare, saved?: PriceValue | null) {
@@ -73,10 +75,10 @@ export function useTripDrafts(tripId: string | null) {
       update(current => ({ airportChanges: sameAirportChange(draft, saved) ? without(current.airportChanges, key) : { ...current.airportChanges, [key]: draft } }));
     },
     /** Undo: removes one draft. */
-    unstage(kind: DraftKind, key: string) { update(current => ({ [kind]: without<unknown>(current[kind], key) }) as Partial<DraftState>); },
+    unstage(kind: DraftKind, key: string) { update(current => ({ [kind]: without<unknown>(current[kind] ?? {}, key) }) as Partial<DraftState>); },
     /** Removes every draft of the given kinds; all kinds without arguments (Discard). */
     clear(...kinds: DraftKind[]) {
-      update(() => Object.fromEntries((kinds.length ? kinds : ["fares", "transfers", "airportChanges"] as DraftKind[]).map(kind => [kind, {}])));
+      update(() => Object.fromEntries((kinds.length ? kinds : ["fares", "transfers", "airportChanges", "exchangeRates"] as DraftKind[]).map(kind => [kind, {}])));
     },
   };
 }

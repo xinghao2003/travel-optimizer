@@ -25,6 +25,19 @@ def inputs():
 
 
 class CheckpointTests(unittest.TestCase):
+    def test_safety_budget_resumes_without_changing_the_final_results(self):
+        checkpoint = SearchCheckpoint()
+        result = optimize(*inputs(), checkpoint=checkpoint, expansion_budget=10)
+        self.assertTrue(result['safety_limit_reached'])
+        self.assertEqual(result['expanded_labels'], 10)
+        previous = result['expanded_labels']
+        result = optimize(*inputs(), checkpoint=checkpoint, expansion_budget=10)
+        self.assertEqual(checkpoint.resumed_from, previous)
+        self.assertEqual(result['expanded_labels'], previous + 10)
+        result = optimize(*inputs(), checkpoint=checkpoint, expansion_budget=100000)
+        self.assertFalse(result.pop('safety_limit_reached'))
+        self.assertEqual(result, optimize(*inputs()))
+
     def test_pickled_rounds_match_fresh_prefixes_and_complete_search(self):
         args = inputs()
         checkpoint = SearchCheckpoint()

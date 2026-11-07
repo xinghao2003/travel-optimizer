@@ -70,6 +70,16 @@ class PlannerStore:
             rows = db.execute("SELECT payload FROM records WHERE collection=? ORDER BY updated DESC", (collection,)).fetchall()
             return [expand_trip(json.loads(row[0])) if collection == "trips" else json.loads(row[0]) for row in rows]
 
+    def trip_summaries(self):
+        """Trip navigation must not expand every saved itinerary and graph."""
+        with self._lock, self._connect() as db:
+            rows = db.execute("""SELECT id, json_extract(payload, '$.spec.name') AS name,
+                json_extract(payload, '$.revision') AS revision,
+                json_extract(payload, '$.spec.start_date') AS start_date,
+                json_extract(payload, '$.spec.end_date') AS end_date
+                FROM records WHERE collection='trips' ORDER BY updated DESC""").fetchall()
+            return [dict(row) for row in rows]
+
     def delete(self, collection: str, id: str):
         with self._lock, self._connect() as db:
             db.execute("DELETE FROM records WHERE collection=? AND id=?", (collection, id))

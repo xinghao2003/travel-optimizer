@@ -1,6 +1,6 @@
 import { TemporalInput } from "./ui/temporal-input";
 import { Select, SelectItem } from "./ui/select";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { CircleCheck } from "lucide-react";
 import { Button } from "./ui/button";
 import { AirportTransfers } from "./AirportTransferTable";
@@ -218,7 +218,8 @@ function CombinedTickets({ links, placeName }: { links: BundleLink[]; placeName:
  */
 export function MissingInfoPanel({ searched, allClear, needs, needsText, airportChanges, connections, directions, estimates, accessNote, journeyGroups, appliedGroups,
   adults, rates, draftRates, drafts, fares, canonical, offerFor, places, placeName, zoneOf, stagePrice, stageComponent, removePrice, addRate,
-  gaps, assumed, addConnection, removeConnection, bundleLinks, rules, saveRule, deleteRule, busy, onAction, onApply, grouping, onGrouping, removeJourneyRule, reuseJourneyEstimate }: {
+  gaps, assumed, addConnection, removeConnection, bundleLinks, rules, saveRule, deleteRule, busy, onAction, onApply, grouping, onGrouping, removeJourneyRule, reuseJourneyEstimate, csvActions }: {
+  csvActions?: ReactNode;
   searched: boolean; allClear: boolean; needs: number; needsText: string;
   airportChanges: AirportChangeRow[]; connections: AirportConnection[];
   directions: TransferDirection[]; estimates: AirportTransferEstimate[]; accessNote: string | null;
@@ -250,6 +251,7 @@ export function MissingInfoPanel({ searched, allClear, needs, needsText, airport
       <div><h2 id="missing-title" tabIndex={-1}>Missing info</h2><InfoTip topic="Missing info">Information the search could not find. What you enter here is a draft in this browser until you select Apply. Apply updates your options once.</InfoTip></div>
       <span className="p-missing-status">{allClear && <CircleCheck size={15} aria-hidden="true" />}{searched && needs ? needsText : allClear ? "Nothing missing" : "Nothing to check yet"}</span>
     </div>
+    {csvActions}
     {!searched && <p className="p-mi-intro">Unknown prices and gaps appear here after a search. You can enter airport transfers now.</p>}
     {allClear && <p className="p-mi-intro">Every option has a complete price and every journey can be used.</p>}
     <AirportChanges rows={airportChanges} connections={connections} adults={adults} drafts={drafts} />

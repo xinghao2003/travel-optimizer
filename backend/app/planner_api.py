@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, model_validator
@@ -13,6 +14,12 @@ from .planner_store import store
 from .planner_results import compact_trip, compact_result, fare_component_ids
 
 router = APIRouter(prefix="/api/v2")
+
+
+def require_minimum_stays(spec):
+    # Legacy zero-hour settings remain readable so users can correct them.
+    if any(visit.get("min_stay_hours", 0) <= 0 for visit in spec["visits"]):
+        raise HTTPException(422, "Enter a minimum stay greater than 0 hours for each city.")
 
 
 class UpdateTrip(BaseModel):
@@ -80,6 +87,15 @@ class ApplyChangesRequest(BaseModel):
     connections: list[AirportConnection] | None = Field(default=None, max_length=120)
     transfers: list[AirportTransferEstimate] | None = Field(default=None, max_length=240)
     estimates: list[SharedFareValues] = Field(default_factory=list, max_length=5000)
+    exchange_rates: dict[str, float] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def valid_rates(self):
+        if any(len(code) != 3 or not code.isascii() or not code.isalpha() or code != code.upper()
+               or not math.isfinite(rate) or rate <= 0 or (code == "MYR" and rate != 1)
+               for code, rate in self.exchange_rates.items()):
+            raise ValueError("Use 3-letter uppercase currencies and positive MYR per unit. MYR must be 1.")
+        return self
 
 
 def get_trip(id):
@@ -101,12 +117,12 @@ async def places_nearest(latitude: float = Query(ge=-90, le=90), longitude: floa
 
 @router.get("/trips")
 async def list_trips():
-    return {"trips": [{"id": t["id"], "name": t["spec"]["name"], "revision": t["revision"],
-                       "start_date": t["spec"]["start_date"], "end_date": t["spec"]["end_date"]} for t in store.list("trips")]}
+    return {"trips": await asyncio.to_thread(store.trip_summaries)}
 
 
 @router.post("/trips", status_code=201)
 async def create_trip(spec: TripSpec):
+    require_minimum_stays(spec.model_dump(mode="json"))
     trip = store.new_trip(spec.model_dump(mode="json"))
     trip["airport_transfer_rows"] = airport_transfer_rows(spec)
     return trip
@@ -163,6 +179,7 @@ async def read_trip(id: str, include_graph: bool = False, compact: bool = False)
 
 @router.put("/trips/{id}")
 async def update_trip(id: str, request: UpdateTrip):
+    require_minimum_stays(request.spec.model_dump(mode="json"))
     def update(trip):
         if request.expected_revision != trip["revision"]:
             raise HTTPException(409, "This trip changed. Reload it before saving.")
@@ -197,7 +214,10 @@ async def delete_trip(id: str):
 
 @router.post("/trips/{id}/searches", status_code=202)
 async def start_search(id: str, request: SearchRequest):
-    get_trip(id)
+    spec = await asyncio.to_thread(store.trip_spec, id)
+    if spec is None:
+        raise HTTPException(404, "Trip not found.")
+    require_minimum_stays(spec)
     try:
         return manager.start(id, request.budget, minutes=request.minutes)
     except ValueError as exc:
@@ -217,6 +237,10 @@ async def continue_search(id: str, request: SearchRequest):
     job = store.get("jobs", id)
     if job is None:
         raise HTTPException(404, "Search not found.")
+    spec = await asyncio.to_thread(store.trip_spec, job["trip_id"])
+    if spec is None:
+        raise HTTPException(404, "Trip not found.")
+    require_minimum_stays(spec)
     try:
         return manager.start(job["trip_id"], request.budget, id, minutes=request.minutes)
     except ValueError as exc:
@@ -360,9 +384,11 @@ def apply_missing_info(trip, request: ApplyChangesRequest):
     """Validate every kind before committing one revision; retain the full movement graph."""
     if trip["revision"] != request.expected_revision:
         raise HTTPException(409, "This trip changed. Reload it before saving.")
-    if request.connections is None and request.transfers is None and not request.estimates:
+    if request.connections is None and request.transfers is None and not request.estimates and not request.exchange_rates:
         raise HTTPException(422, "No changes to apply.")
     updated = dict(trip)
+    if request.exchange_rates:
+        updated["spec"] = {**trip["spec"], "exchange_rates": {**trip["spec"]["exchange_rates"], **request.exchange_rates}}
     if request.connections is not None:
         updated["airport_connections"] = connection_payload(request.connections)
     if request.transfers is not None:

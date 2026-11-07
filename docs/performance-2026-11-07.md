@@ -1,5 +1,9 @@
 # Planner optimization experiments, November 7, 2026
 
+Follow-up algorithm, CPU partitioning, and Python runtime experiments are in
+[Search algorithm and CPU experiments](optimizer-algorithm.md). The timings
+below describe the preceding optimization round.
+
 The experiments use a consistent backup of the latest saved trip, **My trip (copy)** (`909b34008f0a415192cba454c9195fdc`). It has 1,537 saved scheduled movements, 2,447 solver offers, and a complete solve of 254,075 labels. The result has ten best routes and 39,140 completed histories. Original source baseline: `926c99a`.
 
 The database, logs, scratch variants, function profiles, and per-run JSON are local artifacts under the Git-ignored `data/diagnostics/` directory. User trip data is not committed. No new provider search is needed for solver experiments. Each accepted solver change must reproduce the complete optimizer response on fixed inputs, plus the relevant regressions and generated pricing comparisons.

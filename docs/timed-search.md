@@ -9,7 +9,7 @@ remains. It pauses near its deadline otherwise.
 In timed mode, the provider-query batch allowance and expanded-state allowance
 do not stop the round. A safety limit of 100,000 additional expanded states per
 calculation applies in both modes (`PLANNER_SOLVE_BATCH`). Reaching it pauses
-the round with partial options and a checkpoint; Continue resumes that work.
+the search round with partial options and a checkpoint; Continue resumes that work.
 Each continuation can grow the saved checkpoint further. The limit bounds work
 per calculation, not total memory across repeated continuations.
 Provider concurrency limits, request timeouts, supported
@@ -29,8 +29,40 @@ and then that the current operation is finishing. Details show elapsed time.
 time is not charged again. The selection is restored from the saved job when
 opening the trip. A paused trip does not automatically restart calculation on
 page load. Its last calculated options remain available while newer collected
-schedules await calculation. A separate **Optimize for … minutes** action only
-works on saved schedules and makes no provider requests.
+schedules await calculation.
+
+## Continuous checking
+
+**Check more combinations** starts a separate background calculation on saved
+schedules and becomes **Stop checking**. It checks up to `PLANNER_SOLVE_BATCH`
+additional states per batch, saves a checkpoint and publishes options, then
+starts the next batch automatically. It does not use the transport-search
+request or minutes allowance, and makes no provider requests. It finishes when
+all combinations have been checked.
+
+Stop requests are cooperative. The current state expansion, result preparation
+or checkpoint saving can finish before the status changes from Stopping to
+stopped. Progress remains available for a later run. Navigation or closing the
+browser does not stop the backend job. Server shutdown stops it; after restart,
+its status is interrupted and it continues only when requested again.
+
+Only one continuous checker runs at a time, and it cannot overlap a transport
+search on the same trip. Applying edits or recalculating pauses the checker
+before proceeding. Settings changes invalidate that run; the next explicit
+check uses the changed inputs. The original transport-search queue is retained.
+
+Continuous checking pauses automatically when the saved checkpoint reaches
+`PLANNER_CHECKPOINT_MAX_MB` (256 MiB by default). Size is checked before loading
+the checkpoint and after every batch. A batch can exceed the threshold before
+the pause. This is a limit on serialized checkpoint size, not a hard cap on
+process RAM. Change the inputs to reduce the calculation or deliberately raise
+the configured limit before continuing past a resource pause. A complete solve
+removes its checkpoint.
+
+Results report how many completed itineraries were hidden because their flight
+prices were not applicable or complete. An empty Options panel distinguishes
+that price filter from finding no complete itinerary. Round-trip quotes cover
+their exact matching flight pair and do not price an unmatched single flight.
 
 ## What is saved
 

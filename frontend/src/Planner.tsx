@@ -20,13 +20,14 @@ import type { JourneyGroupField } from "./lib/planner";
 import { activeFares, airportChangeFieldId, buildAirportConnections, buildTransferEstimates, canonicalFares, canonicalIds, countDrafts, invalidDraftFields, knownComponentIds, savedTransferRows, sameTransferRows, transferFieldId, transferKey, transferRateId, type DraftPrice, type DraftState, type DraftTarget, type PriceValue, type SharedFare } from "./lib/drafts";
 import { useTripDrafts } from "./lib/useTripDrafts";
 import { airportChangeRows, appError, assumedConnections, buildNextSteps, cityGaps, needsInputCount, optionNumber, optionsEmptyState, partySizeNotice, purchaseAmount, routeSignature, searchDetails, searchState, settingsFooter, sortRoutes, splitGroups, staySumWarning, transferDirections, transitSearchModes, unresolvedAccessJourneys, validateDraft, type AppError, type OptionsTarget } from "./lib/present";
-import { api, blankTrip, defaultBatchSize, modes, type AirportTransferMode, type Charge, type Job, type Movement, type Offer, type PricingRule, type Result, type Route, type SavedSummary, type SavedTrip, type TripDraft } from "./lib/planner";
+import { api, blankTrip, defaultBatchSize, modes, type AirportTransferMode, type Charge, type Job, type Movement, type Offer, type OptimizationJob, type PricingRule, type Result, type Route, type SavedSummary, type SavedTrip, type TripDraft } from "./lib/planner";
 import { useMediaQuery } from "./lib/useMediaQuery";
 import { exportFilename, exportTrip, tripReportHtml, type ExportOption, type ExportScope, type ExportTrip } from "./lib/tripExport";
 import "./planner.css";
 
 const airportTransferModes: AirportTransferMode[] = modes.filter((mode): mode is AirportTransferMode => mode !== "flight");
 /** A failed poll of the search status (C2). The next successful poll removes this error, so it is compared by identity. */
+const optimizationPollError: AppError = { text: "Can't get the calculation status. Retrying…", action: null };
 const pollError: AppError = { text: "Can't get the search status. Retrying…", action: null };
 /** The workspace panels (C5). Wide screens always show the options, and the side panel shows "itinerary" or "missing". */
 type Panel = "options" | "itinerary" | "missing";
@@ -58,6 +59,11 @@ export default function Planner() {
   }
   const [result, setResult] = useState<Result | null>(null);
   const [job, setJob] = useState<Job | null>(null);
+  const [optimization, setOptimization] = useState<OptimizationJob | null>(null);
+  useEffect(() => {
+    if (optimization && saved?.id === optimization.trip_id && saved.revision !== optimization.trip_revision
+        && !["queued", "running", "stopping"].includes(optimization.status)) setOptimization(null);
+  }, [saved?.id, saved?.revision, optimization]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [comparisonId, setComparisonId] = useState<string | null>(null);
   const [ranking, setRanking] = useState("cheapest");
@@ -140,7 +146,7 @@ export default function Planner() {
     const token = ++session.current;
     version.current++;
     setLoadingTrip(true); setLoadingName(summaries.find(trip => trip.id === id)?.name ?? "");
-    setError(null); setResult(null); setJob(null); setSelectedId(null); setComparisonId(null); setPanel("options");
+    setError(null); setResult(null); setJob(null); setOptimization(null); setSelectedId(null); setComparisonId(null); setPanel("options");
     try {
     const record = await api<SavedTrip>(`/trips/${id}`);
     if (token !== session.current) return;
@@ -159,7 +165,13 @@ export default function Planner() {
         if (status.time_budget_seconds != null && status.optimization_pending && record.result?.trip_revision === record.revision) setResult(record.result);
       }
     }
-    const timedPending = status?.time_budget_seconds != null && (status.optimization_pending || ["queued", "running"].includes(status.status));
+    let calculation: OptimizationJob | null = null;
+    if (record.latest_optimization_id) {
+      calculation = await api<OptimizationJob>(`/optimizations/${record.latest_optimization_id}`);
+      if (token === session.current) setOptimization(calculation);
+    }
+    const timedPending = calculation && ["queued", "running", "stopping"].includes(calculation.status)
+      || status?.time_budget_seconds != null && (status.optimization_pending || ["queued", "running"].includes(status.status));
     if (!timedPending && record.snapshot && (!record.result || record.result.trip_revision !== record.revision || record.result.snapshot_revision !== record.snapshot.revision)) { const r = await api<Result>(`/trips/${id}/optimize`, "POST"); if (token === session.current) acceptResult(r, id); }
     } finally { if (token === session.current) setLoadingTrip(false); }
   }
@@ -174,12 +186,12 @@ export default function Planner() {
     const token = ++session.current;
     version.current++;
     setLoadingTrip(true); setLoadingName(`${source.spec.name} (copy)`);
-    setResult(null); setJob(null); setSelectedId(null); setComparisonId(null); setPanel("options");
+    setResult(null); setJob(null); setOptimization(null); setSelectedId(null); setComparisonId(null); setPanel("options");
     try {
       const record = await api<SavedTrip>(`/trips/${source.id}/duplicate`, "POST");
       if (token !== session.current) return;
       accept(record, true);
-      setResult(null); setJob(null); setSaveStatus("Copied. Change it, then search."); setSettingsOpen(true);
+      setResult(null); setJob(null); setOptimization(null); setSaveStatus("Copied. Change it, then search."); setSettingsOpen(true);
       await refreshList();
     } finally { if (token === session.current) setLoadingTrip(false); }
   }
@@ -270,6 +282,35 @@ export default function Planner() {
   }, [job?.id, job?.status]);
 
   useEffect(() => {
+    if (!optimization || !["queued", "running", "stopping"].includes(optimization.status)) return;
+    let active = true, fetching = false, batches = optimization.batches;
+    const token = session.current;
+    const id = optimization.id, tripId = optimization.trip_id;
+    async function poll() {
+      if (fetching) return;
+      fetching = true;
+      try {
+        const status = await api<OptimizationJob>(`/optimizations/${id}`);
+        if (!active || token !== session.current || applyBusy.current) return;
+        if (status.batches > batches || !["queued", "running", "stopping"].includes(status.status)) {
+          const record = await api<SavedTrip>(`/trips/${tripId}`);
+          if (!active || token !== session.current || applyBusy.current || pendingSave.current) return;
+          accept(record); batches = status.batches;
+        }
+        setOptimization(status);
+        if (!["queued", "running", "stopping"].includes(status.status) && !dirtyRef.current) setSaveStatus(
+          status.status === "complete" ? "All combinations checked" : status.status === "cancelled" ? "Checking stopped" : "Checking paused");
+        setError(current => current === optimizationPollError ? null : current);
+      } catch { if (active) setError(current => current ?? optimizationPollError); }
+      finally { fetching = false; }
+    }
+    const timer = setInterval(() => void poll(), 1000);
+    void poll();
+    return () => { active = false; clearInterval(timer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [optimization?.id, optimization?.status]);
+
+  useEffect(() => {
     if (!focusTarget) return;
     const element = (typeof focusTarget === "string" ? [focusTarget] : focusTarget).map(id => document.getElementById(id)).find(item => item !== null);
     // focus() does nothing inside a closed <details>, so open every one around the element first.
@@ -315,7 +356,7 @@ export default function Planner() {
     session.current++;
     const next = blankTrip();
     draftRef.current = next; savedRef.current = null;
-    setDraft(next); setSaved(null); setResult(null); setJob(null); setSelectedId(null); setComparisonId(null); setPanel("options"); setDirty(false); dirtyRef.current = false;
+    setDraft(next); setSaved(null); setResult(null); setJob(null); setOptimization(null); setSelectedId(null); setComparisonId(null); setPanel("options"); setDirty(false); dirtyRef.current = false;
     setSaveStatus("Not saved yet");
     localStorage.removeItem("wayfinder:last-trip");
     setSettingsOpen(true); setFocusTarget("home-city");
@@ -329,18 +370,25 @@ export default function Planner() {
       if (savedRef.current?.id === record.id) setSaveStatus("Options updated");
     }, "recalculate");
   }
-  // Strip › Check more combinations when it can't continue the search: a higher limit on saved data, no provider requests.
-  // Its strip line goes away when every combination is checked, so focus moves to the options, as when a search starts.
+  // Check combinations continuously on the server; polling loads each completed batch.
   function checkMore() {
     const tripId = savedRef.current?.id;
     if (!tripId) return;
     void act(async () => {
-      acceptResult(await api<Result>(`/trips/${tripId}/optimize`, "POST", { expand: true, minutes: roundMinutes }), tripId);
+      const status = await api<OptimizationJob>(`/trips/${tripId}/optimizations`, "POST");
       if (savedRef.current?.id !== tripId) return;
-      setSaveStatus("Options updated");
+      setOptimization(status); setSaveStatus("Checking combinations");
       if (!isWide) setPanel("options");
       setFocusTarget("options-title");
     }, "optimize");
+  }
+  function stopChecking() {
+    const id = optimization?.id, tripId = optimization?.trip_id;
+    if (!id) return;
+    void act(async () => {
+      const status = await api<OptimizationJob>(`/optimizations/${id}/stop`, "POST");
+      if (savedRef.current?.id === tripId) setOptimization(status);
+    }, "stop-optimization");
   }
   // Error banner › Reload trip after a conflict: opens the trip again from the server and drops unsaved changes.
   function reloadTrip() {
@@ -552,12 +600,15 @@ export default function Planner() {
   const nextSteps = buildNextSteps({ routes: result?.routes ?? [], airportChanges, unresolvedAccess, directions, groups, gaps, searched, budget, rates,
     excludeUnpricedFlights: !!draft.exclude_unpriced_flights, transitOff: !transitConfigured && draft.modes.some(mode => transitSearchModes.includes(mode)) });
   const emptyState = optionsEmptyState({ searched, active, pending: job?.pending ?? 0, hasResult: !!result, best: result?.routes.length ?? 0, refinement, budget,
-    staySum: staySumWarning(draft), gaps, excludeUnpricedFlights: !!draft.exclude_unpriced_flights, steps: nextSteps, placeName });
+    staySum: staySumWarning(draft), gaps, excludeUnpricedFlights: !!draft.exclude_unpriced_flights, steps: nextSteps, placeName,
+    calculationPending: result?.optimization_complete === false, checking: !!optimization && ["queued", "running", "stopping"].includes(optimization.status),
+    hiddenUnpricedFlights: result?.hidden_unpriced_flight_count ?? (draft.exclude_unpriced_flights && budget === null && !result?.routes.length ? result?.feasible_count ?? 0 : 0) });
 
   // C3.1 row 2 ("Updating options…") is for a save in progress. After a refused save nothing runs until the next
   // edit or Retry save, so the strip shows the search state; the header ("Not saved") and the banner report it (C13).
-  const strip = searchState({ invalid, dirty: dirty && saveStatus !== "Not saved", saved, result, job, minutes: roundMinutes, applying: applyState });
+  const strip = searchState({ invalid, dirty: dirty && saveStatus !== "Not saved", saved, result, job, minutes: roundMinutes, applying: applyState, optimization });
   const details = searchDetails({ saved, job, result });
+  if (optimization) details.lines.push(`Saved calculation: ${(optimization.checkpoint_bytes / 1024 / 1024).toFixed(1)} MiB checkpoint · ${optimization.checkpoint_limit_bytes / 1024 / 1024} MiB limit · ${optimization.batches} batches this run`);
   // A saved trip with marked fields does not save until they are fixed. A new trip saves only with
   // Save without searching or Search transport, so its edits keep "Not saved yet" (C13).
   const status = saved && invalid ? "Fix the marked fields to save" : !saved && saveStatus === "Unsaved changes" ? "Not saved yet" : saveStatus;
@@ -920,7 +971,7 @@ export default function Planner() {
     <ErrorBanner error={error} onDismiss={() => setError(null)} onReload={reloadTrip} onRetrySave={() => { setError(null); autosave(); }} onSearchAgain={() => void search()} />
     <main id="main" aria-busy={loadingTrip || undefined}>{loadingTrip ? <p className="p-main-loading" role="status"><LoaderCircle size={18} className="p-spin" aria-hidden="true" />Opening {loadingName || "the trip"}…</p> : <>
     <TripBar draft={draft} edit={edit} saved={saved} settingsOpen={settingsShown} onToggleSettings={() => setSettingsOpen(open => !open)}>
-      {saved && <StatusStrip state={strip} details={details} busyAction={busyAction} settingsOpen={settingsShown} onStop={stopSearch} onSearch={continuation => void search(continuation)} onCheckMore={checkMore} />}
+      {saved && <StatusStrip state={strip} details={details} busyAction={busyAction} settingsOpen={settingsShown} onStop={stopSearch} onSearch={continuation => void search(continuation)} onCheckMore={checkMore} onStopChecking={stopChecking} />}
     </TripBar>
     {settingsShown && <TripSettings draft={draft} edit={edit} places={places} errors={errors} transitConfigured={transitConfigured} searchActive={active}
       partyNotice={partySizeNotice(saved, draft.adults)} isNew={!saved} footer={footer} busyAction={busyAction}

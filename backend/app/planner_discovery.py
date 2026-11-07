@@ -586,6 +586,118 @@ class DiscoveryManager:
         self.applying_jobs = set()
         self.edit_locks = {}
         self.http_limit = asyncio.Semaphore(2)
+        self.continuous_running = {}
+        self.continuous_jobs = {}
+
+    def continuous_status(self, id):
+        return self.continuous_jobs.get(id) or self.store.get("optimizations", id)
+
+    def start_continuous(self, trip_id):
+        for id, task in self.continuous_running.items():
+            if not task.done():
+                job = self.continuous_jobs[id]
+                if job["trip_id"] == trip_id:
+                    return dict(job)
+                raise ValueError("Stop the other continuous calculation before starting this one.")
+        if any(job["trip_id"] == trip_id and job["status"] in {"queued", "running"} for job in self.store.list("jobs")):
+            raise ValueError("Stop the transport search before checking combinations continuously.")
+        if any(not task.done() and (self.live_jobs.get(id) or self.store.get("jobs", id) or {}).get("trip_id") == trip_id for id, task in self.running.items()):
+            raise ValueError("Wait for the in-flight transport request to finish before checking combinations.")
+        trip = self.store.get("trips", trip_id, expand=False)
+        if trip is None or not trip.get("snapshot"):
+            raise ValueError("Search transport before checking saved combinations.")
+        limit = max(1, int(os.environ.get("PLANNER_CHECKPOINT_MAX_MB", "256"))) * 1024 * 1024
+        job = {"id": uuid.uuid4().hex, "trip_id": trip_id, "trip_revision": trip["revision"], "status": "queued",
+               "batches": 0, "expanded_labels": (trip.get("result") or {}).get("expanded_labels", 0),
+               "checkpoint_bytes": self.store.optimizer_checkpoint_size(trip_id), "checkpoint_limit_bytes": limit,
+               "pause_reason": None, "created": clock.time(), "message": None}
+        self.store.put("optimizations", job["id"], job)
+        trip["latest_optimization_id"] = job["id"]
+        self.store.put("trips", trip_id, trip)
+        self.continuous_jobs[job["id"]] = job
+        self.continuous_running[job["id"]] = asyncio.create_task(self.run_continuous(job))
+        logger.debug("planner continuous.start job=%s trip=%s checkpoint_limit=%d", job["id"], trip_id, limit)
+        return dict(job)
+
+    def stop_continuous(self, id, reason="user"):
+        job = self.continuous_status(id)
+        if job is None:
+            raise KeyError(id)
+        if job["status"] in {"queued", "running", "stopping"}:
+            self.cancelled_jobs.add(id)
+            job.update(status="stopping", pause_reason=reason)
+            self.store.put("optimizations", id, job)
+        return dict(job)
+
+    async def stop_continuous_for_trip(self, trip_id, reason="changes"):
+        tasks = []
+        for id, task in self.continuous_running.items():
+            if not task.done() and self.continuous_jobs[id]["trip_id"] == trip_id:
+                self.stop_continuous(id, reason)
+                tasks.append(task)
+        if tasks:
+            await asyncio.shield(asyncio.gather(*tasks))
+
+    async def run_continuous(self, job):
+        """Optimization-only batches. No provider queries or discovery queue work."""
+        id, trip_id = job["id"], job["trip_id"]
+        try:
+            if job["status"] != "stopping":
+                job["status"] = "running"
+            self.store.put("optimizations", id, job)
+            while id not in self.cancelled_jobs:
+                size = await asyncio.to_thread(self.store.optimizer_checkpoint_size, trip_id)
+                job["checkpoint_bytes"] = size
+                if size >= job["checkpoint_limit_bytes"]:
+                    job.update(status="paused", pause_reason="checkpoint")
+                    break
+                # Revision changes invalidate this run; edits start a new calculation explicitly.
+                trip = await asyncio.to_thread(self.store.get, "trips", trip_id, expand=False)
+                if trip is None or trip["revision"] != job["trip_revision"]:
+                    job.update(status="paused", pause_reason="changes")
+                    break
+                if id in self.cancelled_jobs:
+                    break
+                previous = trip.get("result") or {}
+                if (previous.get("optimization_complete") and previous.get("trip_revision") == trip["revision"]
+                        and previous.get("snapshot_revision") == trip["snapshot"].get("revision")):
+                    job["status"] = "complete"
+                    break
+                result = await self.recalculate(trip_id, expand=True, job_id=id, continuous=True)
+                job.update(batches=job["batches"]+1, expanded_labels=result["expanded_labels"],
+                           feasible_count=result["feasible_count"], hidden_unpriced_flight_count=result.get("hidden_unpriced_flight_count", 0),
+                           checkpoint_bytes=await asyncio.to_thread(self.store.optimizer_checkpoint_size, trip_id))
+                logger.debug("planner continuous.batch job=%s batch=%d expanded=%d checkpoint_bytes=%d", id, job["batches"], job["expanded_labels"], job["checkpoint_bytes"])
+                latest = await asyncio.to_thread(self.store.get, "trips", trip_id, expand=False)
+                if latest is None or latest["revision"] != job["trip_revision"]:
+                    job.update(status="paused", pause_reason="changes")
+                    break
+                if id in self.cancelled_jobs:
+                    break
+                if result["optimization_complete"]:
+                    job["status"] = "complete"
+                    break
+                if job["checkpoint_bytes"] >= job["checkpoint_limit_bytes"]:
+                    job.update(status="paused", pause_reason="checkpoint")
+                    break
+                self.store.put("optimizations", id, job)
+                await asyncio.sleep(0)
+            if id in self.cancelled_jobs:
+                reason = job.get("pause_reason")
+                job["status"] = "interrupted" if reason == "shutdown" else "paused" if reason == "changes" else "cancelled"
+        except asyncio.CancelledError:
+            self.cancelled_jobs.add(id)
+            job["status"] = "interrupted"
+            raise
+        except Exception as exc:
+            logger.exception("planner continuous.failed trip=%s job=%s", trip_id, id)
+            job.update(status="failed", message=f"{type(exc).__name__}: {str(exc)[:180]}")
+        finally:
+            logger.debug("planner continuous.done job=%s status=%s reason=%s batches=%d", id, job["status"], job.get("pause_reason"), job["batches"])
+            self.store.put("optimizations", id, job)
+            self.continuous_running.pop(id, None)
+            self.continuous_jobs.pop(id, None)
+            self.cancelled_jobs.discard(id)
 
     def rules(self):
         return [PricingRule.model_validate(r) for r in self.store.list("rules")]
@@ -612,7 +724,9 @@ class DiscoveryManager:
         job["queue"] = job["queue"][:job["cursor"]]+future
         job["manual_quote_queries"] = sum(link["kind"] == "multi-city" for link in job.get("bundle_links", []))
 
-    async def recalculate(self, trip_id, snapshot=None, expand=False, job_id=None, include_dominated=False, minutes=None):
+    async def recalculate(self, trip_id, snapshot=None, expand=False, job_id=None, include_dominated=False, minutes=None, continuous=False):
+        if not continuous:
+            await self.stop_continuous_for_trip(trip_id)
         started = clock.monotonic()
         deadline = started+minutes*60 if minutes is not None else self.round_deadlines.get(job_id)
         timed = deadline is not None
@@ -686,7 +800,7 @@ class DiscoveryManager:
                 return job_id in self.cancelled_jobs or job_id in self.applying_jobs
 
             cancelled = check_cancelled if job_id else None
-            label_limit = None if timed else snapshot["label_limit"]
+            label_limit = None if timed or continuous else snapshot["label_limit"]
             logger.debug("planner optimize.dispatch trip=%s elapsed=%.2fs movements=%d offers=%d label_limit=%s", trip_id, clock.monotonic()-started, len(snapshot["movements"]), len(offers), label_limit)
             solver_movements = airport_transfer_variants(snapshot["movements"], trip, spec, snapshot.get("roads", {}), airport_connections)
             solver_rules = [*self.rules(), *airport_transfer_rules(trip, spec),
@@ -720,6 +834,8 @@ class DiscoveryManager:
             return result
 
     def start(self, trip_id, budget=100, job_id=None, *, minutes=None):
+        if any(not task.done() and self.continuous_jobs[id]["trip_id"] == trip_id for id, task in self.continuous_running.items()):
+            raise ValueError("Stop checking combinations before starting a transport search.")
         round_started = clock.monotonic()
         trip = self.store.get("trips", trip_id)
         if trip is None:
@@ -807,6 +923,7 @@ class DiscoveryManager:
 
     async def apply_changes(self, trip_id, transform):
         """Quiesce active work, apply one transaction, then use only the remaining round."""
+        await self.stop_continuous_for_trip(trip_id)
         async with self.edit_locks.setdefault(trip_id, asyncio.Lock()):
             job = next((j for j in self.live_jobs.values() if j["trip_id"] == trip_id), None)
             task = self.running.get(job["id"]) if job else None
@@ -1296,6 +1413,11 @@ class DiscoveryManager:
             self.optimization_cadence.pop(job["id"], None)
 
     async def close(self):
+        continuous = list(self.continuous_running.values())
+        for id in list(self.continuous_running):
+            self.stop_continuous(id, "shutdown")
+        if continuous:
+            await asyncio.gather(*continuous, return_exceptions=True)
         pending = list(self.running.values())
         self.cancelled_jobs.update(self.running)
         for task in pending:

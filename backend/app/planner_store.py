@@ -98,6 +98,11 @@ class PlannerStore:
             else:
                 db.execute("INSERT OR REPLACE INTO optimizer_checkpoints VALUES(?,?,?)", (trip_id, version, payload))
 
+    def optimizer_checkpoint_size(self, trip_id: str):
+        with self._lock, self._connect() as db:
+            row = db.execute("SELECT length(payload) FROM optimizer_checkpoints WHERE trip_id=?", (trip_id,)).fetchone()
+            return row[0] if row else 0
+
     def update(self, collection: str, id: str, transform):
         with self._lock:
             current = self.get(collection, id)
@@ -123,10 +128,11 @@ class PlannerStore:
                                        "latest_job_id": None, "offers": [], "airport_connections": []})
 
     def recover(self):
-        for job in self.list("jobs"):
-            if job["status"] in {"running", "queued"}:
-                job["status"] = "interrupted"
-                self.put("jobs", job["id"], job)
+        for collection in ("jobs", "optimizations"):
+            for job in self.list(collection):
+                if job["status"] in {"running", "queued", "stopping"}:
+                    job["status"] = "interrupted"
+                    self.put(collection, job["id"], job)
 
 
 store = PlannerStore()

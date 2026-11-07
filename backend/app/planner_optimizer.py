@@ -814,6 +814,7 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
             bundle_candidates.setdefault(tuple(signature), legs)
     logger.debug("planner dp.done routes=%d bundles=%d elapsed=%.2fs", len(results), len(bundle_candidates), clock.monotonic()-started)
     response = {"routes": [r for r in results if r["budget_status"] != "over" and r["id"] in frontier_ids], "refinement_routes": [r for r in results if r["budget_status"] == "over"], "bundle_candidates": list(bundle_candidates.values()), "missing_fares": sorted(missing.values(), key=lambda x: (-x["affected_itineraries"], -(x["break_even_myr"] or 0), x["component_id"])),
+            "hidden_unpriced_flight_count": len(completed)-len(selectable),
             "expanded_labels": expanded, "pruned_labels": pruned, "feasible_count": len(completed),
             "optimization_complete": not bool(queue), "remaining_labels": len(queue), "label_limit": label_limit, "snapshot_revision": snapshot_revision, "trip_revision": trip_revision,
             "optimality_scope": "Retrieved schedules, fare offers, and road departures at readiness / connection / return-boundary events"}

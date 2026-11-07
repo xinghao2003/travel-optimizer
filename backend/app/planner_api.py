@@ -180,6 +180,7 @@ async def read_trip(id: str, include_graph: bool = False, compact: bool = False)
 @router.put("/trips/{id}")
 async def update_trip(id: str, request: UpdateTrip):
     require_minimum_stays(request.spec.model_dump(mode="json"))
+    await manager.stop_continuous_for_trip(id)
     def update(trip):
         if request.expected_revision != trip["revision"]:
             raise HTTPException(409, "This trip changed. Reload it before saving.")
@@ -202,6 +203,8 @@ async def update_trip(id: str, request: UpdateTrip):
 @router.delete("/trips/{id}")
 async def delete_trip(id: str):
     get_trip(id)
+    if any(not task.done() and manager.continuous_jobs[key]["trip_id"] == id for key, task in manager.continuous_running.items()):
+        raise HTTPException(409, "Stop checking combinations before deleting this trip.")
     for job in store.list("jobs"):
         if job["trip_id"] == id and (job["status"] in {"running", "queued"} or job["id"] in manager.running):
             raise HTTPException(409, "Cancel discovery before deleting this trip.")
@@ -209,6 +212,9 @@ async def delete_trip(id: str):
         if job["trip_id"] == id:
             store.delete("jobs", job["id"])
     store.delete("trips", id)
+    for job in store.list("optimizations"):
+        if job["trip_id"] == id:
+            store.delete("optimizations", job["id"])
     return {"deleted": True}
 
 
@@ -260,6 +266,34 @@ async def recalculate(id: str, request: OptimizationRequest = OptimizationReques
     result = await manager.recalculate(id, expand=request.expand, include_dominated=request.include_dominated, minutes=request.minutes)
     result.pop("bundle_candidates", None)
     return await asyncio.to_thread(lambda: JSONResponse(compact_result(result) if request.compact else result))
+
+
+@router.post("/trips/{id}/optimizations", status_code=202)
+async def start_continuous_optimization(id: str):
+    spec = await asyncio.to_thread(store.trip_spec, id)
+    if spec is None:
+        raise HTTPException(404, "Trip not found.")
+    require_minimum_stays(spec)
+    try:
+        return manager.start_continuous(id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.get("/optimizations/{id}")
+async def continuous_optimization_status(id: str):
+    job = manager.continuous_status(id)
+    if job is None:
+        raise HTTPException(404, "Calculation not found.")
+    return dict(job)
+
+
+@router.post("/optimizations/{id}/stop")
+async def stop_continuous_optimization(id: str):
+    try:
+        return manager.stop_continuous(id)
+    except KeyError as exc:
+        raise HTTPException(404, "Calculation not found.") from exc
 
 
 @router.put("/trips/{id}/fares/{offer_id}")

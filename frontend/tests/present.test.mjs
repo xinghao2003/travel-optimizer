@@ -9,6 +9,42 @@ const {
 } = await loadTs("../src/lib/present.ts");
 const { blankTrip } = await loadTs("../src/lib/planner.ts");
 
+test("continuous checking swaps its action for Stop and explains the resource pause", () => {
+  const props = { invalid: false, dirty: false, saved: { snapshot: {} }, result: { optimization_complete: false }, job: null };
+  const optimization = { status: 'running', expanded_labels: 250000, checkpoint_limit_bytes: 256 * 1024 * 1024 };
+  const running = searchState({ ...props, optimization });
+  assert.equal(running.id, 'checking');
+  assert.equal(running.actions[0].label, 'Stop checking');
+  assert.equal(running.actions[0].run, 'stop-optimization');
+  assert.equal(running.secondary, null);
+  // Stop remains available even while the user types an invalid settings value.
+  assert.equal(searchState({ ...props, invalid: true, optimization }).actions[0].run, 'stop-optimization');
+  const stopping = searchState({ ...props, optimization: { ...optimization, status: 'stopping' } });
+  assert.equal(stopping.actions[0].disabled, true);
+  assert.match(stopping.text, /saving/);
+  const paused = searchState({ ...props, optimization: { ...optimization, status: 'paused', pause_reason: 'checkpoint' } });
+  assert.match(paused.text, /256 MiB.*Progress is saved/);
+  assert.equal(paused.secondary.action.label, 'Check more combinations');
+  assert.equal(searchState({ ...props, optimization: { ...optimization, status: 'cancelled' } }).secondary.action.run, 'optimize');
+});
+
+test("empty options explain completed itineraries hidden by flight-price eligibility", () => {
+  const state = optionsEmptyState({ searched: true, active: false, pending: 0, hasResult: true, best: 0,
+    refinement: [], budget: null, staySum: null, gaps: [], excludeUnpricedFlights: true, steps: [], placeName: id => id, hiddenUnpricedFlights: 74652 });
+  assert.equal(state.id, 'unpriced-flights');
+  assert.match(state.title, /Itineraries found/);
+  assert.match(state.lines[0].text, /74,652.*hidden/);
+  assert.equal(state.lines[0].action.target, 'show-unpriced-flights');
+  assert.match(state.lines[1].text, /round-trip.*both matching flights/);
+});
+
+test("an incomplete calculation does not claim that no itinerary fits", () => {
+  const props = { searched: true, active: false, pending: 0, hasResult: true, best: 0, refinement: [],
+    budget: null, staySum: null, gaps: [], excludeUnpricedFlights: false, steps: [], placeName: id => id, calculationPending: true };
+  assert.match(optionsEmptyState(props).lines[0].text, /More combinations remain/);
+  assert.match(optionsEmptyState({ ...props, checking: true }).lines[0].text, /Checking saved combinations/);
+});
+
 test("minimum stays must be explicitly positive for every city", () => {
   for (const value of [0, -1, NaN, Infinity, 8761]) {
     assert.match(validateDraft({ ...blankTrip(), visits: [{ place: { id: "city" }, min_stay_hours: value }] }).stays, /minimum stay/);

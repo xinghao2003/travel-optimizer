@@ -4,6 +4,7 @@ import { ItineraryPanel } from "./components/ItineraryPanel";
 import { MissingInfoPanel } from "./components/MissingInfoPanel";
 import { OptionsPanel } from "./components/OptionsPanel";
 import { ErrorBanner } from "./components/ErrorBanner";
+import { ExportDialog } from "./components/ExportDialog";
 import { StatusStrip } from "./components/StatusStrip";
 import { Tabs, type TabItem } from "./components/Tabs";
 import { TripBar } from "./components/TripBar";
@@ -17,6 +18,7 @@ import { useTripDrafts } from "./lib/useTripDrafts";
 import { airportChangeRows, appError, assumedConnections, buildNextSteps, cityGaps, needsInputCount, optionNumber, optionsEmptyState, partySizeNotice, purchaseAmount, routeSignature, searchDetails, searchState, settingsFooter, sortRoutes, splitGroups, staySumWarning, transferDirections, transitSearchModes, unresolvedAccessJourneys, validateDraft, type AppError, type OptionsTarget } from "./lib/present";
 import { api, blankTrip, defaultBatchSize, modes, type AirportTransferMode, type Charge, type Job, type Movement, type Offer, type PricingRule, type Result, type Route, type SavedSummary, type SavedTrip, type TripDraft } from "./lib/planner";
 import { useMediaQuery } from "./lib/useMediaQuery";
+import { exportFilename, exportTrip, tripReportHtml, type ExportOption, type ExportScope, type ExportTrip } from "./lib/tripExport";
 import "./planner.css";
 
 const airportTransferModes: AirportTransferMode[] = modes.filter((mode): mode is AirportTransferMode => mode !== "flight");
@@ -63,6 +65,7 @@ export default function Planner() {
   const [saveStatus, setSaveStatus] = useState("Not saved yet");
   const [transitConfigured, setTransitConfigured] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(true);
+  const [exportOpen, setExportOpen] = useState(false);
   // The selected workspace tab. "options" on a wide screen shows the itinerary in the side panel.
   const [panel, setPanel] = useState<Panel>("options");
   // Panels mount when first shown, then stay mounted while hidden, so typed values survive a tab change.
@@ -602,6 +605,50 @@ export default function Planner() {
     rows.map(row => transferKey(row.from_id, row.to_id, count)).filter(key => key in drafts.transfers);
   const draftCounts = countDrafts({ ...tripDrafts.drafts, fares: fareDrafts, transfers: Object.fromEntries(transferKeys(tripDrafts.drafts).map(key => [key, tripDrafts.drafts.transfers[key]])) });
   const draftTotal = draftCounts.airportChanges + draftCounts.transfers + draftCounts.prices;
+
+  async function shareTrips(scope: ExportScope, format: "pdf" | "html") {
+    // Reserve the tab during the click so fetching saved trips cannot trigger a popup blocker.
+    const preview = format === "pdf" ? window.open("", "_blank") : null;
+    if (format === "pdf" && !preview) throw new Error("Allow popups for this app, then try exporting again.");
+    if (preview) {
+      preview.opener = null;
+      preview.document.title = "Preparing trip report";
+      preview.document.body.textContent = "Preparing your trip report…";
+    }
+    try {
+      let report: ExportTrip[];
+      if (scope === "all") {
+        const list = await api<{ trips: SavedSummary[] }>("/trips");
+        if (!list.trips.length) throw new Error("Save a trip before exporting.");
+        report = [];
+        // Read sequentially: each saved result can contain many itineraries.
+        for (const trip of list.trips) report.push(exportTrip(await api<SavedTrip>(`/trips/${trip.id}`)));
+      } else {
+        if (!saved) throw new Error("Choose a saved trip before exporting.");
+        const overBudgetNumbers = new Map(refinement.map((route, index) => [route.id, index + 1]));
+        const weakerNumbers = new Map((result?.dominated_routes ?? []).map((route, index) => [route.id, index + 1]));
+        const describe = (route: Route): ExportOption => ({ route,
+          label: numbers.has(route.id) ? `Option ${optionNumber(numbers.get(route.id)!)}` : overBudgetNumbers.has(route.id) ? `Over-budget option ${optionNumber(overBudgetNumbers.get(route.id)!)}` : `Weaker option ${optionNumber(weakerNumbers.get(route.id)!)}`,
+          category: overBudgetNumbers.has(route.id) ? "Over budget" : weakerNumbers.has(route.id) ? "Weaker" : "Best",
+        });
+        if (scope === "selected" && !selected) throw new Error("Select an itinerary before exporting.");
+        const options = scope === "selected" ? [describe(selected!)] : [...displayRoutes, ...(showDominated ? [] : result?.dominated_routes ?? []), ...refinement].map(describe);
+        report = [exportTrip({ ...saved, result: result ?? undefined }, options)];
+      }
+      const html = tripReportHtml(report);
+      if (preview) {
+        if (preview.closed) throw new Error("The report tab was closed. Export again to open a new report.");
+        preview.document.open(); preview.document.write(html); preview.document.close();
+        preview.focus();
+      } else {
+        const url = URL.createObjectURL(new Blob([html], { type: "text/html;charset=utf-8" }));
+        const anchor = document.createElement("a");
+        anchor.href = url; anchor.download = exportFilename(report.length === 1 ? report[0].spec.name : "Trip comparison");
+        document.body.append(anchor); anchor.click(); anchor.remove();
+        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      }
+    } catch (err) { preview?.close(); throw err; }
+  }
   const invalidFields = (drafts: DraftState) => invalidDraftFields(drafts, directions, adults);
   const invalidCount = invalidFields(tripDrafts.drafts).length;
   /** Stages a fare draft on canonical ids (Journey prices, group prices). `saved` is the user price in use now. */
@@ -804,7 +851,7 @@ export default function Planner() {
     }}>{workspace ? "Skip to options" : "Skip to trip settings"}</a>
     <AppHeader trips={trips} currentId={saved?.id ?? null} unsaved={!saved} status={status} statusTone={statusTone} disabled={busy} menuBusy={busyAction === "recalculate" || busyAction === "copy"}
       onOpen={id => void act(() => openTrip(id), "open")} onNew={() => void act(newTrip, "new")} onCopy={() => void act(duplicateTrip, "copy")} onRecalculate={recalculate}
-      canCopy={!!saved && !busy} canRecalculate={!!saved && !busy} />
+      canCopy={!!saved && !busy} canRecalculate={!!saved && !busy} onExport={() => setExportOpen(true)} canExport={trips.length > 0 && !busy && !loadingTrip} />
     <div className="p-container">
     <ErrorBanner error={error} onDismiss={() => setError(null)} onReload={reloadTrip} onRetrySave={() => { setError(null); autosave(); }} onSearchAgain={() => void search()} />
     <main id="main" aria-busy={loadingTrip || undefined}>{loadingTrip ? <p className="p-main-loading" role="status"><LoaderCircle size={18} className="p-spin" aria-hidden="true" />Opening {loadingName || "the trip"}…</p> : <>
@@ -851,6 +898,7 @@ export default function Planner() {
     </>}
     <footer className="p-footer">Wayfinder Routes · Flights via fast-flights · Scheduled transit via <a href="https://transitous.org/sources/" target="_blank" rel="noreferrer">Transitous sources</a> · Road estimates via OSRM · Cities © GeoNames · Airports © airportsdata · Map © OpenStreetMap contributors</footer></main>
     </div>
+    {exportOpen && <ExportDialog canSelect={!!selected} canCurrent={!!saved} hasDrafts={dirty || draftTotal > 0} onClose={() => setExportOpen(false)} onExport={shareTrips} />}
     {showApplyBar && <ApplyBar counts={draftCounts} invalid={invalidCount} applying={applyState} error={applyError} busy={busy} searchActive={active}
       onApply={applyDrafts} onDiscard={discardDrafts} onReload={() => { setApplyError(null); reloadTrip(); }} onFocusInvalid={() => focusInvalid()} />}
   </div>;

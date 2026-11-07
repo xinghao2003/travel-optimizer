@@ -76,22 +76,15 @@ class ContinuousOptimizationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(self.store.load_optimizer_checkpoint(self.record['id'], CHECKPOINT_VERSION))
         self.manager.fetch.assert_not_awaited()
 
-    async def test_checkpoint_limit_prevents_loading_an_oversized_checkpoint(self):
-        self.store.save_optimizer_checkpoint(self.record['id'], CHECKPOINT_VERSION, b'not a pickle')
-        with patch.dict('os.environ', {'PLANNER_CHECKPOINT_MAX_MB': '1'}), patch.object(self.store, 'optimizer_checkpoint_size', return_value=2 * 1024 * 1024), patch.object(self.manager, 'recalculate', new_callable=AsyncMock) as solve:
+    async def test_large_saved_checkpoints_do_not_pause_before_or_after_a_batch(self):
+        with patch.dict('os.environ', {'PLANNER_SOLVE_BATCH': '10'}), patch.object(self.store, 'optimizer_checkpoint_size', return_value=600 * 1024 * 1024):
             job = self.manager.start_continuous(self.record['id'])
+            self.assertNotIn('checkpoint_limit_bytes', job)
             final = await self.finish(job)
-        solve.assert_not_awaited()
-        self.assertEqual((final['status'], final['pause_reason'], final['batches']), ('paused', 'checkpoint', 0))
-        self.assertEqual(self.store.load_optimizer_checkpoint(self.record['id'], CHECKPOINT_VERSION), b'not a pickle')
-
-    async def test_resource_limit_is_checked_after_each_batch(self):
-        with patch.dict('os.environ', {'PLANNER_CHECKPOINT_MAX_MB': '1', 'PLANNER_SOLVE_BATCH': '10'}), patch.object(self.store, 'optimizer_checkpoint_size', side_effect=[0, 0, 2 * 1024 * 1024]):
-            job = self.manager.start_continuous(self.record['id'])
-            final = await self.finish(job)
-        self.assertEqual((final['status'], final['pause_reason'], final['batches']), ('paused', 'checkpoint', 1))
-        self.assertEqual(final['expanded_labels'], 10)
-        self.assertIsNotNone(self.store.load_optimizer_checkpoint(self.record['id'], CHECKPOINT_VERSION))
+        self.assertEqual((final['status'], final['pause_reason']), ('complete', None))
+        self.assertGreater(final['batches'], 1)
+        self.assertEqual(final['checkpoint_bytes'], 600 * 1024 * 1024)
+        self.manager.fetch.assert_not_awaited()
 
     async def test_single_slot_idempotent_start_and_stop_before_first_batch(self):
         job = self.manager.start_continuous(self.record['id'])
@@ -149,15 +142,17 @@ class ContinuousOptimizationTests(unittest.IsolatedAsyncioTestCase):
 
 
 class HiddenFlightPriceTests(unittest.TestCase):
-    def test_completed_routes_are_reported_as_hidden_when_bundle_partner_is_absent(self):
+    def test_flight_without_a_present_bundle_partner_is_excluded_before_exploration(self):
         spec = trip(visits=[Visit(place=A, min_stay_hours=1)], modes=['flight'], exclude_unpriced_flights=True)
         out = movement('out', HOME, A, dt(10), dt(10, 10))
         back = movement('back', A, HOME, dt(12, 16), dt(12, 17))
         offers = [fare('different-round-trip', 50, ['out', 'different-return'], kind='round-trip'), fare('back', 10)]
         result = optimize(spec, [out, back], offers, [])
-        self.assertGreater(result['feasible_count'], 0)
+        self.assertEqual(result['feasible_count'], 0)
         self.assertEqual(result['routes'], [])
-        self.assertEqual(result['hidden_unpriced_flight_count'], result['feasible_count'])
+        self.assertEqual(result['hidden_unpriced_flight_count'], 0)
+        self.assertEqual(result['excluded_unpriced_flight_count'], 1)
         shown = optimize(spec.model_copy(update={'exclude_unpriced_flights': False}), [out, back], offers, [])
         self.assertTrue(shown['routes'])
         self.assertEqual(shown['hidden_unpriced_flight_count'], 0)
+        self.assertEqual(shown['excluded_unpriced_flight_count'], 0)

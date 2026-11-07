@@ -312,7 +312,7 @@ export function searchState({ invalid, dirty, saved, result, job, minutes, apply
   // finished search can still queue transit searches when transit search was set up after the search ran.
   const secondary = !active && result?.optimization_complete === false ? {
     text: "Not all combinations were checked. Better options may exist.",
-    tip: "Checks saved combinations continuously until complete, stopped, or the checkpoint limit is reached. Changed inputs start a new calculation. No provider searches.",
+    tip: "Shares work across saved routes, favoring usable prices. Checks continuously until complete or stopped, with no checkpoint-size limit. Changed inputs start a new calculation. No provider searches.",
     action: { label: "Check more combinations", run: "optimize" } as StripAction,
   } : null;
   const state = (id: string, tone: SearchState["tone"], text: string, actions: StripAction[] = [], extra: Partial<SearchState> = {}): SearchState => ({ id, tone, text, actions, secondary, ...extra });
@@ -325,7 +325,7 @@ export function searchState({ invalid, dirty, saved, result, job, minutes, apply
     [{ label: stopping ? "Stopping…" : "Stop checking", run: "stop-optimization", disabled: stopping }], { secondary: null });
   }
   if (!active && !dirty && optimization?.status === "paused" && optimization.pause_reason === "checkpoint") return state("checking-resource", "warn",
-    `Checking paused at the ${whole(optimization.checkpoint_limit_bytes / 1024 / 1024)} MiB saved-checkpoint limit. Progress is saved. Adjust inputs or raise the configured limit before continuing.`);
+    "Checking paused under the previous checkpoint-size limit. Progress is saved. Continue to resume without that limit.");
   if (!active && !dirty && optimization?.status === "failed") return state("checking-failed", "error", `Checking stopped: ${optimization.message || "Calculation failed"}. Saved progress is kept.`);
   if (!active && !dirty && optimization?.status === "interrupted") return state("checking-interrupted", "warn", "The server stopped while checking. Saved progress can continue.");
 
@@ -390,7 +390,7 @@ const outcomeWords: [string, string][] = [["success", "found"], ["empty", "no re
 export function searchDetails({ saved, job, result }: {
   saved: Pick<SavedTrip, "snapshot"> | null;
   job: Job | null;
-  result: Pick<Result, "snapshot_revision" | "feasible_count" | "expanded_labels" | "coverage"> | null;
+  result: Pick<Result, "snapshot_revision" | "feasible_count" | "expanded_labels" | "coverage" | "excluded_unpriced_flight_count"> | null;
 }) {
   const lines: string[] = [];
   if (!saved?.snapshot && !job) return { lines, messages: [] };
@@ -409,6 +409,7 @@ export function searchDetails({ saved, job, result }: {
     `Data version ${result.snapshot_revision} · ${plural(result.feasible_count, "complete itinerary", "complete itineraries")} checked · ${plural(result.expanded_labels, "combination")} explored`,
     "Scope: best among the schedules and prices collected, not every ticket on sale.",
   );
+  if (result?.excluded_unpriced_flight_count) lines.push(`Skipped ${plural(result.excluded_unpriced_flight_count, "flight choice")} without an applicable standalone or combined-ticket price.`);
   const coverage = result?.coverage ?? saved?.snapshot?.coverage;
   const gaps = (coverage?.source_gaps ?? []).map(gap => gap === "Transitous disabled" ? "Transit search is not set up on this server." : gap);
   return { lines, messages: [...new Set([...(job?.messages ?? []), ...(coverage?.messages ?? []), ...gaps])] };

@@ -606,17 +606,16 @@ class DiscoveryManager:
         trip = self.store.get("trips", trip_id, expand=False)
         if trip is None or not trip.get("snapshot"):
             raise ValueError("Search transport before checking saved combinations.")
-        limit = max(1, int(os.environ.get("PLANNER_CHECKPOINT_MAX_MB", "256"))) * 1024 * 1024
         job = {"id": uuid.uuid4().hex, "trip_id": trip_id, "trip_revision": trip["revision"], "status": "queued",
                "batches": 0, "expanded_labels": (trip.get("result") or {}).get("expanded_labels", 0),
-               "checkpoint_bytes": self.store.optimizer_checkpoint_size(trip_id), "checkpoint_limit_bytes": limit,
+               "checkpoint_bytes": self.store.optimizer_checkpoint_size(trip_id),
                "pause_reason": None, "created": clock.time(), "message": None}
         self.store.put("optimizations", job["id"], job)
         trip["latest_optimization_id"] = job["id"]
         self.store.put("trips", trip_id, trip)
         self.continuous_jobs[job["id"]] = job
         self.continuous_running[job["id"]] = asyncio.create_task(self.run_continuous(job))
-        logger.debug("planner continuous.start job=%s trip=%s checkpoint_limit=%d", job["id"], trip_id, limit)
+        logger.debug("planner continuous.start job=%s trip=%s", job["id"], trip_id)
         return dict(job)
 
     def stop_continuous(self, id, reason="user"):
@@ -646,11 +645,6 @@ class DiscoveryManager:
                 job["status"] = "running"
             self.store.put("optimizations", id, job)
             while id not in self.cancelled_jobs:
-                size = await asyncio.to_thread(self.store.optimizer_checkpoint_size, trip_id)
-                job["checkpoint_bytes"] = size
-                if size >= job["checkpoint_limit_bytes"]:
-                    job.update(status="paused", pause_reason="checkpoint")
-                    break
                 # Revision changes invalidate this run; edits start a new calculation explicitly.
                 trip = await asyncio.to_thread(self.store.get, "trips", trip_id, expand=False)
                 if trip is None or trip["revision"] != job["trip_revision"]:
@@ -676,9 +670,6 @@ class DiscoveryManager:
                     break
                 if result["optimization_complete"]:
                     job["status"] = "complete"
-                    break
-                if job["checkpoint_bytes"] >= job["checkpoint_limit_bytes"]:
-                    job.update(status="paused", pause_reason="checkpoint")
                     break
                 self.store.put("optimizations", id, job)
                 await asyncio.sleep(0)
@@ -809,6 +800,8 @@ class DiscoveryManager:
                 # These bytes are created by this application, never accepted
                 # from HTTP input. Pickle preserves shared labels/movements.
                 payload = self.store.load_optimizer_checkpoint(trip_id, CHECKPOINT_VERSION)
+                if payload is None:
+                    payload = self.store.load_optimizer_checkpoint(trip_id, 1)
                 checkpoint = pickle.loads(payload) if payload is not None else SearchCheckpoint()
                 result = optimize(spec, solver_movements, offers, solver_rules, snapshot["revision"], trip["revision"],
                                   cancelled, label_limit, include_dominated=include_dominated, checkpoint=checkpoint, deadline=deadline,

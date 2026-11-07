@@ -9,9 +9,9 @@ const {
 } = await loadTs("../src/lib/present.ts");
 const { blankTrip } = await loadTs("../src/lib/planner.ts");
 
-test("continuous checking swaps its action for Stop and explains the resource pause", () => {
+test("continuous checking swaps its action for Stop and lets old size pauses resume", () => {
   const props = { invalid: false, dirty: false, saved: { snapshot: {} }, result: { optimization_complete: false }, job: null };
-  const optimization = { status: 'running', expanded_labels: 250000, checkpoint_limit_bytes: 256 * 1024 * 1024 };
+  const optimization = { status: 'running', expanded_labels: 250000 };
   const running = searchState({ ...props, optimization });
   assert.equal(running.id, 'checking');
   assert.equal(running.actions[0].label, 'Stop checking');
@@ -23,7 +23,7 @@ test("continuous checking swaps its action for Stop and explains the resource pa
   assert.equal(stopping.actions[0].disabled, true);
   assert.match(stopping.text, /saving/);
   const paused = searchState({ ...props, optimization: { ...optimization, status: 'paused', pause_reason: 'checkpoint' } });
-  assert.match(paused.text, /256 MiB.*Progress is saved/);
+  assert.match(paused.text, /previous checkpoint-size limit.*Continue to resume without that limit/);
   assert.equal(paused.secondary.action.label, 'Check more combinations');
   assert.equal(searchState({ ...props, optimization: { ...optimization, status: 'cancelled' } }).secondary.action.run, 'optimize');
 });
@@ -36,6 +36,10 @@ test("empty options explain completed itineraries hidden by flight-price eligibi
   assert.match(state.lines[0].text, /74,652.*hidden/);
   assert.equal(state.lines[0].action.target, 'show-unpriced-flights');
   assert.match(state.lines[1].text, /round-trip.*both matching flights/);
+  const details = searchDetails({ saved: { snapshot: {} }, job: null, result: {
+    snapshot_revision: 1, feasible_count: 10, expanded_labels: 30, coverage: {}, excluded_unpriced_flight_count: 3,
+  } });
+  assert.ok(details.lines.some(line => /Skipped 3 flight choices.*standalone or combined-ticket price/.test(line)));
 });
 
 test("an incomplete calculation does not claim that no itinerary fits", () => {

@@ -608,7 +608,7 @@ export default function Planner() {
   // edit or Retry save, so the strip shows the search state; the header ("Not saved") and the banner report it (C13).
   const strip = searchState({ invalid, dirty: dirty && saveStatus !== "Not saved", saved, result, job, minutes: roundMinutes, applying: applyState, optimization });
   const details = searchDetails({ saved, job, result });
-  if (optimization) details.lines.push(`Saved calculation: ${(optimization.checkpoint_bytes / 1024 / 1024).toFixed(1)} MiB checkpoint · ${optimization.checkpoint_limit_bytes / 1024 / 1024} MiB limit · ${optimization.batches} batches this run`);
+  if (optimization) details.lines.push(`Saved calculation: ${(optimization.checkpoint_bytes / 1024 / 1024).toFixed(1)} MiB checkpoint · ${optimization.batches} batches this run`);
   // A saved trip with marked fields does not save until they are fixed. A new trip saves only with
   // Save without searching or Search transport, so its edits keep "Not saved yet" (C13).
   const status = saved && invalid ? "Fix the marked fields to save" : !saved && saveStatus === "Unsaved changes" ? "Not saved yet" : saveStatus;

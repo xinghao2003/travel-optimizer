@@ -4,10 +4,10 @@ import asyncio
 import json
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .planner_discovery import manager, required_airport_connections, airport_transfer_rows
-from .planner_models import AirportConnection, AirportTransferEstimate, FareOffer, Movement, PricingRule, TripSpec
+from .planner_models import AirportConnection, AirportTransferEstimate, FareOffer, JourneyGroupField, JourneyPriceScope, Movement, PricingRule, TripSpec, journey_price_scope, stable_id
 from .planner_places import nearest_places, search_places
 from .planner_store import store
 from .planner_results import compact_trip, compact_result, fare_component_ids
@@ -42,15 +42,32 @@ class UpdateAirportTransfers(BaseModel):
 
 
 class SharedFareValues(BaseModel):
-    component_ids: list[str] = Field(min_length=1, max_length=5000)
+    component_ids: list[str] = Field(default_factory=list, max_length=5000)
     low: float = Field(ge=0, allow_inf_nan=False)
     high: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     currency: str = Field(default="MYR", pattern=r"^[A-Za-z]{3}$")
     label: str = Field(default="Shared transfer estimate", max_length=200)
+    scope: JourneyPriceScope | None = None
+
+    @model_validator(mode="after")
+    def target(self):
+        if not self.component_ids and self.scope is None:
+            raise ValueError("Choose at least one fare component.")
+        return self
 
 
 class SharedFareRequest(SharedFareValues):
     expected_revision: int
+
+
+class ReuseJourneyEstimateRequest(SharedFareRequest):
+    group_by: list[JourneyGroupField] = Field(max_length=7)
+
+    @model_validator(mode="after")
+    def unique_grouping(self):
+        if len(set(self.group_by)) != len(self.group_by):
+            raise ValueError("Choose each grouping field once.")
+        return self
 
 
 class SharedEstimatesRequest(BaseModel):
@@ -250,16 +267,22 @@ async def edit_fare(id: str, offer_id: str, offer: FareOffer):
     return await recalculate(id)
 
 
+def fare_movements(trip):
+    result = trip.get("result") or {}
+    return [*(trip.get("snapshot") or {}).get("movements", []),
+            *(m for route in [*result.get("routes", []), *result.get("dominated_routes", []), *result.get("refinement_routes", [])] for m in route["movements"])]
+
+
 def shared_fare_offers(trip, estimates: list[SharedFareValues]):
     component_ids = [key for estimate in estimates for key in estimate.component_ids]
     ids = set(component_ids)
-    if len(ids) != len(component_ids):
+    exact_ids = [key for estimate in estimates if estimate.scope is None for key in estimate.component_ids]
+    if len(set(exact_ids)) != len(exact_ids):
         raise HTTPException(422, "Fare components must be unique across saved estimates.")
     if any(e.high is not None and e.high < e.low for e in estimates):
         raise HTTPException(422, "Maximum fare must be at least the minimum.")
     result = trip.get("result") or {}
-    movements = [*(trip.get("snapshot") or {}).get("movements", []),
-                 *(m for route in [*result.get("routes", []), *result.get("dominated_routes", []), *result.get("refinement_routes", [])] for m in route["movements"])]
+    movements = fare_movements(trip)
     charges = {c["id"] for m in movements for c in m.get("charges", [])}
     charges.update(c["id"] for route in [*result.get("routes", []), *result.get("dominated_routes", []), *result.get("refinement_routes", [])] for c in route.get("extra_charges", []))
     known = {m["id"] for m in movements} | charges
@@ -267,10 +290,37 @@ def shared_fare_offers(trip, estimates: list[SharedFareValues]):
         raise HTTPException(422, "Every fare component must belong to this trip.")
     # Each amount is per component, never a bundle price for their union.
     adults = TripSpec.model_validate(trip["spec"]).adults
+    by_id = {m["id"]: m for m in movements}
+    existing_scopes = [rule.get("journey_scope") for rule in trip.get("journey_pricing_rules", [])]
+    for estimate in estimates:
+        if estimate.scope is None:
+            continue
+        scope = estimate.scope
+        if scope.adults != adults:
+            raise HTTPException(422, "The estimate must match this trip's party size.")
+        if not estimate.component_ids and scope.model_dump(mode="json") not in existing_scopes:
+            raise HTTPException(422, "A new reusable estimate needs a matching journey.")
+        for key in estimate.component_ids:
+            if key not in by_id or journey_price_scope(Movement.model_validate(by_id[key]), adults, scope.group_by) != scope:
+                raise HTTPException(422, "Every journey must match the reusable estimate's scope.")
     return [FareOffer(id="user:"+key, movement_ids=[key], kind="charge" if key in charges else "one-way",
                         low=e.low, high=e.high, currency=e.currency, source="user",
                         adults=adults, estimated=True, label=e.label).model_dump(mode="json")
-              for e in estimates for key in e.component_ids]
+              for e in estimates if e.scope is None for key in e.component_ids]
+
+
+def reusable_journey_rules(trip, estimates):
+    rules = {rule["id"]: rule for rule in trip.get("journey_pricing_rules", [])}
+    for estimate in estimates:
+        if estimate.scope is None:
+            continue
+        scope = estimate.scope
+        id = "journey-estimate:" + stable_id(scope.model_dump(mode="json"))
+        rules[id] = PricingRule(id=id, name=estimate.label[:120], from_id=scope.from_id, to_id=scope.to_id,
+                                mode=scope.mode, unit="party", low=estimate.low, high=estimate.high,
+                                currency=estimate.currency, priority=trip["revision"]+1,
+                                journey_scope=scope).model_dump(mode="json")
+    return list(rules.values())
 
 
 async def save_shared_estimates(id: str, estimates: list[SharedFareValues], expected_revision: int):
@@ -283,6 +333,7 @@ async def save_shared_estimates(id: str, estimates: list[SharedFareValues], expe
             raise HTTPException(409, "This trip changed. Reload it before saving.")
         replaced = {o["id"] for o in offers}
         record["offers"] = [o for o in record["offers"] if o["id"] not in replaced] + offers
+        record["journey_pricing_rules"] = reusable_journey_rules(record, estimates)
         record["revision"] += 1
         return record
     store.update("trips", id, update)
@@ -320,6 +371,7 @@ def apply_missing_info(trip, request: ApplyChangesRequest):
         offers = shared_fare_offers(trip, request.estimates)
         replaced = {o["id"] for o in offers}
         updated["offers"] = [o for o in trip.get("offers", []) if o["id"] not in replaced]+offers
+        updated["journey_pricing_rules"] = reusable_journey_rules(trip, request.estimates)
     updated["revision"] += 1
     updated.pop("result", None)
     return updated
@@ -333,6 +385,52 @@ async def apply_changes(id: str, request: ApplyChangesRequest):
     return JSONResponse({"trip": json.loads(response.body), "job": job,
                          "updating": bool(job and job.get("updating_options"))},
                         status_code=202 if job and job["status"] in {"queued", "running"} else 200)
+
+
+@router.delete("/trips/{id}/journey-pricing-rules/{rule_id}")
+async def remove_journey_rule(id: str, rule_id: str, expected_revision: int):
+    get_trip(id)
+    def remove(trip):
+        if trip["revision"] != expected_revision:
+            raise HTTPException(409, "This trip changed. Reload it before saving.")
+        rules = [rule for rule in trip.get("journey_pricing_rules", []) if rule["id"] != rule_id]
+        if len(rules) == len(trip.get("journey_pricing_rules", [])):
+            raise HTTPException(404, "Reusable estimate not found.")
+        return {k: v for k, v in (trip | {"journey_pricing_rules": rules, "revision": trip["revision"]+1}).items() if k != "result"}
+    job = await manager.apply_changes(id, remove)
+    response = await read_trip(id, compact=True)
+    return JSONResponse({"trip": json.loads(response.body), "job": job,
+                         "updating": bool(job and job.get("updating_options"))})
+
+
+@router.post("/trips/{id}/journey-pricing-rules/reuse")
+async def reuse_existing_journey_estimate(id: str, request: ReuseJourneyEstimateRequest):
+    get_trip(id)
+    def convert(trip):
+        if trip["revision"] != request.expected_revision:
+            raise HTTPException(409, "This trip changed. Reload it before saving.")
+        movements = {m["id"]: m for m in fare_movements(trip)}
+        offers = {o["movement_ids"][0]: o for o in trip.get("offers", [])
+                  if o["source"] == "user" and o["label"].startswith("Shared estimate:") and len(o["movement_ids"]) == 1}
+        groups = {}
+        for key in request.component_ids:
+            offer = offers.get(key)
+            if key not in movements or offer is None or offer.get("adults") not in (None, trip["spec"]["adults"]) or (offer["low"], offer["high"], offer["currency"], offer["label"]) != (request.low, request.high, request.currency.upper(), request.label):
+                raise HTTPException(422, "Choose an unchanged saved group price for these journeys.")
+            scope = journey_price_scope(Movement.model_validate(movements[key]), trip["spec"]["adults"], request.group_by)
+            signature = stable_id(scope.model_dump(mode="json"))
+            if signature not in groups:
+                groups[signature] = SharedFareValues(low=request.low, high=request.high, currency=request.currency,
+                                                     label=request.label, scope=scope)
+            groups[signature].component_ids.append(key)
+        updated = apply_missing_info(trip, ApplyChangesRequest(expected_revision=request.expected_revision, estimates=list(groups.values())))
+        ids = {offers[key]["id"] for key in request.component_ids}
+        updated["offers"] = [o for o in updated["offers"] if o["id"] not in ids]
+        return updated
+    job = await manager.apply_changes(id, convert)
+    response = await read_trip(id, compact=True)
+    return JSONResponse({"trip": json.loads(response.body), "job": job,
+                         "updating": bool(job and job.get("updating_options"))})
 
 
 @router.post("/trips/{id}/fares/batch")

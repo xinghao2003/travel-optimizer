@@ -324,6 +324,52 @@ class FareOffer(Contract):
         return self
 
 
+JourneyGroupField = Literal["stations", "category", "connections", "service", "operator", "date", "time"]
+JOURNEY_GROUP_FIELDS = ("stations", "category", "connections", "service", "operator", "date", "time")
+
+
+class JourneyPriceScope(Contract):
+    """A trip-local whole-journey estimate, independent of dated movement IDs."""
+    from_id: str
+    to_id: str
+    mode: Mode
+    vehicle_kind: Literal["own", "rental"] | None = None
+    adults: int = Field(ge=1, le=9)
+    group_by: list[JourneyGroupField] = Field(max_length=7)
+    values: dict[str, str]
+
+    @model_validator(mode="after")
+    def grouping(self):
+        if len(set(self.group_by)) != len(self.group_by) or set(self.values) != set(self.group_by):
+            raise ValueError("Each grouping field must have exactly one matching value.")
+        self.group_by = [key for key in JOURNEY_GROUP_FIELDS if key in self.group_by]
+        return self
+
+
+def journey_price_scope(movement: Movement, adults: int, group_by: list[JourneyGroupField]) -> JourneyPriceScope:
+    """Use provider station IDs and ordered riding legs; never generalize missing identifiers."""
+    rides = [s for s in movement.segments if s.mode.lower() not in {"walk", "foot", "wait", "transfer"}
+             and (movement.mode != "flight" or s.mode.lower() == "flight")]
+    unknown = "unknown:" + (movement.template_id or movement.id)
+    def station(segment, end):
+        return getattr(segment, end + "_id") or unknown
+    departure = rides[0].departure if rides else movement.departure
+    zone = ZoneInfo((rides[0].from_timezone if rides else None) or "UTC")
+    local = departure.astimezone(zone) if departure and ("date" in group_by or "time" in group_by) else None
+    values = {
+        "stations": [station(rides[0], "from"), station(rides[-1], "to")] if rides else [unknown],
+        "category": sorted({s.mode.lower() for s in rides}) if rides else [movement.mode],
+        "connections": [[station(a, "to"), station(b, "from")] for a, b in zip(rides, rides[1:])],
+        "service": [s.service or unknown for s in rides] if rides else [unknown],
+        "operator": sorted({s.operator or unknown for s in rides}) if rides else [unknown],
+        "date": local.date().isoformat() if local else unknown,
+        "time": local.strftime("%H:%M") if local else unknown,
+    }
+    return JourneyPriceScope(from_id=movement.from_id, to_id=movement.to_id, mode=movement.mode,
+                             vehicle_kind=movement.vehicle_kind, adults=adults, group_by=group_by,
+                             values={key: json.dumps(values[key], ensure_ascii=False, separators=(",", ":")) for key in group_by})
+
+
 class PricingRule(Contract):
     id: str = ""
     name: str = Field(min_length=1, max_length=120)
@@ -339,6 +385,7 @@ class PricingRule(Contract):
     capacity: int = Field(default=4, ge=1, le=9)
     currency: str = Field(default="MYR", pattern=r"^[A-Za-z]{3}$")
     priority: int = 0
+    journey_scope: JourneyPriceScope | None = None
 
     @model_validator(mode="after")
     def interval(self):

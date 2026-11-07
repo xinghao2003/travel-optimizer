@@ -689,7 +689,8 @@ class DiscoveryManager:
             label_limit = None if timed else snapshot["label_limit"]
             logger.debug("planner optimize.dispatch trip=%s elapsed=%.2fs movements=%d offers=%d label_limit=%s", trip_id, clock.monotonic()-started, len(snapshot["movements"]), len(offers), label_limit)
             solver_movements = airport_transfer_variants(snapshot["movements"], trip, spec, snapshot.get("roads", {}), airport_connections)
-            solver_rules = [*self.rules(), *airport_transfer_rules(trip, spec)]
+            solver_rules = [*self.rules(), *airport_transfer_rules(trip, spec),
+                            *(PricingRule.model_validate(rule) for rule in trip.get("journey_pricing_rules", []))]
             def solve():
                 # These bytes are created by this application, never accepted
                 # from HTTP input. Pickle preserves shared labels/movements.

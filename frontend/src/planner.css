@@ -424,6 +424,8 @@ html { scroll-padding-top: calc(var(--header-h) + var(--tabs-h, 0px) + 8px); scr
 .p-mi-links .p-link-button:disabled, .p-mi-item .p-link-button:disabled { opacity: .5; }
 .p-mi-journeys { display: grid; gap: 12px; margin: 0; padding: 12px; border-radius: 8px; background: var(--muted-surface); list-style: none; }
 .p-mi-journeys > li { display: grid; gap: 6px; }
+.p-journey-legs { padding-left: 18px; margin: 0; font-size: 12px; color: var(--muted-foreground); }
+.p-journey-legs li + li { margin-top: 6px; }
 .p-mi-journeys > li > .p-link-button { justify-self: start; font-size: 12px; }
 .p-mi-more { margin-top: 4px; border-top: 1px solid var(--border); }
 .p-mi-more > summary { padding: 10px 0; cursor: pointer; color: var(--foreground); font-weight: 500; }

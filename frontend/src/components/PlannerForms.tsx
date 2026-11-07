@@ -154,8 +154,8 @@ export function Staged({ label, what, onUndo }: { label: string; what?: string; 
  * A Missing info section (F2): an h3 with its tip and a right-aligned status (`warn` in the warning colour), then the body.
  * A `collapsed` section is a closed <details> whose summary holds the heading and the status; its tip sits beside the summary.
  */
-export function MissingSection({ id, title, status, warn = false, tip, collapsed = false, children }: {
-  id: string; title: string; status?: string; warn?: boolean; tip: ReactNode; collapsed?: boolean; children: ReactNode;
+export function MissingSection({ id, title, status, warn = false, tip, collapsed = false, actions, children }: {
+  id: string; title: string; status?: string; warn?: boolean; tip: ReactNode; collapsed?: boolean; actions?: ReactNode; children: ReactNode;
 }) {
   const statusText = status && <span className="p-mi-status" data-tone={warn ? "warn" : undefined}>{status}</span>;
   if (collapsed) return <section className="p-mi-section p-mi-collapsible" aria-labelledby={id}>
@@ -169,6 +169,7 @@ export function MissingSection({ id, title, status, warn = false, tip, collapsed
     <div className="p-mi-head">
       <h3 id={id} tabIndex={-1}>{title}</h3>
       <InfoTip topic={title}>{tip}</InfoTip>
+      {actions}
       {statusText}
     </div>
     {children}

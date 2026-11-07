@@ -15,6 +15,12 @@
 .p-select-item[data-disabled] { opacity: .5; cursor: not-allowed; }
 .p-select-check { position: absolute; right: 8px; display: grid; place-items: center; }
 .p-select-scroll { display: grid; place-items: center; height: 20px; color: var(--muted-foreground); }
+.p-journey-grouping { width: min(330px, calc(100vw - 24px)); padding: 14px; }
+.p-journey-grouping fieldset { display: grid; gap: 10px; border: 0; padding: 0; margin: 0; }
+.p-journey-grouping legend { padding: 0; font-weight: 600; }
+.p-journey-grouping label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.p-journey-grouping p { margin: 8px 0; color: var(--muted-foreground); font-size: 12px; line-height: 1.5; }
+.p-journey-grouping input { accent-color: var(--primary); }
 .p-temporal { min-width: 0; width: 100%; }
 .p-temporal-control { position: relative; min-width: 0; }
 .optimizer .p-temporal-control input { padding-right: 38px; font-variant-numeric: tabular-nums; }

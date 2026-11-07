@@ -19,7 +19,7 @@ from itertools import combinations
 from operator import itemgetter
 from zoneinfo import ZoneInfo
 
-from .planner_models import Charge, FareOffer, Movement, PricingRule, TripSpec, stable_id
+from .planner_models import Charge, FareOffer, Movement, PricingRule, TripSpec, journey_price_scope, stable_id
 from .planner_positioning import SUPPLIED_SOURCE, positioning_allowed, supplied_positioning
 
 logger = logging.getLogger("uvicorn.error")
@@ -65,10 +65,14 @@ def _rule_offer(component: str, movement: Movement, distance, mode, spec, rules,
                and (r.to_id is None or r.to_id == destination)
                and (r.service is None or r.service in names)
                and (r.country_code is None or r.country_code == country)
+               and (r.journey_scope is None or charge is None and
+                    journey_price_scope(movement, spec.adults, r.journey_scope.group_by) == r.journey_scope)
                and (r.kind != "per-km" or distance is not None)]
     if not matches:
         return None
-    rule = max(matches, key=lambda r: (r.priority, sum(x is not None for x in (r.from_id, r.to_id, r.service, r.country_code)), r.mode != "*", r.id))
+    scoped = [r for r in matches if r.journey_scope is not None]
+    rule = (max(scoped, key=lambda r: (len(r.journey_scope.group_by), r.priority, r.id)) if scoped else
+            max(matches, key=lambda r: (r.priority, sum(x is not None for x in (r.from_id, r.to_id, r.service, r.country_code)), r.mode != "*", r.id)))
     multiplier = spec.adults if rule.unit == "person" else math.ceil(spec.adults/rule.capacity) if rule.unit == "vehicle" else 1
     multiplier *= distance if rule.kind == "per-km" else 1
     return FareOffer(id="rule:"+rule.id+":"+component, movement_ids=[component],

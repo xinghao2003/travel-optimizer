@@ -12,6 +12,7 @@ import { blankConnectionForm, bundleStatusLabel, connectionFromForm, connectionT
 import type { MissingFareGroup } from "../lib/missingFares";
 import { modes, type AirportConnection, type AirportTransferEstimate, type Coverage, type Mode, type Movement, type Offer, type Place, type PricingRule } from "../lib/planner";
 import type { TripDraftsApi } from "../lib/useTripDrafts";
+import type { JourneyGroupField } from "../lib/planner";
 
 const count = (n: number, word: string) => `${n} ${n === 1 ? word : `${word}s`}`;
 const sentence = (message: string) => message.charAt(0).toUpperCase() + message.slice(1);
@@ -217,12 +218,14 @@ function CombinedTickets({ links, placeName }: { links: BundleLink[]; placeName:
  */
 export function MissingInfoPanel({ searched, allClear, needs, needsText, airportChanges, connections, directions, estimates, accessNote, journeyGroups, appliedGroups,
   adults, rates, draftRates, drafts, fares, canonical, offerFor, places, placeName, zoneOf, stagePrice, stageComponent, removePrice, addRate,
-  gaps, assumed, addConnection, removeConnection, bundleLinks, rules, saveRule, deleteRule, busy, onAction, onApply }: {
+  gaps, assumed, addConnection, removeConnection, bundleLinks, rules, saveRule, deleteRule, busy, onAction, onApply, grouping, onGrouping, removeJourneyRule, reuseJourneyEstimate }: {
   searched: boolean; allClear: boolean; needs: number; needsText: string;
   airportChanges: AirportChangeRow[]; connections: AirportConnection[];
   directions: TransferDirection[]; estimates: AirportTransferEstimate[]; accessNote: string | null;
   /** splitGroups().journeys, and the group prices saved on this trip. */
   journeyGroups: MissingFareGroup[]; appliedGroups: AppliedSharedFareGroup[];
+  grouping: JourneyGroupField[]; onGrouping: (fields: JourneyGroupField[]) => void; removeJourneyRule: (id: string) => void;
+  reuseJourneyEstimate: (group: AppliedSharedFareGroup) => void;
   adults: number; rates: Record<string, number>; draftRates: Record<string, number>;
   drafts: TripDraftsApi; fares: Record<string, SharedFare>; canonical: (id: string) => string; offerFor: (id: string) => Offer | undefined;
   places: Place[]; placeName: (id: string) => string; zoneOf: (id: string) => string;
@@ -252,12 +255,12 @@ export function MissingInfoPanel({ searched, allClear, needs, needsText, airport
     <AirportChanges rows={airportChanges} connections={connections} adults={adults} drafts={drafts} />
     <AirportTransfers directions={directions} estimates={estimates} adults={adults} searched={searched} drafts={drafts} fares={fares} accessNote={accessNote}
       placeName={placeName} zoneOf={zoneOf} rates={rates} draftRates={draftRates} addRate={addRate} stageComponent={stageComponent} removePrice={removePrice} busy={busy} onAction={onAction} onApply={onApply} />
-    {(journeyGroups.length > 0 || others.length > 0) && <JourneyPrices groups={journeyGroups} others={others} fares={fares} adults={adults} rates={rates} draftRates={draftRates}
+    {(searched || others.length > 0) && <JourneyPrices groups={journeyGroups} others={others} fares={fares} adults={adults} rates={rates} draftRates={draftRates} grouping={grouping} onGrouping={onGrouping}
       canonical={canonical} offerFor={offerFor} placeName={placeName} zoneOf={zoneOf} stagePrice={stagePrice} stageComponent={stageComponent}
       unstage={unstageFare} removePrice={removePrice} addRate={addRate} busy={busy} onApply={onApply} />}
     {searched && <Connections places={places} gaps={gaps} assumed={assumed} placeName={placeName} zoneOf={zoneOf} busy={busy} onAdd={addConnection} onRemove={removeConnection} />}
     <CombinedTickets links={bundleLinks} placeName={placeName} />
-    <GroupPrices groups={appliedGroups} fares={fares} adults={adults} stagePrice={stagePrice} unstage={unstageFare} onApply={onApply} />
+    <GroupPrices groups={appliedGroups} fares={fares} adults={adults} stagePrice={stagePrice} unstage={unstageFare} onApply={onApply} removeRule={removeJourneyRule} reuseEstimate={reuseJourneyEstimate} grouping={grouping} busy={busy} />
     <RulesEditor rules={rules} places={places} placeName={placeName} busy={busy} onSave={saveRule} onDelete={deleteRule} />
   </>;
 }

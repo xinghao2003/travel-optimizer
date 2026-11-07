@@ -13,6 +13,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { CircleCheck, LoaderCircle } from "lucide-react";
 import type { AppliedSharedFareGroup } from "./components/MissingFaresTable";
 import { groupMissingFares } from "./lib/missingFares";
+import { defaultJourneyGrouping, journeyGroupFields, journeyPriceScope, sameJourneyScope } from "./lib/journeyPricing";
+import type { JourneyGroupField } from "./lib/planner";
 import { activeFares, airportChangeFieldId, buildAirportConnections, buildTransferEstimates, canonicalFares, canonicalIds, countDrafts, invalidDraftFields, knownComponentIds, savedTransferRows, sameTransferRows, transferFieldId, transferKey, transferRateId, type DraftPrice, type DraftState, type DraftTarget, type PriceValue, type SharedFare } from "./lib/drafts";
 import { useTripDrafts } from "./lib/useTripDrafts";
 import { airportChangeRows, appError, assumedConnections, buildNextSteps, cityGaps, needsInputCount, optionNumber, optionsEmptyState, partySizeNotice, purchaseAmount, routeSignature, searchDetails, searchState, settingsFooter, sortRoutes, splitGroups, staySumWarning, transferDirections, transitSearchModes, unresolvedAccessJourneys, validateDraft, type AppError, type OptionsTarget } from "./lib/present";
@@ -41,6 +43,17 @@ export default function Planner() {
   const [saved, setSaved] = useState<SavedTrip | null>(null);
   const [summaries, setSummaries] = useState<SavedSummary[]>([]);
   const [rules, setRules] = useState<PricingRule[]>([]);
+  const [journeyGrouping, setJourneyGrouping] = useState<JourneyGroupField[]>(() => {
+    try {
+      const fields: unknown = JSON.parse(localStorage.getItem("wayfinder:journey-grouping") ?? "null");
+      if (Array.isArray(fields)) return journeyGroupFields.map(field => field.key).filter(key => fields.includes(key));
+    } catch { /* Use the default when browser storage is unavailable. */ }
+    return [...defaultJourneyGrouping];
+  });
+  function changeJourneyGrouping(fields: JourneyGroupField[]) {
+    setJourneyGrouping(fields);
+    try { localStorage.setItem("wayfinder:journey-grouping", JSON.stringify(fields)); } catch { /* Keep the setting for this page. */ }
+  }
   const [result, setResult] = useState<Result | null>(null);
   const [job, setJob] = useState<Job | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -350,6 +363,28 @@ export default function Planner() {
     setRules((await api<{ rules: PricingRule[] }>("/pricing-rules")).rules);
     if (savedRef.current) { const id = savedRef.current.id; accept(await api<SavedTrip>(`/trips/${id}`)); acceptResult(await api<Result>(`/trips/${id}/optimize`, "POST"), id); }
   }
+  function removeJourneyRule(ruleId: string) {
+    void act(async () => {
+      const record = await saveSpec(), token = session.current;
+      const applied = await api<{ trip: SavedTrip; job: Job | null; updating: boolean }>(`/trips/${record.id}/journey-pricing-rules/${encodeURIComponent(ruleId)}?expected_revision=${record.revision}`, "DELETE");
+      if (session.current !== token || savedRef.current?.id !== record.id) return;
+      accept(applied.trip); setJob(applied.job); tripDrafts.unstage("fares", `reusable:${ruleId}`);
+      setSaveStatus(applied.updating ? "Estimate removed · continue the round to update options" : "Estimate removed · options updated");
+    }, "price");
+  }
+  function reuseJourneyEstimate(group: AppliedSharedFareGroup) {
+    void act(async () => {
+      if (tripDrafts.read().fares[group.key]) throw new Error("Apply or undo the draft price before reusing the saved estimate.");
+      const record = await saveSpec(), token = session.current;
+      const applied = await api<{ trip: SavedTrip; job: Job | null; updating: boolean }>(`/trips/${record.id}/journey-pricing-rules/reuse`, "POST", {
+        expected_revision: record.revision, component_ids: group.component_ids, low: group.low, high: group.high,
+        currency: group.currency, label: group.label, group_by: journeyGrouping,
+      });
+      if (session.current !== token || savedRef.current?.id !== record.id) return;
+      accept(applied.trip); setJob(applied.job);
+      setSaveStatus(applied.updating ? "Estimate reused · options awaiting update" : "Estimate reused · options updated");
+    }, "price");
+  }
   // Missing info › Price rules (F2 row 7, F6): saved at once for all trips; the open trip recalculates.
   function saveRule(rule: PricingRule) {
     return actInline(async () => {
@@ -377,7 +412,8 @@ export default function Planner() {
   const missingFareGroups = useMemo(() => groupMissingFares(
     (result?.missing_fares ?? []).filter(fare => !fare.label.startsWith("Airport transfer ")),
     [...(result?.routes ?? []), ...(result?.dominated_routes ?? []), ...(result?.refinement_routes ?? [])],
-  ), [result]);
+    journeyGrouping, saved?.spec.adults ?? draft.adults, saved?.journey_pricing_rules ?? [], saved?.spec.exchange_rates ?? draft.exchange_rates,
+  ), [result, journeyGrouping, saved?.spec.adults, draft.adults, saved?.journey_pricing_rules, saved?.spec.exchange_rates, draft.exchange_rates]);
   const templateOf = useMemo(() => templatesOf(result), [result]);
   // The fare components that Apply can price (F4); drafts on other components wait under "Other drafts".
   const knownComponents = useMemo(() => knownComponentIds(saved, resultRoutes(result)), [saved, result]);
@@ -432,12 +468,12 @@ export default function Planner() {
     const offers = new Map<string, Offer>(allOffers.map(offer => [offer.id, offer] as const));
     const grouped = new Map<string, Offer[]>();
     for (const offer of offers.values()) {
-      if (offer.source !== "user" || !offer.label.startsWith("Shared estimate:") || offer.movement_ids.length !== 1 || !knownComponents.has(offer.movement_ids[0]) || offer.low === null) continue;
+      if (offer.source !== "user" || !offer.label.startsWith("Shared estimate:") || offer.movement_ids.length !== 1 || !knownComponents.has(offer.movement_ids[0]) || offer.low === null || offer.adults != null && offer.adults !== saved?.spec.adults) continue;
       const entries = grouped.get(offer.label) ?? [];
       entries.push(offer);
       grouped.set(offer.label, entries);
     }
-    return [...grouped].map(([label, entries]): AppliedSharedFareGroup => {
+    const exact = [...grouped].map(([label, entries]): AppliedSharedFareGroup => {
       const amounts = new Set(entries.map(offer => JSON.stringify([offer.low, offer.high])));
       const currencies = new Set(entries.map(offer => offer.currency));
       const first = entries[0];
@@ -451,9 +487,17 @@ export default function Planner() {
         mixed_amounts,
         mixed_currency: currencies.size > 1,
         label,
+        canReuse: entries.every(offer => offer.kind !== "charge"),
       };
-    }).sort((a, b) => a.label.localeCompare(b.label));
-  }, [knownComponents, saved?.snapshot?.offers, saved?.offers]);
+    });
+    const movements = [...new Map(resultRoutes(result).flatMap(route => route.movements).map(movement => [movement.template_id ?? movement.id, movement])).values()];
+    const reusable = (saved?.journey_pricing_rules ?? []).filter(rule => rule.journey_scope?.adults === saved?.spec.adults).map((rule): AppliedSharedFareGroup => ({
+      key: `reusable:${rule.id}`, ruleId: rule.id, label: rule.name, scope: rule.journey_scope!,
+      component_ids: movements.filter(movement => sameJourneyScope(journeyPriceScope(movement, saved!.spec.adults, rule.journey_scope!.group_by), rule.journey_scope!)).map(movement => movement.template_id ?? movement.id),
+      low: rule.low, high: rule.high, currency: rule.currency, mixed_amounts: false, mixed_currency: false,
+    }));
+    return [...exact, ...reusable].sort((a, b) => a.label.localeCompare(b.label));
+  }, [knownComponents, saved?.snapshot?.offers, saved?.offers, saved?.journey_pricing_rules, saved?.spec.adults, result]);
   // Missing info › Add a connection (F2 row 4, F6): saved at once after a trip save; the trip and its options reload.
   function addConnection(movement: Movement) {
     return actInline(async () => {
@@ -703,8 +747,11 @@ export default function Planner() {
     }
     if (!componentId) return null;
     const id = templateOf.get(componentId) ?? componentId;
-    const fare = Object.values(fareDrafts).find(item => item.component_ids.includes(id));
-    if (fare) return { scope: "journey", value: fare, amount: purchaseAmount(fare, rates), undo: () => unstageComponent(id) };
+    const exact = Object.entries(fareDrafts).find(([, item]) => !item.scope && item.component_ids.includes(id));
+    const reusable = !ownPrice && Object.entries(fareDrafts).filter(([, item]) => item.scope && item.component_ids.includes(id))
+      .sort((a, b) => b[1].scope!.group_by.length - a[1].scope!.group_by.length).at(0);
+    const entry = exact || reusable;
+    if (entry) return { scope: "journey", value: entry[1], amount: purchaseAmount(entry[1], rates), undo: () => entry[1].scope ? tripDrafts.unstage("fares", entry[0]) : unstageComponent(id) };
     const direction = charge && !ownPrice ? transferDirection(charge) : null;
     const rows = direction && tripDrafts.drafts.transfers[direction.key];
     const way = rows?.find(row => row.mode === charge!.mode);
@@ -735,7 +782,7 @@ export default function Planner() {
     const drafts = tripDrafts.read();
     const fares = canonicalFares(drafts.fares, templateOf);
     // Only drafts that Apply can send: fare drafts on components of the current options ("Other drafts" stay).
-    const hasChanges = Object.keys(drafts.airportChanges).length > 0 || transferKeys(drafts).length > 0 || activeFares(fares, knownComponents).length > 0;
+    const hasChanges = Object.keys(drafts.airportChanges).length > 0 || transferKeys(drafts).length > 0 || activeFares(fares, knownComponents, adults).length > 0;
     if (!tripId || busy) return;
     if (!hasChanges) {
       // The Apply bar counts every fare draft, so it shows while only "Other drafts" are left.
@@ -763,7 +810,7 @@ export default function Planner() {
         if (!current()) return;
         const airportChanges = Object.keys(drafts.airportChanges).length > 0;
         const sentTransfers = transferKeys(drafts, record.airport_transfer_rows ?? [], record.spec.adults);
-        const estimates = activeFares(fares, knownComponentIds(record, resultRoutes(result)));
+        const estimates = activeFares(fares, knownComponentIds(record, resultRoutes(result)), record.spec.adults);
         const payload = {
           expected_revision: record.revision,
           ...(airportChanges ? { connections: buildAirportConnections(record.airport_connections ?? [], drafts.airportChanges) } : {}),
@@ -777,6 +824,9 @@ export default function Planner() {
         if (airportChanges) tripDrafts.clear("airportChanges");
         sentTransfers.forEach(key => tripDrafts.unstage("transfers", key));
         estimates.flatMap(fare => fare.component_ids).forEach(unstageComponent);
+        Object.entries(fares).forEach(([key, fare]) => {
+          if (fare.scope && estimates.some(estimate => estimate.scope && sameJourneyScope(estimate.scope, fare.scope!))) tripDrafts.unstage("fares", key);
+        });
         // Before a search there are no options to count.
         setSaveStatus(applied.updating ? (applied.job && ["queued", "running"].includes(applied.job.status)
           ? "Changes saved · updating options" : "Changes saved · continue the round to update options")
@@ -889,6 +939,7 @@ export default function Planner() {
           <MissingInfoPanel searched={searched} allClear={allClear} needs={needs} needsText={needsText} airportChanges={airportChanges} connections={saved.airport_connections ?? []}
             directions={directions} estimates={saved.airport_transfer_estimates ?? []} accessNote={nextSteps.find(step => step.id === "access-time")?.text ?? null}
             journeyGroups={groups.journeys} appliedGroups={appliedSharedGroups} adults={adults} rates={rates} draftRates={draft.exchange_rates}
+            grouping={journeyGrouping} onGrouping={changeJourneyGrouping} removeJourneyRule={removeJourneyRule} reuseJourneyEstimate={reuseJourneyEstimate}
             drafts={tripDrafts} fares={fareDrafts} canonical={id => templateOf.get(id) ?? id} offerFor={offerFor} places={places} placeName={placeName} zoneOf={zoneOf}
             stagePrice={stagePrice} stageComponent={stageComponent} removePrice={id => void act(() => removePrice(id), "price")} addRate={addRate}
             gaps={gaps} assumed={assumed} addConnection={addConnection} removeConnection={id => void removeAssumedConnection(id)} bundleLinks={bundleLinks}

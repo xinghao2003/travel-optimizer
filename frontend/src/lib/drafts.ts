@@ -1,8 +1,8 @@
-import type { AirportConnection, AirportTransferEstimate, AirportTransferMode, AirportTransferRow, Charge, Offer, Route, SavedTrip } from "./planner";
+import type { AirportConnection, AirportTransferEstimate, AirportTransferMode, AirportTransferRow, Charge, JourneyPriceScope, Offer, Route, SavedTrip } from "./planner";
 import { modeLabel } from "./present";
 
 /** A price for each listed component, kept in this browser until it is applied. */
-export type SharedFare = { component_ids: string[]; low: number; high: number | null; currency: string; label: string };
+export type SharedFare = { component_ids: string[]; low: number; high: number | null; currency: string; label: string; scope?: JourneyPriceScope };
 /** A typed price: `high` null is open-ended ("or more"); `high` equal to `low` is a fixed price. */
 export type PriceValue = Pick<SharedFare, "low" | "high" | "currency">;
 /** One way between a city and its airport, as typed. Text fields keep invalid input until it is applied. */
@@ -30,29 +30,33 @@ export const transferFieldId = (from_id: string, to_id: string, index: number, f
 export const transferRateId = (from_id: string, to_id: string, currency: string) => `transfer-rate-${from_id}>${to_id}-${currency}`;
 export const airportChangeFieldId = (key: string, field: keyof AirportChangeDraft) => `airport-change-${field}-${key}`;
 
-/** Stages a fare under key. Other drafts lose the components it covers; drafts left empty are dropped. */
+/** Exact prices replace overlapping exact drafts. Reusable scopes keep their seeds and coexist with individual overrides. */
 export function stageFare(drafts: Record<string, SharedFare>, key: string, fare: SharedFare): Record<string, SharedFare> {
+  if (fare.scope) return { ...drafts, [key]: fare };
   const overwritten = new Set(fare.component_ids);
   const remaining = Object.fromEntries(Object.entries(drafts).flatMap(([id, value]) => {
+    if (value.scope) return [[id, value]];
     const component_ids = value.component_ids.filter(id => !overwritten.has(id));
-    return component_ids.length ? [[id, { ...value, component_ids }]] : [];
+    return component_ids.length || value.scope ? [[id, { ...value, component_ids }]] : [];
   }));
   return { ...remaining, [key]: fare };
 }
 
-/** Removes one component from every fare draft (Undo of one journey); drafts left empty are dropped. */
+/** Removes one component from exact drafts. A reusable scope must be undone as a whole. */
 export function removeComponent(drafts: Record<string, SharedFare>, id: string): Record<string, SharedFare> {
   return Object.fromEntries(Object.entries(drafts).flatMap(([key, value]) => {
+    if (value.scope) return [[key, value]];
     const component_ids = value.component_ids.filter(item => item !== id);
-    return component_ids.length ? [[key, { ...value, component_ids }]] : [];
+    return component_ids.length || value.scope ? [[key, { ...value, component_ids }]] : [];
   }));
 }
 
-/** The drafts that apply: components outside `known` are left out, and drafts left empty are skipped. */
-export function activeFares(drafts: Record<string, SharedFare>, known: Set<string>): SharedFare[] {
+/** Exact drafts need known components. Saved reusable scopes can be edited without visible journeys. */
+export function activeFares(drafts: Record<string, SharedFare>, known: Set<string>, adults?: number): SharedFare[] {
   return Object.values(drafts).flatMap(draft => {
+    if (draft.scope && adults !== undefined && draft.scope.adults !== adults) return [];
     const component_ids = draft.component_ids.filter(id => known.has(id));
-    return component_ids.length ? [{ ...draft, component_ids }] : [];
+    return component_ids.length || draft.scope ? [{ ...draft, component_ids }] : [];
   });
 }
 

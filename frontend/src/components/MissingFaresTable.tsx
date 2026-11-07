@@ -1,10 +1,13 @@
 import { useId, useState } from "react";
 import { Button } from "./ui/button";
+import * as Popover from "@radix-ui/react-popover";
+import { SlidersHorizontal } from "lucide-react";
 import { MissingSection, PriceFields, Staged } from "./PlannerForms";
-import type { Offer } from "../lib/planner";
+import type { JourneyGroupField, JourneyPriceScope, Offer } from "../lib/planner";
 import type { MissingFareGroup } from "../lib/missingFares";
-import { componentWhen, journeyGroupTitle, journeyGroupWhen, purchaseAmount } from "../lib/present";
+import { componentWhen, formatLocal, journeyGroupTitle, journeyGroupWhen, purchaseAmount } from "../lib/present";
 import type { PriceValue, SharedFare } from "../lib/drafts";
+import { defaultJourneyGrouping, journeyGroupFields, journeyScopeLabel, ridingSegments } from "../lib/journeyPricing";
 
 const newTab = <span className="sr-only"> (opens in a new tab)</span>;
 const count = (n: number, word: string) => `${n} ${n === 1 ? word : `${word}s`}`;
@@ -25,16 +28,18 @@ type JourneyProps = {
   busy: boolean; onApply: () => void;
 };
 
-export type AppliedSharedFareGroup = { key: string; component_ids: string[]; low: number | null; high: number | null; currency: string; mixed_amounts: boolean; mixed_currency: boolean; label: string };
+export type AppliedSharedFareGroup = { key: string; component_ids: string[]; low: number | null; high: number | null; currency: string; mixed_amounts: boolean; mixed_currency: boolean; label: string; scope?: JourneyPriceScope; ruleId?: string; canReuse?: boolean };
 
 /**
  * Missing info › Group prices you set (F2 row 6): one row per group price saved on this trip's journeys. A new price is a
  * fare draft under the group's label (F4), sent by Apply. When the journeys of a group have different prices, the fields
  * start blank ("Mixed") and a new price sets one value for all.
  */
-export function GroupPrices({ groups, fares, adults, stagePrice, unstage, onApply }: {
+export function GroupPrices({ groups, fares, adults, stagePrice, unstage, onApply, removeRule, reuseEstimate, grouping, busy }: {
   groups: AppliedSharedFareGroup[]; fares: Record<string, SharedFare>; adults: number;
   stagePrice: (key: string, fare: SharedFare, saved?: PriceValue | null) => void; unstage: (key: string) => void; onApply: () => void;
+  removeRule: (id: string) => void; busy: boolean;
+  reuseEstimate: (group: AppliedSharedFareGroup) => void; grouping: JourneyGroupField[];
 }) {
   if (!groups.length) return null;
   return <MissingSection id="group-prices-title" title="Group prices you set" status={String(groups.length)} collapsed tip="Prices you set for a group of journeys.">
@@ -44,11 +49,17 @@ export function GroupPrices({ groups, fares, adults, stagePrice, unstage, onAppl
       const mixed = group.mixed_amounts || group.mixed_currency;
       const saved = mixed || group.low === null ? null : { low: group.low, high: group.high, currency: group.currency };
       return <li key={group.key} className="p-mi-item">
-        <div className="p-mi-item-head"><span className="p-mi-item-title">{label}</span><span className="p-mi-item-status">{count(group.component_ids.length, "journey")}</span></div>
+        <div className="p-mi-item-head"><span className="p-mi-item-title">{label}</span><span className="p-mi-item-status">{count(group.component_ids.length, "journey")}{group.scope && " in current options"}</span></div>
+        {group.scope && <p className="p-mi-meta">Reusable · {journeyScopeLabel(group.scope)}</p>}
         {mixed && <p className="p-mi-meta">Values differ. A new price sets one value for all.</p>}
         <PriceFields name={label} adults={adults} value={draft ?? saved} currency={group.currency} staged={!!draft} placeholder={mixed ? "Mixed" : "Not priced"}
-          onCommit={value => stagePrice(group.key, { component_ids: group.component_ids, ...value, label: group.label }, saved)}
+          onCommit={value => stagePrice(group.key, { component_ids: group.component_ids, ...value, label: group.label, ...(group.scope ? { scope: group.scope } : {}) }, saved)}
           onUndo={() => unstage(group.key)} onApply={onApply} />
+        {group.ruleId && <button type="button" className="p-link-button" disabled={busy} onClick={() => removeRule(group.ruleId!)}>Remove estimate<span className="sr-only">: {label}</span></button>}
+        {group.canReuse && !group.scope && !mixed && group.low !== null && <>
+          <button type="button" className="p-link-button" disabled={busy || !!draft} onClick={() => reuseEstimate(group)}>Reuse for matching journeys<span className="sr-only">: {label}</span></button>
+          <p className="p-mi-meta">Match: {journeyGroupFields.filter(field => grouping.includes(field.key)).map(field => field.label.toLowerCase()).join(", ") || "all journeys in this direction and transport mode"}. Keeps this party price.</p>
+        </>}
       </li>;
     })}</ul>
   </MissingSection>;
@@ -100,9 +111,11 @@ function JourneyGroup({ group, first, rateId, ...props }: JourneyProps & { group
       <span className="p-mi-item-status">in {count(group.affected_itineraries, "option")}</span>
     </div>
     <p className="p-mi-meta">{journeyGroupWhen(group, zone)}{url && <> · <a href={url} target="_blank" rel="noreferrer">Search fare{newTab}</a></>}</p>
+    {group.scope && <p className="p-mi-meta">{journeyScopeLabel(group.scope, group.components[0]?.journey)} · Reusable estimate</p>}
     {group.reason === "exchange_rate" && <RateField currency={group.currency} id={rateId} added={props.draftRates[group.currency] !== undefined} addRate={props.addRate} />}
     <PriceFields id={first ? "missing-fare-first" : undefined} name={title} adults={adults} value={draft ?? null} currency={currency} staged={!!draft}
-      onCommit={value => props.stagePrice(group.key, { component_ids: group.components.map(component => component.component_id), ...value, label: `Shared estimate: ${name} · ${group.label}`.slice(0, 200) })}
+      onCommit={value => props.stagePrice(group.key, { component_ids: group.components.map(component => component.component_id), ...value,
+        label: `Shared estimate: ${name} · ${group.scope ? journeyScopeLabel(group.scope, group.components[0]?.journey) : group.label}`.slice(0, 200), ...(group.scope ? { scope: group.scope } : {}) })}
       onUndo={() => unstage(group.key)} onApply={onApply} />
     {ownDrafts > 0 && <p className="p-mi-meta">{ownDrafts === 1 ? "1 journey has its" : `${ownDrafts} journeys have their`} own draft price. A group price replaces them.</p>}
     <div className="p-mi-links">
@@ -118,6 +131,15 @@ function JourneyGroup({ group, first, rateId, ...props }: JourneyProps & { group
       return <li key={component.component_id}>
         <div className="p-mi-item-head"><span className="p-mi-item-title">{when}</span>
           {component.search_url && component.search_url !== url && <a href={component.search_url} target="_blank" rel="noreferrer">Search fare{newTab}</a>}</div>
+        {component.journey && <>
+          <p className="p-mi-meta">{Math.round(component.journey.duration_minutes)} min total · {count(component.journey.transfers, "transfer")}</p>
+          <ol className="p-journey-legs">{ridingSegments(component.journey).map((segment, index) => <li key={index}>
+            <strong>{segment.service || "Service unknown"}</strong> · {segment.from_name} → {segment.to_name}
+            {segment.departure && <> · {formatLocal(segment.departure, segment.from_timezone || zone)}</>}
+            {segment.arrival && <> → {formatLocal(segment.arrival, segment.to_timezone || zone)}</>}
+            {segment.operator && <> · {segment.operator}</>}
+          </li>)}</ol>
+        </>}
         <PriceFields name={`${title} · ${when}`} adults={adults} value={fares[key] ?? (own && { low: own.low!, high: own.high, currency: own.currency })} currency={currency} staged={key in fares}
           onCommit={value => props.stageComponent(component.component_id, value, `${name} · ${group.label}`)} onUndo={() => unstage(key)} onApply={onApply} />
         {own && <button type="button" className="p-link-button" disabled={busy} onClick={() => props.removePrice(own.id)}>Remove my price<span className="sr-only">: {when}</span></button>}
@@ -130,14 +152,21 @@ function JourneyGroup({ group, first, rateId, ...props }: JourneyProps & { group
  * Missing info › Journey prices (F2 row 3): one row per missing-price group (splitGroups().journeys), 25 at a time,
  * then "Other drafts": fare drafts that match no row (`others`), each with Undo. Prices are fare drafts; Apply sends them.
  */
-export function JourneyPrices({ groups, others, ...props }: JourneyProps & { groups: MissingFareGroup[]; others: [string, SharedFare][] }) {
+export function JourneyPrices({ groups, others, grouping, onGrouping, ...props }: JourneyProps & { groups: MissingFareGroup[]; others: [string, SharedFare][]; grouping: JourneyGroupField[]; onGrouping: (fields: JourneyGroupField[]) => void }) {
   const [shown, setShown] = useState(pageSize);
   const left = groups.length - shown;
   // Next steps › Add rate focuses the rate field of the first row in each currency.
   const rateRows = new Map<string, string>();
   for (const group of groups) if (group.reason === "exchange_rate" && !rateRows.has(group.currency)) rateRows.set(group.currency, group.key);
   return <MissingSection id="journey-prices-title" title="Journey prices" status={groups.length ? `${groups.length} without a price` : "Done"} warn={groups.length > 0}
-    tip="Journeys with the same route, type, transport, currency and reason share one row, also on different dates. A row price applies to each journey in the row. New searches can add journeys without a price.">
+    actions={<Popover.Root><Popover.Trigger asChild><Button type="button" size="sm" variant="ghost" disabled={props.busy}><SlidersHorizontal size={14} aria-hidden="true" />Group by</Button></Popover.Trigger>
+      <Popover.Portal><Popover.Content className="p-control-popup p-journey-grouping" sideOffset={5} align="end" collisionPadding={12} aria-label="Group journey prices">
+        <fieldset><legend>Group by</legend><p>Direction, transport mode and party size always stay separate.</p>
+          {journeyGroupFields.map(field => <label key={field.key}><input type="checkbox" checked={grouping.includes(field.key)} onChange={event => onGrouping(journeyGroupFields.map(item => item.key).filter(key => key === field.key ? event.target.checked : grouping.includes(key)))} />{field.label}</label>)}
+        </fieldset><p>New prices become reusable estimates within this trip. Existing estimates keep their saved scope.</p>
+        <Button type="button" size="sm" variant="secondary" onClick={() => onGrouping([...defaultJourneyGrouping])}>Reset grouping</Button>
+      </Popover.Content></Popover.Portal></Popover.Root>}
+    tip="A group price is an estimate per whole journey for this party. Its selected matching fields apply to existing and later journeys in this trip. Individual prices and provider fares take precedence. Missing identifiers stay journey-specific.">
     {groups.length > 0 && <ul className="p-mi-list">{groups.slice(0, shown).map((group, index) => <JourneyGroup key={group.key} group={group} first={index === 0}
       rateId={rateRows.get(group.currency) === group.key ? `rate-input-${group.currency}` : undefined} {...props} />)}</ul>}
     {left > 0 && <button type="button" className="p-show-more" onClick={() => setShown(shown + pageSize)}>{left > pageSize ? `Show ${pageSize} more (${left} left)` : `Show ${left} more`}</button>}

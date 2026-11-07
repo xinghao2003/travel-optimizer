@@ -44,6 +44,7 @@ export default function Planner() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [comparisonId, setComparisonId] = useState<string | null>(null);
   const [ranking, setRanking] = useState("cheapest");
+  const [timePreference, setTimePreference] = useState(50);
   // Option rows shown (C6): 40, reset when the sort changes, clamped when the list gets shorter.
   const [visibleCount, setVisibleCount] = useState(pageSize);
   const [showDominated, setShowDominated] = useState(false);
@@ -363,9 +364,10 @@ export default function Planner() {
   }
 
   // The option list in the current order (E3), with weaker options when shown. Numbers are positions in this order.
-  const displayRoutes = useMemo(() => sortRoutes([...(result?.routes ?? []), ...(showDominated ? result?.dominated_routes ?? [] : [])], ranking), [result, ranking, showDominated]);
+  const displayRoutes = useMemo(() => sortRoutes([...(result?.routes ?? []), ...(showDominated ? result?.dominated_routes ?? [] : [])], ranking,
+    { priceWeight: 1 - timePreference / 100, referenceRoutes: result?.routes ?? [] }), [result, ranking, showDominated, timePreference]);
   const numbers = useMemo(() => new Map(displayRoutes.map((route, index) => [route.id, index + 1])), [displayRoutes]);
-  const refinement = useMemo(() => sortRoutes(result?.refinement_routes ?? [], ranking), [result, ranking]);
+  const refinement = useMemo(() => sortRoutes(result?.refinement_routes ?? [], ranking, { priceWeight: 1 - timePreference / 100 }), [result, ranking, timePreference]);
   useEffect(() => {
     if (!busy && result?.dominated_routes === undefined) setShowDominated(false);
   }, [result, busy]);
@@ -394,14 +396,16 @@ export default function Planner() {
   };
   useEffect(() => {
     const shown = [...displayRoutes, ...refinement];
+    // Anchor the initial choice so sorting and moving the slider do not silently change the comparison baseline.
+    if (!selectedId && displayRoutes[0]) setSelectedId(displayRoutes[0].id);
     const lost: string[] = [];
-    const follow = (id: string | null, last: Remembered, set: (id: string | null) => void) => {
+    const follow = (id: string | null, last: Remembered, set: (id: string | null) => void, fallback: string | null = null) => {
       if (!id || shown.some(route => route.id === id)) return;
       const match = last?.id === id ? shown.find(route => routeSignature(route) === last.signature) : undefined;
-      set(match?.id ?? null);
+      set(match?.id ?? fallback);
       if (!match && last?.id === id) lost.push(`${last.name} is no longer shown`);
     };
-    follow(selectedId, lastSelected.current, setSelectedId);
+    follow(selectedId, lastSelected.current, setSelectedId, displayRoutes[0]?.id ?? null);
     follow(comparisonId, lastCompared.current, setComparisonId);
     if (lost.length) setSaveStatus(current => [current, ...lost].join(" · "));
     // Runs when the options change; the ids are read from this render.
@@ -817,6 +821,7 @@ export default function Planner() {
         {visited.includes("options") && <OptionsPanel result={result} displayRoutes={displayRoutes} numbers={numbers} refinement={refinement}
           selectedId={selected?.id ?? null} comparedId={compare?.id ?? null}
           ranking={ranking} onRanking={value => { setRanking(value); setVisibleCount(pageSize); }}
+          timePreference={timePreference} onTimePreference={setTimePreference}
           showDominated={showDominated} onToggleDominated={toggleDominated} loadingWeaker={busyAction === "weaker"} busy={busy}
           visibleCount={visibleCount} onShowMore={() => setVisibleCount(count => count + pageSize)} onSelect={selectOption}
           nextSteps={nextSteps} emptyState={emptyState} onAction={runAction} budget={budget} adults={saved.spec.adults} rates={rates} placeName={placeName} />}

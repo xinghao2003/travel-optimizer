@@ -231,8 +231,15 @@ html { scroll-padding-top: calc(var(--header-h) + var(--tabs-h, 0px) + 8px); scr
 .p-options-sort { position: relative; display: flex; align-items: center; gap: 6px; }
 .optimizer .p-options-sort select { width: auto; height: 32px; padding-top: 4px; padding-bottom: 4px; }
 .p-options-toolbar .p-check { margin: 0; }
+.p-balance-preference { flex: 1 1 100%; max-width: 480px; display: grid; gap: 4px; }
+.p-balance-preference > label { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; }
+.p-balance-preference > label > span { color: var(--muted-foreground); font-size: 12px; font-variant-numeric: tabular-nums; }
+.p-balance-preference > div { display: flex; align-items: center; gap: 10px; }
+.p-balance-preference > div > span { flex-shrink: 0; color: var(--muted-foreground); font-size: 12px; }
+.optimizer .p-balance-preference input[type=range] { flex: 1; height: 28px; padding: 0; border: 0; background: transparent; box-shadow: none; accent-color: var(--primary); }
 .optimizer .p-options-note { margin: 0 0 8px; }
 .p-options { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.p-option-row { position: relative; min-width: 0; }
 .p-option { display: grid; gap: 4px; width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); color: var(--foreground); text-align: left; }
 .p-option:hover { border-color: var(--ring); }
 /* The selected row: a 3 px bar in --primary on the left. */
@@ -247,6 +254,9 @@ html { scroll-padding-top: calc(var(--header-h) + var(--tabs-h, 0px) + 8px); scr
 .p-chain-hours { color: var(--muted-foreground); font-size: 12px; font-variant-numeric: tabular-nums; }
 .p-option-meta { align-items: center; gap: 6px; color: var(--muted-foreground); font-size: 12px; }
 .p-option-per-hour { margin-right: 4px; font-variant-numeric: tabular-nums; }
+.p-option-comparison { margin-left: auto; max-width: 100%; text-align: right; font-variant-numeric: tabular-nums; }
+.p-option-comparison-details { padding-right: 24px; }
+.p-option-comparison-tip { position: absolute; right: 12px; bottom: 10px; }
 .p-chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border: 1px solid var(--border); border-radius: 5px; background: var(--muted-surface); color: var(--foreground); font-size: 11px; line-height: 18px; }
 .p-chip[data-tone=warn] { border-color: color-mix(in srgb, var(--warning) 25%, transparent); background: var(--warning-bg); color: var(--warning); }
 .p-chip > svg { flex-shrink: 0; }

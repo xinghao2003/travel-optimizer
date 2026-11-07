@@ -6,6 +6,7 @@ import { ModeIcon } from "./ModeIcon";
 import { hoursText, moneyShort, optionChips, optionNumber, perCityHourText, priceEstimated, priceText, routeChain, type EmptyState, type NextStep, type OptionChip, type OptionsTarget } from "../lib/present";
 import { useMediaQuery } from "../lib/useMediaQuery";
 import type { Result, Route } from "../lib/planner";
+import { compareRoute, marginalComparisons, type RouteComparison } from "../lib/routeComparison";
 
 const LazyPareto = lazy(() => import("./ParetoExplorer").then(m => ({ default: m.ParetoExplorer })));
 function ParetoExplorer(props: ComponentProps<typeof LazyPareto>) {
@@ -19,12 +20,13 @@ const visibleSteps = 3;
  * One option in the list (C6): number, price and time in cities; the route; the price per city hour and the chips.
  * `name` is read before the number ("Over-budget option 1"), as in the itinerary heading.
  */
-function OptionRow({ route, number, name = "Option", selected, chips, placeName, onSelect }: {
+function OptionRow({ route, number, name = "Option", selected, chips, placeName, onSelect, comparison }: {
   route: Route; number: number; name?: string; selected: boolean; chips: OptionChip[]; placeName: (id: string) => string; onSelect: () => void;
+  comparison?: { baseline: string; value: RouteComparison; marginal?: { label: string; value: RouteComparison } };
 }) {
   const chain = routeChain(route);
   const perHour = perCityHourText(route);
-  return <li>
+  return <li className="p-option-row">
     <button type="button" id={selected ? "selected-option" : undefined} className="p-option" aria-pressed={selected} onClick={onSelect}>
       <span className="p-option-line">
         <span className="p-option-number"><span className="sr-only">{name} </span>{optionNumber(number)}</span>
@@ -37,11 +39,23 @@ function OptionRow({ route, number, name = "Option", selected, chips, placeName,
         </span>)}</span>
         <span className="p-option-aside">{hoursText(route.travel_hours)} h travel</span>
       </span>
-      {(perHour || chips.length > 0) && <span className="p-option-line p-option-meta">
+      {(perHour || chips.length > 0 || selected || comparison) && <span className="p-option-line p-option-meta">
         {perHour && <span className="p-option-per-hour">{perHour}</span>}
         {chips.map(chip => <span className="p-chip" data-tone={chip.tone} key={chip.text}>{chip.tone === "warn" && <CircleAlert size={12} aria-hidden="true" />}{chip.text}</span>)}
+        {selected ? <span className="p-option-comparison">Comparison baseline</span> : comparison && <span className="p-option-comparison p-option-comparison-details">
+          {comparison.value.summary}{comparison.value.rate && <> · {comparison.value.rate}</>}
+        </span>}
       </span>}
     </button>
+    {comparison && !selected && <span className="p-option-comparison-tip"><InfoTip topic={`comparison for ${name} ${optionNumber(number)}`} align="end">
+      <p><strong>Compared with {comparison.baseline}</strong></p>
+      {comparison.value.details.map(line => <p key={line}>{line}</p>)}
+      {comparison.marginal && <>
+        <p><strong>From the next cheaper option without a price range ({comparison.marginal.label})</strong></p>
+        <p>{comparison.marginal.value.summary}{comparison.marginal.value.rate && <> · {comparison.marginal.value.rate}</>}</p>
+      </>}
+      <p>City time includes nights. Differences use the shown prices and estimates.</p>
+    </InfoTip></span>}
   </li>;
 }
 
@@ -49,18 +63,19 @@ function OptionRow({ route, number, name = "Option", selected, chips, placeName,
  * The Options column (C6): Next steps, the chart, the list toolbar, the option rows with Show more, the Over budget
  * group and the empty states (C12). Planner owns the order (`displayRoutes`, `numbers`), the selection and the actions.
  */
-export function OptionsPanel({ result, displayRoutes, numbers, refinement, selectedId, comparedId, ranking, onRanking, showDominated, onToggleDominated,
+export function OptionsPanel({ result, displayRoutes, numbers, refinement, selectedId, comparedId, ranking, onRanking, timePreference, onTimePreference, showDominated, onToggleDominated,
   loadingWeaker, busy, visibleCount, onShowMore, onSelect, nextSteps, emptyState, onAction, budget, adults, rates, placeName }: {
   result: Result | null; displayRoutes: Route[]; numbers: Map<string, number>; refinement: Route[];
   selectedId: string | null; comparedId: string | null;
   ranking: string; onRanking: (ranking: string) => void;
+  timePreference: number; onTimePreference: (value: number) => void;
   showDominated: boolean; onToggleDominated: (show: boolean) => void; loadingWeaker: boolean; busy: boolean;
   visibleCount: number; onShowMore: () => void;
   onSelect: (id: string, source: "row" | "chart") => void;
   nextSteps: NextStep[]; emptyState: EmptyState | null; onAction: (target: OptionsTarget) => void;
   budget: number | null; adults: number; rates: Record<string, number>; placeName: (id: string) => string;
 }) {
-  const sortId = useId();
+  const sortId = useId(), balanceId = useId();
   const narrow = useMediaQuery("(max-width: 599.98px)");
   const [allSteps, setAllSteps] = useState(false);
   const [chartOpen, setChartOpen] = useState(false);
@@ -81,6 +96,15 @@ export function OptionsPanel({ result, displayRoutes, numbers, refinement, selec
   const best = result?.routes.length ?? 0;
   const left = displayRoutes.length - visibleCount;
   const hiddenSteps = allSteps ? 0 : Math.max(0, nextSteps.length - visibleSteps);
+  const baseline = [...displayRoutes, ...refinement].find(route => route.id === selectedId);
+  const label = (id: string) => numbers.has(id) ? `Option ${optionNumber(numbers.get(id)!)}` : `Over-budget option ${optionNumber(refinement.findIndex(route => route.id === id) + 1)}`;
+  const marginal = marginalComparisons(result?.routes ?? []);
+  const comparison = (route: Route) => {
+    if (!baseline || route.id === baseline.id) return undefined;
+    const step = marginal.get(route.id);
+    return { baseline: label(baseline.id), value: compareRoute(route, baseline),
+      marginal: step ? { label: label(step.baselineId), value: step.comparison } : undefined };
+  };
 
   // Best options and, when shown, weaker options. Over-budget options are not plotted (E5).
   const chart = result && <ParetoExplorer routes={result.routes} weaker={showDominated ? result.dominated_routes : undefined} numbers={numbers}
@@ -124,19 +148,26 @@ export function OptionsPanel({ result, displayRoutes, numbers, refinement, selec
             <option value="stay">Most time in cities</option>
             <option value="balanced">Best balance</option>
           </select>
-          <InfoTip topic="sorting" align="end">Lowest price ranks options by their highest possible price. Options without a complete price come last, by their known part. Sorting does not change which options are best.</InfoTip>
+          <InfoTip topic="sorting" align="end">Lowest price uses the highest possible price. Best balance uses weighted distance to the cheapest price and most city time, scaled using priced best options. Options without an upper price come last. Showing weaker options and changing chart axes do not change that scale. Sorting does not change which options are best.</InfoTip>
         </div>
         <div className="p-check-row">
           <label className="p-check"><input type="checkbox" checked={showDominated} disabled={busy} onChange={event => onToggleDominated(event.target.checked)} />Show weaker options</label>
           <InfoTip topic="weaker options" align="end">Other complete itineraries from this search. Another option costs the same or less, even at its highest price, and gives at least as much time in cities. Loading them recalculates saved data; no new search. Some were removed earlier in the search.</InfoTip>
         </div>
         <span className="p-hint" role="status">{loadingWeaker && "Loading weaker options…"}</span>
+        {ranking === "balanced" && <div className="p-balance-preference">
+          <label htmlFor={balanceId}>Balance preference <span>{100 - timePreference}% price · {timePreference}% city time</span></label>
+          <div><span>Lower price</span><input id={balanceId} type="range" min={0} max={100} step={5} value={timePreference}
+            aria-valuetext={`${100 - timePreference}% price, ${timePreference}% city time`}
+            onChange={event => onTimePreference(Number(event.target.value))} /><span>More city time</span></div>
+        </div>}
       </div>
       {estimatedOnce && <p className="p-hint p-options-note">All options include estimated prices.</p>}
+      {baseline && <p className="p-hint p-options-note">Differences compare with selected {label(baseline.id)}.</p>}
 
       <ol ref={optionList} className="p-options">
         {displayRoutes.slice(0, visibleCount).map(route => <OptionRow key={route.id} route={route} number={numbers.get(route.id) ?? 0} selected={route.id === selectedId}
-          chips={chips(route, false)} placeName={placeName} onSelect={() => onSelect(route.id, "row")} />)}
+          chips={chips(route, false)} comparison={comparison(route)} placeName={placeName} onSelect={() => onSelect(route.id, "row")} />)}
       </ol>
       {left > 0 && <button type="button" className="p-show-more" onClick={() => { firstNewRow.current = visibleCount; onShowMore(); }}>
         {left > 40 ? `Show 40 more (${left} left)` : `Show ${left} more`}
@@ -155,7 +186,7 @@ export function OptionsPanel({ result, displayRoutes, numbers, refinement, selec
         <summary id="over-budget-summary">Over budget ({refinement.length}) · from {moneyShort(Math.min(...refinement.map(route => route.cost_low_myr)))}</summary>
         <ol className="p-options">
           {refinement.map((route, index) => <OptionRow key={route.id} route={route} number={index + 1} name="Over-budget option" selected={route.id === selectedId}
-            chips={chips(route, true)} placeName={placeName} onSelect={() => onSelect(route.id, "row")} />)}
+            chips={chips(route, true)} comparison={comparison(route)} placeName={placeName} onSelect={() => onSelect(route.id, "row")} />)}
         </ol>
       </details>
       <InfoTip topic="over-budget options" align="end">These cost more than your budget even at their lowest price. Up to 10 are shown. A combined ticket price can make one cheaper.</InfoTip>

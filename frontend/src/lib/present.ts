@@ -191,16 +191,21 @@ function lowestPrice(a: Route, b: Route) {
 }
 /**
  * Orders options (E3). "cheapest": bounded options by highest possible price, then unbounded options by
- * their known part. "stay": most time in cities first. "balanced": normalized highest price plus normalized
- * time over bounded options, unbounded options last.
+ * their known part. "stay": most time in cities first. "balanced": weighted squared distance to the
+ * normalized ideal, unbounded options last. Best routes supply the reference ranges even when weaker routes show.
  */
-export function sortRoutes<T extends Route>(routes: T[], key: string): T[] {
+export function sortRoutes<T extends Route>(routes: T[], key: string, { priceWeight = .5, referenceRoutes = routes }: { priceWeight?: number; referenceRoutes?: Route[] } = {}): T[] {
   if (key === "stay") return [...routes].sort((a, b) => b.stay_hours - a.stay_hours || compareHighest(a, b) || byId(a, b));
   if (key !== "balanced") return [...routes].sort(lowestPrice);
-  const bounded = routes.filter(route => highest(route) !== null);
+  const bounded = referenceRoutes.filter(route => highest(route) !== null);
   const prices = bounded.map(route => highest(route)!), stays = bounded.map(route => route.stay_hours);
   const minPrice = Math.min(...prices), maxPrice = Math.max(...prices), minStay = Math.min(...stays), maxStay = Math.max(...stays);
-  const score = (route: Route) => (maxPrice > minPrice ? (highest(route)! - minPrice) / (maxPrice - minPrice) : 0) + (maxStay > minStay ? (maxStay - route.stay_hours) / (maxStay - minStay) : 0);
+  const score = (route: Route) => {
+    const priceGap = maxPrice > minPrice ? Math.max(0, (highest(route)! - minPrice) / (maxPrice - minPrice)) : 0;
+    const timeGap = maxStay > minStay ? Math.max(0, (maxStay - route.stay_hours) / (maxStay - minStay)) : 0;
+    // The square root would not change the ordering.
+    return priceWeight * priceGap ** 2 + (1 - priceWeight) * timeGap ** 2;
+  };
   return [...routes].sort((a, b) => {
     const unbounded = Number(highest(a) === null) - Number(highest(b) === null);
     return unbounded || (highest(a) === null ? lowestPrice(a, b) : score(a) - score(b) || lowestPrice(a, b));

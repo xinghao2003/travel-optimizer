@@ -15,12 +15,13 @@ const stayDays = (hours: number) => hours > 0 ? count(Number((hours / 24).toFixe
  * Trip settings (C4): the core fields, More settings (G) and the sticky footer with the search actions.
  * `errors` is validateDraft(draft). The forms in More settings show their own errors inline (C2).
  */
-export function TripSettings({ draft, edit, places, errors, transitConfigured, searchActive, partyNotice, isNew, footer, busyAction, onSearch, onSaveOnly, batchSize, onBatchSize }: {
+export function TripSettings({ draft, edit, places, errors, transitConfigured, searchActive, partyNotice, isNew, footer, busyAction, onSearch, onSaveOnly, batchSize, onBatchSize, roundMinutes, onRoundMinutes }: {
   draft: TripDraft; edit: (value: TripDraft) => void; places: Place[]; errors: Record<string, string>;
   transitConfigured: boolean; searchActive: boolean; partyNotice: string | null; isNew: boolean;
   footer: FooterState; busyAction: string | null; onSearch: () => void; onSaveOnly: () => void;
   /** Requests per search batch: kept in memory, not in the trip. */
   batchSize: number; onBatchSize: (value: number) => void;
+  roundMinutes: number | null; onRoundMinutes: (value: number | null) => void;
 }) {
   const reasonId = useId(), modesErrorId = useId(), dateModeName = useId(), windowErrorId = useId();
   const changeHome = useRef<HTMLButtonElement>(null);
@@ -77,7 +78,7 @@ export function TripSettings({ draft, edit, places, errors, transitConfigured, s
   const ordered = !!draft.ordered_visits && visits.length > 1;
   const firstStay = visits[0]?.min_stay_hours ?? 0;
   const staySum = staySumWarning(draft);
-  const summaries = settingsSummaries(draft, batchSize);
+  const summaries = settingsSummaries(draft, batchSize, roundMinutes);
   const changed = Object.values(summaries).flatMap(group => group.changes);
   const rail = draft.rail_fallback;
   const home = draft.home;
@@ -259,9 +260,16 @@ export function TripSettings({ draft, edit, places, errors, transitConfigured, s
 
         <SettingsGroup title="Search size" summary={summaries.searchSize}>
           <div className="p-group-fields">
-            <NumberField label="Requests per search batch" value={batchSize} min={1} max={500} integer
+            <Field label="Limit each round by" hint={searchActive ? "Changes apply to the next round." : undefined}><select value={roundMinutes === null ? "requests" : "minutes"}
+              onChange={event => onRoundMinutes(event.target.value === "minutes" ? 10 : null)}>
+              <option value="requests">Requests</option><option value="minutes">Minutes</option>
+            </select></Field>
+            {roundMinutes === null ? <NumberField label="Requests per search batch" value={batchSize} min={1} max={500} integer
               info={<InfoTip topic="requests per search batch">The search pauses after this many new requests to data providers. Search more runs the next batch. Saved results are reused.</InfoTip>}
-              onChange={n => { if (n !== null) onBatchSize(n); }} />
+              onChange={n => { if (n !== null) onBatchSize(n); }} /> :
+              <NumberField label="Minutes per round" value={roundMinutes} min={1} max={1440} integer
+                hint="Includes provider waiting, optimization and saving. Pausing can take a little longer while the current operation finishes."
+                onChange={n => { if (n !== null) onRoundMinutes(n); }} />}
           </div>
         </SettingsGroup>
       </div>

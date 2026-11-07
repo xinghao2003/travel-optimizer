@@ -9,6 +9,32 @@ const {
 } = await loadTs("../src/lib/present.ts");
 const { blankTrip } = await loadTs("../src/lib/planner.ts");
 
+test("timed rounds show time, pending optimizer continuation and the selected next allowance", () => {
+  const job = { id: "j", trip_id: "t", status: "paused", processed: 10, pending: 0, failed_queries: 0,
+    requests: 10, cache_hits: 0, messages: [], bundle_links: [], batch_budget: 1, batch_requests: 10,
+    time_budget_seconds: 600, round_elapsed_seconds: 612, optimization_pending: true, phase: "optimization" };
+  const saved = { snapshot: { coverage: {} } };
+  const result = { discovery_required: false, optimization_complete: false, coverage: {} };
+  const options = { invalid: false, dirty: false, saved, result, job };
+  const paused = searchState(options);
+  assert.equal(paused.actions[0].label, "Continue for 10 minutes");
+  assert.equal(paused.actions[0].run, "continue");
+  assert.equal(paused.secondary, null);
+  assert.match(paused.text, /last calculated options/);
+  assert.equal(searchState({ ...options, minutes: 5 }).actions[0].label, "Continue for 5 minutes");
+  assert.equal(searchState({ ...options, minutes: null }).actions[0].label, "Search more");
+  const running = searchState({ ...options, job: { ...job, status: "running", round_elapsed_seconds: 120 } });
+  assert.match(running.text, /Optimizing collected schedules · 8 minutes remaining/);
+  const finishing = searchState({ ...options, job: { ...job, status: "running" } });
+  assert.match(finishing.text, /finishing the current operation/);
+  const interrupted = searchState({ ...options, job: { ...job, status: "interrupted" } });
+  assert.equal(interrupted.actions[0].run, "continue");
+  const details = searchDetails({ saved, job, result: null });
+  assert.ok(details.lines.includes("This round: 10 min 12 s elapsed · 10 min allowance"));
+  assert.ok(!details.lines.some(line => line.startsWith("This batch:")));
+  assert.equal(settingsSummaries(blankTrip(), 1, 10).searchSize.summary, "10 minutes per round");
+});
+
 // One stored trip in its two response shapes. GET /trips/{id} empties snapshot.movements and
 // adds the fields that read_trip computes; PUT /trips/{id} returns the movements and, of those
 // fields, only airport_transfer_rows (not needed here).

@@ -51,6 +51,7 @@ export default function Planner() {
   const [showDominated, setShowDominated] = useState(false);
   // Requests per search batch (G › Search size): memory only, sent as the search request's budget.
   const [batchSize, setBatchSize] = useState(defaultBatchSize);
+  const [roundMinutes, setRoundMinutes] = useState<number | null>(null);
   // The action that act() runs. Its button shows the spinner; the other action buttons wait.
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const busy = busyAction !== null;
@@ -128,8 +129,18 @@ export default function Planner() {
     accept(record, true); setSaveStatus("Saved");
     // Settings open for a trip that was never searched; otherwise the trip bar shows their summary.
     setSettingsOpen(!record.snapshot && !record.latest_job_id);
-    if (record.latest_job_id) { const status = await api<Job>(`/searches/${record.latest_job_id}`); if (token === session.current) setJob(status); }
-    if (record.snapshot && (!record.result || record.result.trip_revision !== record.revision || record.result.snapshot_revision !== record.snapshot.revision)) { const r = await api<Result>(`/trips/${id}/optimize`, "POST"); if (token === session.current) acceptResult(r, id); }
+    let status: Job | null = null;
+    if (record.latest_job_id) {
+      status = await api<Job>(`/searches/${record.latest_job_id}`);
+      if (token === session.current) {
+        setJob(status); setRoundMinutes(status.time_budget_seconds != null ? status.time_budget_seconds / 60 : null);
+        // A timed pause can have newly collected schedules awaiting calculation.
+        // Keep its last calculated options visible, without resuming work on load.
+        if (status.time_budget_seconds != null && status.optimization_pending && record.result?.trip_revision === record.revision) setResult(record.result);
+      }
+    }
+    const timedPending = status?.time_budget_seconds != null && (status.optimization_pending || ["queued", "running"].includes(status.status));
+    if (!timedPending && record.snapshot && (!record.result || record.result.trip_revision !== record.revision || record.result.snapshot_revision !== record.snapshot.revision)) { const r = await api<Result>(`/trips/${id}/optimize`, "POST"); if (token === session.current) acceptResult(r, id); }
     } finally { if (token === session.current) setLoadingTrip(false); }
   }
   async function duplicateTrip() {
@@ -259,7 +270,7 @@ export default function Planner() {
   async function search(continuation = false) {
     await act(async () => {
       const record = await saveSpec();
-      const status = await api<Job>(continuation && job ? `/searches/${job.id}/continue` : `/trips/${record.id}/searches`, "POST", { budget: batchSize });
+      const status = await api<Job>(continuation && job ? `/searches/${job.id}/continue` : `/trips/${record.id}/searches`, "POST", { budget: batchSize, minutes: roundMinutes });
       setJob(status);
       // The status strip follows the search, and the options update while it runs (B3, C4).
       setSettingsOpen(false);
@@ -298,7 +309,7 @@ export default function Planner() {
     const tripId = savedRef.current?.id;
     if (!tripId) return;
     void act(async () => {
-      acceptResult(await api<Result>(`/trips/${tripId}/optimize`, "POST", { expand: true }), tripId);
+      acceptResult(await api<Result>(`/trips/${tripId}/optimize`, "POST", { expand: true, minutes: roundMinutes }), tripId);
       if (savedRef.current?.id !== tripId) return;
       setSaveStatus("Options updated");
       if (!isWide) setPanel("options");
@@ -492,7 +503,7 @@ export default function Planner() {
 
   // C3.1 row 2 ("Updating options…") is for a save in progress. After a refused save nothing runs until the next
   // edit or Retry save, so the strip shows the search state; the header ("Not saved") and the banner report it (C13).
-  const strip = searchState({ invalid, dirty: dirty && saveStatus !== "Not saved", saved, result, job });
+  const strip = searchState({ invalid, dirty: dirty && saveStatus !== "Not saved", saved, result, job, minutes: roundMinutes });
   const details = searchDetails({ saved, job, result });
   // A saved trip with marked fields does not save until they are fixed. A new trip saves only with
   // Save without searching or Search transport, so its edits keep "Not saved yet" (C13).
@@ -823,7 +834,7 @@ export default function Planner() {
     </TripBar>
     {settingsShown && <TripSettings draft={draft} edit={edit} places={places} errors={errors} transitConfigured={transitConfigured} searchActive={active}
       partyNotice={partySizeNotice(saved, draft.adults)} isNew={!saved} footer={footer} busyAction={busyAction}
-      batchSize={batchSize} onBatchSize={setBatchSize} onSearch={() => void search()} onSaveOnly={saveOnly} />}
+      batchSize={batchSize} onBatchSize={setBatchSize} roundMinutes={roundMinutes} onRoundMinutes={setRoundMinutes} onSearch={() => void search()} onSaveOnly={saveOnly} />}
 
     {saved && <div id="workspace" className="p-workspace" aria-busy={strip.id === "updating" || undefined}>
       {!isWide && <Tabs id="workspace-tabs" className="p-tabs p-tabs-bar" label="Workspace" tabs={[optionsTab, itineraryTab, missingTab]} selected={tab} onSelect={chooseTab} />}

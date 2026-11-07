@@ -1,5 +1,7 @@
 import pickle
+import asyncio
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -176,6 +178,23 @@ class TimedSearchTests(unittest.IsolatedAsyncioTestCase):
                 for minutes in (0, -1, 1441):
                     response = await client.post(f'/api/v2/trips/{self.record["id"]}/searches', json={'minutes': minutes})
                     self.assertEqual(response.status_code, 422)
+
+    async def test_stop_during_optimization_immediately_exposes_resumable_work(self):
+        started, release = threading.Event(), threading.Event()
+        def held_solver(*args, **kwargs):
+            started.set()
+            if not release.wait(2):
+                raise AssertionError('test did not release solver')
+            return optimize(*args, **kwargs)
+        with patch.object(discovery, 'tasks_for', return_value=[]), patch.object(discovery, 'optimize', side_effect=held_solver):
+            job = self.manager.start(self.record['id'], minutes=1)
+            self.assertTrue(await asyncio.to_thread(started.wait, 2))
+            stopped = self.manager.cancel(job['id'])
+            self.assertTrue(stopped['optimization_pending'])
+            release.set()
+            await self.manager.running[job['id']]
+        self.assertEqual(self.store.get('jobs', job['id'])['status'], 'cancelled')
+        self.assertIsNotNone(self.store.load_optimizer_checkpoint(self.record['id'], CHECKPOINT_VERSION))
 
     def test_minutes_validation(self):
         for model in (SearchRequest, OptimizationRequest):

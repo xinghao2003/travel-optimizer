@@ -787,6 +787,8 @@ class DiscoveryManager:
         self.cancelled_jobs.add(job_id)
         job = self.live_jobs.get(job_id) or self.store.get("jobs", job_id)
         job["status"] = "cancelled"
+        if job.get("phase") == "optimization":
+            job["optimization_pending"] = True
         return self.store.put("jobs", job_id, job)
 
     async def fetch(self, task, spec, snapshot):

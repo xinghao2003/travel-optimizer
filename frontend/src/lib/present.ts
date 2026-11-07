@@ -282,11 +282,12 @@ export type SearchState = {
 };
 
 /** The status strip (C3.1): the first matching row of the state table, plus the "Check more combinations" line. */
-export function searchState({ invalid, dirty, saved, result, job }: {
+export function searchState({ invalid, dirty, saved, result, job, minutes }: {
   invalid: boolean; dirty: boolean;
   saved: Pick<SavedTrip, "snapshot"> | null;
   result: Pick<Result, "discovery_required" | "optimization_complete" | "coverage"> | null;
   job: Job | null;
+  minutes?: number | null;
 }): SearchState {
   const status = job?.status;
   const searched = !!saved?.snapshot || !!job;
@@ -297,18 +298,25 @@ export function searchState({ invalid, dirty, saved, result, job }: {
   const stop: StripAction = { label: "Stop search", run: "stop" };
   const searchMore: StripAction = { label: "Search more", run: "continue" };
   const retry: StripAction = { label: "Retry failed searches", run: "continue" };
+  const roundMinutes = minutes === undefined ? (job?.time_budget_seconds != null ? job.time_budget_seconds / 60 : null) : minutes;
+  const timedContinue: StripAction = { label: roundMinutes == null ? "Search more" : `Continue for ${plural(roundMinutes, "minute")}`, run: "continue" };
   // Always a recalculation with a higher limit (POST /optimize {expand: true}), never a search continuation: continuing a
   // finished search can still queue transit searches when transit search was set up after the search ran.
   const secondary = !active && result?.optimization_complete === false ? {
     text: "Not all combinations were checked. Better options may exist.",
-    tip: "Recalculates from saved data with a higher limit. No new searches.",
-    action: { label: "Check more combinations", run: "optimize" } as StripAction,
+    tip: "Continues saved computation when the inputs match. Changed data starts a new calculation. No new searches.",
+    action: { label: roundMinutes == null ? "Check more combinations" : `Optimize for ${plural(roundMinutes, "minute")}`, run: "optimize" } as StripAction,
   } : null;
   const state = (id: string, tone: SearchState["tone"], text: string, actions: StripAction[] = [], extra: Partial<SearchState> = {}): SearchState => ({ id, tone, text, actions, secondary, ...extra });
 
   if (invalid) return { ...state("invalid", "warn", "Fix the marked fields. Options show the last saved trip."), secondary: null };
   if (dirty && result) return { ...state("updating", "busy", "Updating options…"), secondary: null };
   if (status === "queued") return state("queued", "busy", "Starting the search…", [stop]);
+  if (status === "running" && job!.time_budget_seconds != null) {
+    const remaining = Math.max(0, Math.ceil((job!.time_budget_seconds - (job!.round_elapsed_seconds ?? 0)) / 60));
+    const activity = job!.phase === "optimization" ? "Optimizing collected schedules" : `Searching · ${whole(job!.processed)} done · ${whole(pending)} left`;
+    return state("running", "busy", `${activity} · ${remaining ? `${plural(remaining, "minute")} remaining.` : "finishing the current operation…"}`, [stop]);
+  }
   if (status === "running") return state("running", "busy", `Searching · ${whole(job!.processed)} done · ${whole(pending)} left. Options update as results arrive.`, [{ ...stop, tip: "Found options and your prices are kept." }], {
     progress: { value: job!.processed, max: job!.processed + pending, text: `${whole(job!.processed)} of ${whole(job!.processed + pending)} searches`, tip: "The total can grow while the search adds follow-up searches." },
   });
@@ -316,6 +324,14 @@ export function searchState({ invalid, dirty, saved, result, job }: {
   // never searched as discovery_required, because no saved search matches the trip yet.
   if (!searched) return state("not-searched", "info", "Not searched yet.", [{ label: "Search transport", run: "search" }]);
   if (stale) return state("stale", "warn", "Your trip changed. Search again to include the changes. Options shown use the earlier search.", [{ label: "Search again", run: "search" }]);
+  if (job?.time_budget_seconds != null && ["paused", "cancelled", "interrupted"].includes(status!) && (pending > 0 || job.optimization_pending)) {
+    const id = status === "cancelled" ? "stopped" : status!;
+    const text = status === "interrupted" ? "The server stopped. Saved progress can continue."
+      : `${status === "paused" ? "Round paused" : "Search stopped"}${job.optimization_pending ? (result ? ". Showing the last calculated options." : ". The calculation can continue next round.") : ` · ${left}.`}`;
+    return state(id, status === "interrupted" ? "warn" : "info", text, [timedContinue], {
+      secondary: null, tip: "Continues unfinished calculations and remaining searches. The current operation and saving may finish after the time allowance.",
+    });
+  }
   if (status === "paused" && pending > 0) return state("paused", "info", `Search paused · ${left}.`, [searchMore], {
     tip: `The search pauses after each batch of ${job!.batch_budget ? `${job!.batch_budget} ` : ""}new requests to data providers. Search more runs the next batch. Saved results are reused.`,
   });
@@ -354,7 +370,10 @@ export function searchDetails({ saved, job, result }: {
   if (!saved?.snapshot && !job) return { lines, messages: [] };
   if (job) {
     lines.push(`Searches: ${whole(job.processed)} done · ${whole(job.pending)} left · ${whole(job.failed_queries)} failed`);
-    if (job.batch_requests !== undefined && job.batch_budget !== undefined) lines.push(`This batch: ${whole(job.batch_requests)} of ${plural(job.batch_budget, "request")}`);
+    if (job.time_budget_seconds != null) {
+      const elapsed = job.round_elapsed_seconds ?? 0;
+      lines.push(`This round: ${whole(Math.floor(elapsed / 60))} min ${whole(Math.floor(elapsed % 60))} s elapsed · ${formatDuration(job.time_budget_seconds / 60)} allowance`);
+    } else if (job.batch_requests !== undefined && job.batch_budget !== undefined) lines.push(`This batch: ${whole(job.batch_requests)} of ${plural(job.batch_budget, "request")}`);
     lines.push(`Requests to data providers: ${whole(job.requests)} · answered from saved results: ${whole(job.cache_hits)}`);
     const outcomes = outcomeWords.filter(([key]) => job.outcomes?.[key]).map(([key, word]) => `${whole(job.outcomes![key])} ${word}`);
     if (outcomes.length) lines.push(`Results: ${outcomes.join(" · ")}`);
@@ -690,7 +709,7 @@ export function tripSummary(draft: TripDraft) {
 /** One More settings group: its summary line, and its non-default parts for the More settings summary (none = all default). */
 export type SettingsSummary = { summary: string; changes: string[] };
 /** Summary lines of the More settings groups (G). `batchSize` is the requests per search batch, kept outside the trip. */
-export function settingsSummaries(draft: TripDraft, batchSize: number): Record<"places" | "departures" | "buffers" | "appointments" | "cars" | "prices" | "timetables" | "searchSize", SettingsSummary> {
+export function settingsSummaries(draft: TripDraft, batchSize: number, minutes: number | null = null): Record<"places" | "departures" | "buffers" | "appointments" | "cars" | "prices" | "timetables" | "searchSize", SettingsSummary> {
   const defaults = blankTrip();
   // Each part is [text, changed from the default].
   const group = (parts: [string, boolean][], fallback?: string): SettingsSummary => {
@@ -751,7 +770,8 @@ export function settingsSummaries(draft: TripDraft, batchSize: number): Record<"
     ? { summary: `On · stations within ${rail.station_radius_km} km · up to ${rail.max_shift_days} days`, changes: ["Estimated train timetables"] }
     : { summary: "Off", changes: [] };
 
-  const searchSize = group([[`${plural(batchSize, "request")} per batch`, batchSize !== defaultBatchSize]]);
+  const searchSize = minutes === null ? group([[`${plural(batchSize, "request")} per batch`, batchSize !== defaultBatchSize]])
+    : group([[`${plural(minutes, "minute")} per round`, true]]);
   return { places, departures, buffers, appointments, cars, prices, timetables, searchSize };
 }
 

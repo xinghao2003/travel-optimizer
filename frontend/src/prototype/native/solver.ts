@@ -1,10 +1,11 @@
-/** Experimental structural port of planner_optimizer.py at 2525466.
+/** Experimental structural port of planner_optimizer.py at 9571a88.
  * Inputs are the same normalized event graph used by Python. No provider I/O.
  */
 import type { Charge, Movement, Place, Route, Segment } from "../../lib/planner";
 import type { Fare, Journey, Label, SearchState, SolverInput, SolverResult, Spec } from "./types";
 import { normalizeCharge, normalizeFare, normalizeJourney } from "./types";
-import { pricePath, fareIndex } from "./pricing";
+import { pricePath, fareIndex, unpricedFlightIds } from "./pricing";
+import { frontier, enqueue, dequeue, flightPricesComplete } from "./frontier";
 import { DAY, HOUR, MINUTE, addDate, at, bisect, cents, compare, datetimeString, duration, fingerprint, iso, localDate, localTime, micros, round, stableId, timeKey } from "./time";
 
 const SUPPLIED = "User-supplied positioning";
@@ -50,13 +51,14 @@ export function solveNative(input: SolverInput, previous?: SearchState, seconds 
   const movements = [...input.movements.filter(movement => movement.source !== SUPPLIED).map(normalizeJourney), ...additions.movements];
   const offers = [...additions.offers, ...input.offers.map(normalizeFare)], rules = input.rules;
   const finishAtHome = input.finish_at_home ?? true, limit = input.label_limit ?? null;
-  const signature = fingerprint([1, spec, movements.map(journey => journey.raw), offers, rules, finishAtHome]);
+  const signature = fingerprint([2, spec, movements.map(journey => journey.raw), offers, rules, finishAtHome]);
   const start = at(spec.start_date, spec.home_departure_earliest ?? "00:00", spec.home.timezone);
   const end = spec.home_arrival_latest != null ? at(spec.end_date, spec.home_arrival_latest, spec.home.timezone) : at(addDate(spec.end_date, 1), "00:00", spec.home.timezone) - 1;
   const lowerTime = timeKey(spec.departure_start), upperTime = timeKey(spec.departure_end);
   const required = new Map(spec.visits.map((visit, index) => [visit.place.id, { index, hours: visit.min_stay_hours }]));
   const bitOf = (id: string) => required.has(id) ? 1 << required.get(id)!.index : 0;
   const fullMask = (1 << required.size) - 1, fares = fareIndex(offers, spec);
+  const skippedFlights = spec.exclude_unpriced_flights ? unpricedFlightIds(movements, fares, spec, rules, start, end) : new Set<string>();
   const edges = new Map<string, Journey[]>(), events = new Map<string, Set<number>>();
   const edgeKey = (a: string, b: string) => JSON.stringify([a, b]);
   function eventSet(id: string) { let values = events.get(id); if (!values) { values = new Set(); events.set(id, values); } return values; }
@@ -66,7 +68,7 @@ export function solveNative(input: SolverInput, previous?: SearchState, seconds 
   }
   for (const journey of movements) {
     const m = journey.raw;
-    if (m.usable && places.has(m.from_id) && places.has(m.to_id) && spec.modes.includes(m.mode) && (spec.max_transfers == null || m.transfers <= spec.max_transfers)) {
+    if (!skippedFlights.has(m.id) && m.usable && places.has(m.from_id) && places.has(m.to_id) && spec.modes.includes(m.mode) && (spec.max_transfers == null || m.transfers <= spec.max_transfers)) {
       const flights = m.segments.filter(segment => segment.mode === "flight");
       const riding = m.segments.filter(segment => !["walk", "foot", "wait", "transfer"].includes(segment.mode));
       if (!connectionsTooShort(flights) && !(m.source === "Transitous / MOTIS" && connectionsTooShort(riding, true))) {
@@ -91,7 +93,9 @@ export function solveNative(input: SolverInput, previous?: SearchState, seconds 
   const initial: Label[] = spec.departures.map(gateway => ({ city: spec.home.id, phase: 0, mask: required.has(gateway.id) && gateway.id === spec.home.id ? bitOf(gateway.id) : 0,
     arrival: start, path: [], stays: [], reward: false, own_location: spec.home.id, own_used: false, rental_pickup: null, rental_start: null,
     charges: [], departure_gateway: gateway.id, arrival_gateway: "", price: null, return_mask: 0, revisiting: false, history: [], stay_hours: 0 }));
-  const state: SearchState = previous?.signature === signature ? previous : { signature, queue: initial.reverse(), labels: new Map(), completed: [], expanded: 0, pruned: 0 };
+  const state: SearchState = previous?.signature === signature ? previous : { signature, queue: frontier(), labels: new Map(), completed: [], expanded: 0, pruned: 0 };
+  if (state !== previous) for (const label of initial) enqueue(state.queue, label, spec.exchange_rates);
+  const roundStartExpanded = state.expanded, expansionBudget = input.expansion_budget ?? null;
   const prepared = new Map<string, Prepared>(), timingCache = new Map<Journey, Omit<Timed, "journey">>(), historyCache = new Map<string, unknown[]>();
   function timing(journey: Journey) {
     const m = journey.raw, dep = journey.dep!, arr = journey.arr!;
@@ -193,7 +197,7 @@ export function solveNative(input: SolverInput, previous?: SearchState, seconds 
       label.departure_gateway, label.arrival_gateway, label.history, label.price!.uncertainty_key, label.return_mask, label.revisiting]);
     const bucket = state.labels.get(key) ?? [];
     if (bucket.some(old => dominates(old, label))) { state.pruned++; return; }
-    state.labels.set(key, [...bucket.filter(old => !dominates(label, old)), label]); state.queue.push(label);
+    state.labels.set(key, [...bucket.filter(old => !dominates(label, old)), label]); enqueue(state.queue, label, spec.exchange_rates);
   }
   function expand(initial: Label, target: string, journey: Journey, dep: number, arr: number, homeDate: string) {
     let current = initial;
@@ -215,8 +219,8 @@ export function solveNative(input: SolverInput, previous?: SearchState, seconds 
     if (backwards) return local > upperTime ? at(day, spec.departure_end, place.timezone) : local < lowerTime ? at(addDate(day, -1), spec.departure_end, place.timezone) : value;
     return local < lowerTime ? at(day, spec.departure_start, place.timezone) : local > upperTime ? at(addDate(day, 1), spec.departure_start, place.timezone) : value;
   }
-  while (state.queue.length && (limit === null || state.expanded < limit) && performance.now() < deadline) {
-    const label = state.queue.pop()!; state.expanded++;
+  while (state.queue.size && (limit === null || state.expanded < limit) && (expansionBudget === null || state.expanded - roundStartExpanded < expansionBudget) && performance.now() < deadline) {
+    const label = dequeue(state.queue); state.expanded++;
     if (label.phase === 0 && label.city === label.departure_gateway) { add({ ...label, phase: 1, mask: label.mask | bitOf(label.city), reward: required.has(label.city) }); continue; }
     if (label.phase === 1 && label.mask === fullMask) {
       if (!finishAtHome) {
@@ -257,16 +261,16 @@ export function solveNative(input: SolverInput, previous?: SearchState, seconds 
       }
     }
   }
-  return { result: serialize(input, spec, state, places), state };
+  const result = serialize(input, spec, state, places);
+  result.excluded_unpriced_flight_count = skippedFlights.size;
+  if (expansionBudget !== null) result.safety_limit_reached = state.queue.size > 0 && state.expanded - roundStartExpanded >= expansionBudget;
+  return { result, state };
 }
 
 function serialize(input: SolverInput, spec: Spec, state: SearchState, places: Map<string, Place>): SolverResult {
   const stay = (label: Label) => label.stays.reduce((sum, value) => sum + value.hours, 0);
   let selectable = state.completed;
-  if (spec.exclude_unpriced_flights) selectable = selectable.filter(label => {
-    const priced = new Set(label.price!.purchases.filter(offer => offer.low != null && offer.high != null && spec.exchange_rates[offer.currency] !== undefined).flatMap(offer => offer.movement_ids));
-    return label.path.filter(journey => journey.raw.mode === "flight").every(journey => priced.has(journey.raw.id));
-  });
+  if (spec.exclude_unpriced_flights) selectable = selectable.filter(label => flightPricesComplete(label, spec.exchange_rates));
   const eligible = selectable.filter(label => spec.budget_myr === null || label.price!.low_cents <= cents(spec.budget_myr));
   const over = selectable.filter(label => spec.budget_myr !== null && label.price!.low_cents > cents(spec.budget_myr))
     .sort((a, b) => compare([a.price!.low_cents, -stay(a)], [b.price!.low_cents, -stay(b)])).slice(0, 10);
@@ -325,7 +329,8 @@ function serialize(input: SolverInput, spec: Spec, state: SearchState, places: M
   }
   const result: SolverResult = { routes: routes.filter(route => route.budget_status !== "over" && frontierIds.has(route.id)), refinement_routes: routes.filter(route => route.budget_status === "over"),
     bundle_candidates: [...candidates.values()], missing_fares: [...missing.values()].sort((a, b) => compare([-a.affected_itineraries, -(a.break_even_myr || 0), a.component_id], [-b.affected_itineraries, -(b.break_even_myr || 0), b.component_id])),
-    expanded_labels: state.expanded, pruned_labels: state.pruned, feasible_count: state.completed.length, optimization_complete: !state.queue.length, remaining_labels: state.queue.length,
+    expanded_labels: state.expanded, pruned_labels: state.pruned, feasible_count: state.completed.length, hidden_unpriced_flight_count: state.completed.length - selectable.length,
+    excluded_unpriced_flight_count: 0, optimization_complete: !state.queue.size, remaining_labels: state.queue.size,
     label_limit: input.label_limit ?? null, snapshot_revision: input.snapshot_revision ?? 0, trip_revision: input.trip_revision ?? 0,
     optimality_scope: "Retrieved schedules, fare offers, and road departures at readiness / connection / return-boundary events" };
   if (input.include_dominated) result.dominated_routes = routes.filter(route => route.budget_status !== "over" && !frontierIds.has(route.id));

@@ -28,7 +28,7 @@ def normalized(args, kwargs):
     options = {**positional, **kwargs}
     return {"spec": spec.model_dump(mode="json"), "movements": [m.model_dump(mode="json") for m in movements],
             "offers": [o.model_dump(mode="json") for o in offers], "rules": [r.model_dump(mode="json") for r in rules],
-            **{key: options[key] for key in ("snapshot_revision", "trip_revision", "label_limit", "finish_at_home", "include_dominated") if key in options}}
+            **{key: options[key] for key in ("snapshot_revision", "trip_revision", "label_limit", "finish_at_home", "include_dominated", "expansion_budget") if key in options}}
 
 
 def main():
@@ -49,7 +49,9 @@ def main():
             depth -= 1
         # Time-mocked interruption tests are not repeatable as fresh native runs.
         if kwargs.get("deadline") is None and not kwargs.get("cancelled"):
-            cases.append({"name": f"fixture-{len(cases)+1}", "input": data, "expected": result})
+            checkpoint = kwargs.get("checkpoint")
+            cases.append({"name": f"fixture-{len(cases)+1}", "input": data, "expected": copy.deepcopy(result),
+                          "prefix_expansions": checkpoint.resumed_from if checkpoint else 0})
         return result
     def capture_price(*args, **kwargs):
         result = original_price(*args, **kwargs)
@@ -69,8 +71,10 @@ def main():
         transfers = importlib.import_module("test_airport_transfers")
         checkpoint = importlib.import_module("test_optimizer_checkpoint")
         journey_pricing = importlib.import_module("test_journey_pricing")
+        fair = importlib.import_module("test_fair_exploration")
         suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(cls) for cls in
-            (planner.OptimizerTests, positioning.PositioningTests, transfers.AirportTransferTests, checkpoint.CheckpointTests, journey_pricing.JourneyPricingTests))
+            (planner.OptimizerTests, positioning.PositioningTests, transfers.AirportTransferTests, checkpoint.CheckpointTests, journey_pricing.JourneyPricingTests, fair.FlightEligibilityTests))
+        suite.addTest(fair.FairFrontierTests("test_priced_options_appear_before_large_unpriced_subtrees_are_exhausted"))
         stream = io.StringIO()
         result = unittest.TextTestRunner(stream=stream).run(suite)
         if not result.wasSuccessful():
@@ -91,7 +95,8 @@ def main():
         spec = TripSpec(home=places[0], visits=[Visit(place=p, min_stay_hours=rng.choice([0, 2, 6])) for p in places[1:]],
             start_date=date(2027, 3, 12), end_date=date(2027, 3, 15), date_mode=rng.choice(["fixed", "flexible"]),
             departure_start="00:00", departure_end="23:59:59", adults=rng.randint(1, 5), modes=["flight", "rail"],
-            ordered_visits=rng.choice([True, False]), budget_myr=rng.choice([None, 100, 300]), allow_overnight=rng.choice([True, False]))
+            ordered_visits=rng.choice([True, False]), budget_myr=rng.choice([None, 100, 300]), allow_overnight=rng.choice([True, False]),
+            exclude_unpriced_flights=index % 2 == 0)
         movements, offers = [], []
         for a in places:
             for b in places:
@@ -107,8 +112,11 @@ def main():
         if len(movements) >= 2 and index % 3 == 0:
             pair = rng.sample(movements, 2)
             offers.append(FareOffer(id="bundle", movement_ids=[m.id for m in pair], kind="round-trip", low=20, high=20))
-        data = normalized((spec, movements, offers, []), {"include_dominated": index % 5 == 0})
-        expected = original(spec, movements, offers, [], include_dominated=index % 5 == 0)
+        solver_options = {"include_dominated": index % 5 == 0}
+        if index % 4 == 0:
+            solver_options["expansion_budget"] = rng.choice([0, 1, 16, 32, 100])
+        data = normalized((spec, movements, offers, []), solver_options)
+        expected = original(spec, movements, offers, [], **solver_options)
         generated.append({"name":f"generated-{index+1}", "input":data, "expected":expected})
     (directory / "native-solver.json").write_text(json.dumps({"cases": cases, "pricing": pricing, "generated":generated}, separators=(",", ":"), allow_nan=False), encoding="utf-8")
     print(json.dumps({"fixture_calls": len(cases), "pricing_calls": len(pricing), "generated_cases":len(generated), "original_tests": result.testsRun}), flush=True)

@@ -143,3 +143,26 @@ export function pricePath(path: Journey[], offers: Fare[], spec: Spec, rules: Ru
     estimated: chosen.some(offer => offer.estimated || offer.source === "rule" || offer.currency !== "MYR"), purchases: chosen,
     missing: upper === Infinity ? diagnostics : [], uncertainty_key: [...new Set([...diagnostics.map(item => item.component_id), ...uncertain])].sort() };
 }
+
+/** Keep a flight if a finite standalone fare or a complete ticket can price it. */
+export function unpricedFlightIds(movements: Journey[], index: FareIndex, spec: Spec, rules: Rule[], start: number, end: number): Set<string> {
+  const available = new Set<string>();
+  for (const journey of movements) {
+    const m = journey.raw;
+    if (m.usable && spec.modes.includes(m.mode) && (journey.dep === null || start <= journey.dep && journey.arr! <= end)) {
+      available.add(m.id);
+      if (m.template_id) available.add(m.template_id);
+      for (const charge of m.charges) available.add(charge.id);
+    }
+  }
+  const covered = new Set(index.bundles.filter(offer => amount(offer, spec).high !== Infinity && offer.movement_ids.every(id => available.has(id))).flatMap(offer => offer.movement_ids));
+  const skipped = new Set<string>();
+  for (const journey of movements) {
+    const m = journey.raw;
+    if (m.mode !== "flight") continue;
+    const entry = component(m.id, journey, null, index, spec, rules);
+    index.resolved.set(JSON.stringify(m.id), entry);
+    if (entry.choices.every(choice => choice.high === Infinity) && !covered.has(m.id) && !(m.template_id && covered.has(m.template_id))) skipped.add(m.id);
+  }
+  return skipped;
+}

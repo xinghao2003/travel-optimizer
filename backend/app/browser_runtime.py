@@ -193,6 +193,7 @@ def reference_solve(input_json):
     _reference_checkpoint = SearchCheckpoint()
     result = optimize(spec, moves, offers, rules, snapshot_revision=data.get("snapshot_revision", 0),
         trip_revision=data.get("trip_revision", 0), finish_at_home=data.get("finish_at_home", True),
-        include_dominated=data.get("include_dominated", False), label_limit=data.get("label_limit"), checkpoint=_reference_checkpoint)
+        include_dominated=data.get("include_dominated", False), label_limit=data.get("label_limit"),
+        expansion_budget=data.get("expansion_budget"), checkpoint=_reference_checkpoint)
     solved = clock.perf_counter()
     return json.dumps({"result": result, "validation_ms": (validated-started)*1000, "solve_ms": (solved-validated)*1000}, allow_nan=False)

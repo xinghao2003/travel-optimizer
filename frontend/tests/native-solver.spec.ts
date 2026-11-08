@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-test("native solver matches the Python reference corpus, including latest journey-pricing rules", async ({ page }) => {
+test("native solver matches current Python, including fair exploration, flight eligibility, and resumed budgets", async ({ page }) => {
   await page.route("**/native-comparison-test", route => route.fulfill({ contentType: "text/html", body: "<!doctype html><title>Solver comparison</title>" }));
   await page.goto("/native-comparison-test");
   const summary = await page.evaluate(async () => {
@@ -14,7 +14,8 @@ test("native solver matches the Python reference corpus, including latest journe
     const failures: { name: string; path: string; expected: unknown; actual: unknown }[] = [];
     for (const item of [...corpus.cases, ...(corpus.generated ?? [])]) {
       try {
-        const { result } = solveNative(item.input);
+        const previous = item.prefix_expansions ? solveNative({ ...item.input, expansion_budget: null, label_limit: item.prefix_expansions }).state : undefined;
+        const { result } = solveNative(item.input, previous && structuredClone(previous));
         const mismatch = difference(item.expected, JSON.parse(JSON.stringify(result)));
         if (mismatch) failures.push({ name: item.name, ...mismatch });
       } catch (error) { failures.push({ name: item.name, path: "exception", expected: "success", actual: String(error) }); }
@@ -40,7 +41,7 @@ test("native checkpoint survives structured cloning, resumes, and rejects change
     const { solveNative } = await import("/src/prototype/native/solver.ts");
     const { firstDifference } = await import("/src/prototype/comparison.ts");
     const corpus = await (await fetch("/tests/fixtures/native-solver.json")).json();
-    const item = corpus.cases.filter((item: { input: { label_limit?: number }; expected: { expanded_labels: number; optimization_complete: boolean } }) => item.expected.optimization_complete && !item.input.label_limit)
+    const item = corpus.cases.filter((item: { input: { label_limit?: number; expansion_budget?: number }; expected: { expanded_labels: number; optimization_complete: boolean } }) => item.expected.optimization_complete && !item.input.label_limit && item.input.expansion_budget == null)
       .sort((a: { expected: { expanded_labels: number } }, b: { expected: { expanded_labels: number } }) => b.expected.expanded_labels - a.expected.expanded_labels)[0];
     const first = solveNative({ ...item.input, label_limit: Math.max(1, Math.floor(item.expected.expanded_labels / 3)) });
     const resumed = solveNative(item.input, structuredClone(first.state));
@@ -48,9 +49,17 @@ test("native checkpoint survives structured cloning, resumes, and rejects change
     const changedInput = structuredClone(item.input);
     changedInput.spec.adults = 2;
     const changed = solveNative(changedInput, structuredClone(first.state));
-    return { paused: !first.result.optimization_complete, resumedDifference: firstDifference(fresh.result, resumed.result), changedDifference: firstDifference(solveNative(changedInput).result, changed.result) };
+    const budgeted = solveNative({ ...item.input, expansion_budget: 10 });
+    const next = solveNative({ ...item.input, expansion_budget: 10 }, structuredClone(budgeted.state));
+    const old = structuredClone(first.state);
+    old.signature = "legacy-checkpoint-v1";
+    const restarted = solveNative(item.input, old);
+    return { paused: !first.result.optimization_complete, resumedDifference: firstDifference(fresh.result, resumed.result),
+      changedDifference: firstDifference(solveNative(changedInput).result, changed.result),
+      relativeBudget: next.result.expanded_labels - budgeted.result.expanded_labels,
+      legacyDifference: firstDifference(fresh.result, restarted.result) };
   });
-  expect(results).toEqual({ paused: true, resumedDifference: null, changedDifference: null });
+  expect(results).toEqual({ paused: true, resumedDifference: null, changedDifference: null, relativeBudget: 10, legacyDifference: null });
 });
 
 test("comparison page runs native without Pyodide, then compares both independent workers", async ({ page }) => {
@@ -68,5 +77,14 @@ test("comparison page runs native without Pyodide, then compares both independen
   await page.getByRole("button", { name: "Run both solvers", exact: true }).click();
   await expect(page.getByText("Results match, including route IDs, fares, diagnostics, and search counters.")).toBeVisible({ timeout: 60000 });
   expect(runtimeRequests).toBeGreaterThan(0);
+  const corpus = JSON.parse(await readFile("tests/fixtures/native-solver.json", "utf8"));
+  const limited = corpus.cases.find((item: { input: { expansion_budget?: number }; prefix_expansions: number }) => item.input.expansion_budget === 10 && !item.prefix_expansions);
+  await page.getByLabel("Comparison input JSON").setInputFiles({ name: "budgeted-input.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(limited.input)) });
+  await page.getByRole("button", { name: "Run both solvers", exact: true }).click();
+  await expect(page.getByRole("status")).toHaveText("Comparison finished.");
+  await expect(page.getByText("Results match, including route IDs, fares, diagnostics, and search counters.")).toBeVisible();
+  await page.getByText("Inspect results", { exact: true }).click();
+  await expect(page.locator("details pre")).toContainText('"expanded_labels": 10');
+  await expect(page.locator("details pre")).toContainText('"safety_limit_reached": true');
   await page.screenshot({ path: "../data/diagnostics/native-comparison/comparison.png", fullPage: true });
 });

@@ -11,20 +11,28 @@ No deployment is authorized as part of this checklist.
 
 ## Current checkpoint
 
-- Synced with main `2525466`, including configurable journey grouping and
-  reusable journey price estimates.
+- Synced with local and remote main `9571a88` through merge `b3705e6`, including
+  staged CSV editing/deletion, continuous calculation, fair exploration, and
+  early exclusion of flights without usable standalone or combined fares.
 - Native TypeScript solver and independent Python/Pyodide reference worker.
-- Matching responses on 71 captured solver calls, 20 pricing calls, 200
-  deterministic generated cases, and one large prepared saved-trip graph.
-- Native structured-clone checkpoint continuation and invalidation tested.
+- Native fair scheduling, relative per-call expansion budgets, flight-price
+  eligibility and new response counters match current Python.
+- Matching responses on 84 captured solver calls, 20 pricing calls, and 200
+  deterministic generated cases. The previous large saved-trip comparison
+  predates this sync and has not been repeated against the new scheduler.
+- Native structured-clone checkpoint continuation and changed-input/version
+  invalidation tested. Old experimental native checkpoints restart; Python's
+  durable version-1 migration remains available in the reference backend.
 - Local prototype with browser batching, provider-response caching, one active
   saved session, and a bounded stateless one-way flight function.
-- 143 backend tests, seven browser tests, and production builds passed.
+- 170 backend tests, seven browser tests, and the prototype production build passed.
 
 The native solver currently runs through the comparison page. The live-search
 prototype still uses Python/Pyodide for discovery planning, result normalization,
 and solving. The full existing `Planner.tsx` still calls the Python planner API.
 Neither page is yet a complete native replacement for the application.
+The new CSV workflows and continuous-search controls are merged into the
+existing interface; their browser service implementations belong to stages 3-5.
 
 ## 1. Establish the permanent reference boundary
 

@@ -42,9 +42,19 @@ No deployment is authorized as part of this checklist.
 - Native structured-clone checkpoint continuation and changed-input/version
   invalidation tested. Old experimental native checkpoints restart; Python's
   durable version-1 migration remains available in the reference backend.
+- Native multi-trip repository, atomic edit transforms, isolated provider-cache
+  pruning, portable backups, and a read-only SQLite exporter are implemented.
+  Native worker calculation now saves/resumes checkpoints through that repository.
+  The full interface and live-search coordinator still need to use these services.
+- Native edits match 95 Python cases, including 37 rejected changes. Real browser
+  storage tests cover rollback, concurrent revisions, stale workers, cache cleanup,
+  backup replacement, and a previously weaker route becoming cheapest after Apply.
+  A real SQLite export restored six records and reproduced the 14-route result.
 - Local prototype with browser batching, provider-response caching, one active
   saved session, and a bounded stateless one-way flight function.
-- 170 backend tests, ten browser tests, and the prototype production build passed.
+- 170 backend tests, fifteen browser tests (private migration replay enabled),
+  and the prototype production build passed. The default suite has fourteen
+  public tests and skips the private migration replay.
 
 The native solver currently runs through the comparison page. The live-search
 prototype still uses Python/Pyodide for discovery planning, result normalization,
@@ -134,6 +144,11 @@ produces equivalent queues, graph, fares, coverage, manual-quote opportunities,
 and final solver outputs. Include pause/reload/continue and edits during search.
 
 ## 4. Replace server-side trip storage and edit transactions
+
+The repository, pure edit semantics, portable backup boundary, SQLite exporter,
+and persisted native calculation service are implemented and tested; see
+[browser storage](browser-storage.md). The complete interface and active-search
+Apply/continuation coordination have not yet been connected to them.
 
 Expand IndexedDB from one active prototype session to the application's trip
 repository: multiple trips, create/copy/delete, graph snapshots, offers, airport

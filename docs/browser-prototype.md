@@ -142,11 +142,15 @@ Completed checks in this experiment:
 
 - 170 backend tests passed after syncing main `9571a88`, including the adapter/function checks. Existing
   SQLite ResourceWarnings remain in passing persistence tests.
-- Ten Chrome tests passed, covering both solvers, the actual Pyodide
+- Fifteen Chrome tests passed with the optional private SQLite migration replay
+  enabled (fourteen public tests by default), covering both solvers, the actual Pyodide
   worker, mocked providers, stop/reload/resume, native checkpoint continuation,
   372 provider/rail/discovery comparisons, and 11,964 input-model comparisons
   against Python, plus 51 complete saved-graph preparation scenarios. The largest
   current saved-trip preparation also matched in a separate read-only replay.
+- Native repository/edit tests add 95 Python edit comparisons, actual IndexedDB
+  rollback/revision/cache/backup checks, and persisted native worker continuation.
+  These services are not yet connected to the live-search page or full interface.
 - TypeScript and the production prototype build passed.
 - A single live KUL → PEN query for 2026-12-07 through the local flight function
   returned 19 validated options in about 1.3 seconds. This is one transport smoke

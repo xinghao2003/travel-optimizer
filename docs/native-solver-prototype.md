@@ -104,7 +104,8 @@ and 200 deterministic generated cases**. Native structured-clone checkpoint
 continuation, relative budgets, and changed-input/version invalidation passed.
 Old experimental native checkpoints restart under version 2; they are not
 migrated from the old stack representation. The full worktree passed **170
-backend tests, ten browser workflow tests**, and the prototype production
+backend tests, fifteen browser workflow tests** with the optional private SQLite
+migration replay enabled (fourteen public tests by default), and the prototype production
 build. Existing SQLite ResourceWarnings remain in passing persistence tests.
 
 ## Validation and reproduction
@@ -144,6 +145,16 @@ seconds/milliseconds, journey scopes, and contract-version rejection. The native
 worker enforces this boundary before solving; Python remains independently
 validated by `planner_models.SolverInput`. This corpus is regression evidence,
 not proof for every possible coercion or timezone database version.
+
+`tools/export_edit_comparison.py` runs 31 existing Python tests and captures
+95 edit cases, including 37 rejected changes, plus direct endpoint replays.
+Native repository tests cover atomic writes and checkpoint invalidation, stale
+results, cache pruning, portable backups, and read-only SQLite migration. The
+real native calculation service persists and resumes worker batches, honors
+per-call expansion budgets, stops without dropping its current frontier, and
+can promote a previously weaker route after a fare correction. These services
+are described in [browser storage](browser-storage.md); the full Planner
+interface still needs its browser API adapter.
 
 `tools/export_preparation_comparison.py` replays 51 public saved graphs through
 the real Python recalculation path. The browser compares prepared inputs,

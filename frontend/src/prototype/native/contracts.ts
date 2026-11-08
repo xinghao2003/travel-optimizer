@@ -30,6 +30,8 @@ const number = (min = -Infinity, max = Infinity, integer = false): Parser<number
   const n = typeof value === "number" || typeof value === "boolean" ? Number(value) : typeof value === "string" && numeric.test(value.trim()) ? Number(value.replaceAll("_", "")) : NaN;
   return Number.isFinite(n) && n >= min && n <= max && (!integer || Number.isInteger(n)) ? n : fail("Enter a number within the allowed range.");
 };
+export const parseFiniteNumber: Parser<number> = number();
+export const parseInteger: Parser<number> = number(-Infinity, Infinity, true);
 const bool: Parser<boolean> = value => {
   if (value === true || value === 1 || typeof value === "string" && ["1", "true", "on", "yes", "y", "t"].includes(value.toLowerCase())) return true;
   if (value === false || value === 0 || typeof value === "string" && ["0", "false", "off", "no", "n", "f"].includes(value.toLowerCase())) return false;

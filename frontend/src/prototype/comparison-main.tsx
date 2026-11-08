@@ -38,7 +38,7 @@ function App() {
       const data = JSON.parse(await file.text());
       const raw = data.input ?? data, graph = raw.graph ?? raw.snapshot ?? raw;
       if (!raw.spec || !Array.isArray(graph.movements) || !Array.isArray(graph.offers)) throw new Error("Import solver input or a full trip graph JSON.");
-      setInput({ spec: raw.spec, movements: graph.movements, offers: [...graph.offers, ...(raw.graph || raw.snapshot ? raw.offers ?? [] : [])],
+      setInput({ schema_version: raw.schema_version, spec: raw.spec, movements: graph.movements, offers: [...graph.offers, ...(raw.graph || raw.snapshot ? raw.offers ?? [] : [])],
         rules: [...(raw.rules ?? []), ...(raw.journey_pricing_rules ?? [])], snapshot_revision: raw.snapshot_revision ?? graph.revision ?? 0,
         trip_revision: raw.trip_revision ?? raw.revision ?? 0, finish_at_home: raw.finish_at_home, include_dominated: raw.include_dominated,
         label_limit: raw.label_limit, expansion_budget: raw.expansion_budget });
@@ -61,7 +61,7 @@ function App() {
       <tbody>{(["native", "python"] as const).map(kind => <tr key={kind}><th>{kind === "native" ? "TypeScript" : "Python / Pyodide"}</th><td>{results[kind] ? `${results[kind]!.solve_ms.toFixed(1)} ms` : "—"}</td><td>{results[kind] ? `${results[kind]!.wall_ms.toFixed(1)} ms` : "—"}</td><td>{results[kind]?.result.routes.length ?? "—"}</td><td>{results[kind]?.result.expanded_labels.toLocaleString() ?? "—"}</td></tr>)}</tbody></table>
       {mismatch === null && <p className="status">Results match, including route IDs, fares, diagnostics, and search counters.</p>}
       {mismatch && <div className="error"><strong>Difference at {mismatch.path}</strong><pre>{JSON.stringify(mismatch, null, 2)}</pre></div>}
-      <p className="hint">Solver time includes preprocessing and result construction. Request elapsed also includes worker startup, runtime loading on first use, messages, and Python input validation. Runtime downloads depend on caching and network speed.</p>
+      <p className="hint">Solver time includes preprocessing and result construction. Request elapsed also includes worker startup, runtime loading on first use, messages, and input validation. Runtime downloads depend on caching and network speed.</p>
       {!!Object.keys(results).length && <details><summary>Inspect results</summary><pre>{JSON.stringify(Object.fromEntries(Object.entries(results).map(([kind, value]) => [kind, value?.result])), null, 2)}</pre></details>}
     </section>
     <footer>Experimental port based on main commit 9571a88, including fair exploration and flight-price eligibility. Full equality on a graph is evidence for that input, not proof for every possible trip.</footer>

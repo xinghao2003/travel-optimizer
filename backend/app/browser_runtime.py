@@ -184,16 +184,13 @@ def reference_solve(input_json):
     """Run the same explicit solver input as TypeScript, without provider work."""
     global _reference_checkpoint
     started = clock.perf_counter()
-    data = json.loads(input_json)
-    spec = TripSpec.model_validate(data["spec"])
-    moves = [Movement.model_validate(m) for m in data["movements"]]
-    offers = [FareOffer.model_validate(o) for o in data["offers"]]
-    rules = [PricingRule.model_validate(r) for r in data.get("rules", [])]
+    from .planner_models import SolverInput
+    data = SolverInput.model_validate_json(input_json)
     validated = clock.perf_counter()
     _reference_checkpoint = SearchCheckpoint()
-    result = optimize(spec, moves, offers, rules, snapshot_revision=data.get("snapshot_revision", 0),
-        trip_revision=data.get("trip_revision", 0), finish_at_home=data.get("finish_at_home", True),
-        include_dominated=data.get("include_dominated", False), label_limit=data.get("label_limit"),
-        expansion_budget=data.get("expansion_budget"), checkpoint=_reference_checkpoint)
+    result = optimize(data.spec, data.movements, data.offers, data.rules, snapshot_revision=data.snapshot_revision,
+        trip_revision=data.trip_revision, finish_at_home=data.finish_at_home,
+        include_dominated=data.include_dominated, label_limit=data.label_limit,
+        expansion_budget=data.expansion_budget, checkpoint=_reference_checkpoint)
     solved = clock.perf_counter()
     return json.dumps({"result": result, "validation_ms": (validated-started)*1000, "solve_ms": (solved-validated)*1000}, allow_nan=False)

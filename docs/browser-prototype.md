@@ -140,9 +140,10 @@ Completed checks in this experiment:
 
 - 170 backend tests passed after syncing main `9571a88`, including the adapter/function checks. Existing
   SQLite ResourceWarnings remain in passing persistence tests.
-- Eight Chrome tests passed, covering both solvers, the actual Pyodide
+- Nine Chrome tests passed, covering both solvers, the actual Pyodide
   worker, mocked providers, stop/reload/resume, native checkpoint continuation,
-  and 274 provider/rail/discovery comparisons against Python.
+  274 provider/rail/discovery comparisons, and 11,964 input-model comparisons
+  against Python.
 - TypeScript and the production prototype build passed.
 - A single live KUL → PEN query for 2026-12-07 through the local flight function
   returned 19 validated options in about 1.3 seconds. This is one transport smoke

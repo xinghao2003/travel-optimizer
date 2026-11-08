@@ -20,15 +20,17 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "backend"), str(ROOT / "backend/tests")]
 from app import planner_optimizer as optimizer
 from app.planner_results import expand_trip
+from app.planner_models import SolverInput
 
 
 def normalized(args, kwargs):
     spec, movements, offers, rules, *rest = args
     positional = dict(zip(("snapshot_revision", "trip_revision", "cancelled", "label_limit", "finish_at_home", "include_dominated"), rest))
     options = {**positional, **kwargs}
-    return {"spec": spec.model_dump(mode="json"), "movements": [m.model_dump(mode="json") for m in movements],
+    data = {"spec": spec.model_dump(mode="json"), "movements": [m.model_dump(mode="json") for m in movements],
             "offers": [o.model_dump(mode="json") for o in offers], "rules": [r.model_dump(mode="json") for r in rules],
             **{key: options[key] for key in ("snapshot_revision", "trip_revision", "label_limit", "finish_at_home", "include_dominated", "expansion_budget") if key in options}}
+    return SolverInput.model_validate(data).model_dump(mode="json")
 
 
 def main():

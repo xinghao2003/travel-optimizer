@@ -33,7 +33,9 @@ evaluation rather than claiming a fully migrated native application.
 Request elapsed includes initialization on first use. Solver time includes its
 graph preprocessing, search, and result construction; Python input validation
 is recorded separately. The comparison checks routes, fares, generated IDs,
-diagnostics, bundle opportunities, completion, and work counters. Money fields
+diagnostics, bundle opportunities, completion, and work counters. Both workers
+validate the version-1 solver-input contract, and record validation separately
+from solver time. Money fields
 must match exactly; non-money floating calculations permit an absolute tolerance
 below `1e-8`.
 
@@ -99,7 +101,7 @@ and 200 deterministic generated cases**. Native structured-clone checkpoint
 continuation, relative budgets, and changed-input/version invalidation passed.
 Old experimental native checkpoints restart under version 2; they are not
 migrated from the old stack representation. The full worktree passed **170
-backend tests, eight browser workflow tests**, and the prototype production
+backend tests, nine browser workflow tests**, and the prototype production
 build. Existing SQLite ResourceWarnings remain in passing persistence tests.
 
 ## Validation and reproduction
@@ -127,6 +129,15 @@ visits, DST boundaries, flexible/fixed dates, own-car recovery, and home time
 limits. These pure native functions are not yet connected to live search; airport-transfer alternatives,
 complete solver-input preparation, orchestration, and storage remain in the
 static migration plan.
+
+`tools/export_contract_comparison.py` validates model inputs through current
+Python/Pydantic and regenerates 11,964 native comparisons, including 81 rejected
+inputs. It covers all captured solver inputs, complete default values, unknown
+fields, model constraints, numeric coercions, offset-aware timestamps, Unix
+seconds/milliseconds, journey scopes, and contract-version rejection. The native
+worker enforces this boundary before solving; Python remains independently
+validated by `planner_models.SolverInput`. This corpus is regression evidence,
+not proof for every possible coercion or timezone database version.
 
 To export a private saved trip's exact prepared solver inputs, read its database
 without modifying it:

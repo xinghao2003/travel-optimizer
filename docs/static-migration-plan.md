@@ -15,6 +15,9 @@ No deployment is authorized as part of this checklist.
   staged CSV editing/deletion, continuous calculation, fair exploration, and
   early exclusion of flights without usable standalone or combined fares.
 - Native TypeScript solver and independent Python/Pyodide reference worker.
+- Version-1 JSON solver-input contract, enforced by both workers, with native
+  model defaults and validation matching Python on 11,964 model cases (81
+  invalid). Regenerated reference inputs carry the same contract version.
 - Native fair scheduling, relative per-call expansion budgets, flight-price
   eligibility and new response counters match current Python.
 - Native flight/transit normalization and opt-in rail sampling/projection are
@@ -32,7 +35,7 @@ No deployment is authorized as part of this checklist.
   durable version-1 migration remains available in the reference backend.
 - Local prototype with browser batching, provider-response caching, one active
   saved session, and a bounded stateless one-way flight function.
-- 170 backend tests, eight browser tests, and the prototype production build passed.
+- 170 backend tests, nine browser tests, and the prototype production build passed.
 
 The native solver currently runs through the comparison page. The live-search
 prototype still uses Python/Pyodide for discovery planning, result normalization,
@@ -47,7 +50,12 @@ Keep a single normalized solver-input contract and version it. Include trip
 settings, prepared movements, effective offers and pricing rules, solver
 options, and relevant revisions. Make input validation/defaults agree with the
 Python contracts, including money, party/vehicle units, timestamps, timezones,
-and missing values. Native TypeScript currently assumes normalized input.
+and missing values. Both workers now validate the versioned JSON boundary;
+the native solver core receives its normalized output. The contract corpus
+checks current solver inputs, default values, common numeric coercions,
+timestamp offsets/Unix units, model constraints, unknown fields, and unsupported
+contract versions. It does not establish equivalence for every possible JSON
+coercion or timezone-database difference.
 
 Generate references from current Python code in tests, rather than maintaining
 outdated expected results by hand. Expand the differential corpus to cover all

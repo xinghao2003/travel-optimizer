@@ -16,7 +16,7 @@ export type Label = {
 };
 export type Frontier = { buckets: Map<string, Label[]>[]; turns: string[][]; active: { priority: number; key: string } | null; remaining: number; slot: number; size: number };
 export type SearchState = { signature: string; queue: Frontier; labels: Map<string, Label[]>; completed: Label[]; expanded: number; pruned: number };
-export type SolverInput = { spec: Spec; movements: Movement[]; offers: Offer[]; rules: Rule[]; snapshot_revision?: number; trip_revision?: number; finish_at_home?: boolean; include_dominated?: boolean; label_limit?: number | null; expansion_budget?: number | null };
+export type SolverInput = { schema_version?: 1; spec: Spec; movements: Movement[]; offers: Offer[]; rules: Rule[]; snapshot_revision?: number; trip_revision?: number; finish_at_home?: boolean; include_dominated?: boolean; label_limit?: number | null; expansion_budget?: number | null };
 export type SolverResult = { routes: Route[]; refinement_routes: Route[]; dominated_routes?: Route[]; missing_fares: (Missing & { affected_itineraries: number; break_even_myr: number | null })[]; bundle_candidates: unknown[]; expanded_labels: number; pruned_labels: number; feasible_count: number; hidden_unpriced_flight_count: number; excluded_unpriced_flight_count: number; safety_limit_reached?: boolean; optimization_complete: boolean; remaining_labels: number; label_limit: number | null; snapshot_revision: number; trip_revision: number; optimality_scope: string };
 
 export function normalizeFare(offer: Partial<Fare>): Fare {

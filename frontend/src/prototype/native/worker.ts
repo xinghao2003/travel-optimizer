@@ -1,5 +1,6 @@
 import { solveNative } from "./solver";
 import type { SearchState, SolverInput } from "./types";
+import { parseSolverInput } from "./contracts";
 
 let state: SearchState | undefined;
 self.onmessage = event => {
@@ -10,8 +11,9 @@ self.onmessage = event => {
     if (fresh) state = undefined;
     if (checkpoint) state = checkpoint;
     const began = performance.now();
-    const solved = solveNative(input, state, seconds);
+    const parsed = parseSolverInput(input), validated = performance.now();
+    const solved = solveNative(parsed, state, seconds);
     state = solved.state;
-    self.postMessage({ id, result: solved.result, solve_ms: performance.now() - began, ...(exportCheckpoint ? { checkpoint: state } : {}) });
+    self.postMessage({ id, result: solved.result, solve_ms: performance.now() - validated, validation_ms: validated - began, ...(exportCheckpoint ? { checkpoint: state } : {}) });
   } catch (error) { self.postMessage({ id, error: String(error) }); }
 };

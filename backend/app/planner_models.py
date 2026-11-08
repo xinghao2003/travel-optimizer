@@ -415,3 +415,18 @@ class AirportTransferEstimate(Contract):
             raise ValueError("Maximum must not be below minimum.")
         self.currency = self.currency.upper()
         return self
+
+
+class SolverInput(Contract):
+    """Versioned JSON boundary shared by native and reference solver workers."""
+    schema_version: Literal[1] = 1
+    spec: TripSpec
+    movements: list[Movement]
+    offers: list[FareOffer]
+    rules: list[PricingRule] = Field(default_factory=list)
+    snapshot_revision: int = Field(default=0, ge=0)
+    trip_revision: int = Field(default=0, ge=0)
+    finish_at_home: bool = True
+    include_dominated: bool = False
+    label_limit: int | None = Field(default=None, ge=0)
+    expansion_budget: int | None = Field(default=None, ge=0)

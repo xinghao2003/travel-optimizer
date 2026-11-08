@@ -64,11 +64,15 @@ No deployment is authorized as part of this checklist.
   with unpriced flights excluded, unrelated unknown airport costs no longer
   cause a valid priced flight bundle to be discarded. Covered flights are not
   listed as missing fares. Affected old checkpoints/results restart/recalculate.
-- 194 backend tests and all 26 browser checks passed, including the native
+- 194 backend tests and all 29 browser checks passed, including the native
   production-artifact interaction and optional private migration replay. Native
   and earlier prototype production builds have passed.
 
-The native solver now also runs through the full Planner at `/native.html`.
+Implementation and local acceptance are complete; the requirement-by-requirement
+evidence is in [the acceptance report](static-migration-acceptance.md).
+
+The native solver runs through the full Planner at `/` in the production build,
+with `/native.html` retained as an alias and development entry.
 That entry uses local places/nearest lookup and browser-owned saved trips, edits,
 calculation, continuous calculation, and backups. Its static production build
 excludes Python and comparison data. Its native discovery coordinator is connected;
@@ -78,8 +82,10 @@ checks rather than evidence from hosted provider access.
 The older live-search prototype still
 uses Python/Pyodide for discovery planning, result normalization, and solving.
 The default development `/` entry continues to use the original Python planner
-API; the native hosting configuration maps `/` to `/native.html`.
-Neither preview is yet a complete native replacement for the application.
+API; the native production build provides its own `index.html`. The complete
+native build replaces the planner server at runtime; the old limited Pyodide
+experiment remains a reference. No deployment or live hosted-provider proof is
+claimed by local acceptance.
 
 ## 1. Establish the permanent reference boundary
 
@@ -220,8 +226,8 @@ Saved-trip integration is implemented at `/native.html`; see
 backup restore/download run through the full interface without planner API calls.
 Local catalog lookup matches 90 Python searches and nearest-place queries.
 Native live-search coordination is connected and verified against recorded
-outcomes, including an interaction through the full interface. Completion still
-requires broader final acceptance below.
+outcomes, including interactions through the full interface. The final production
+artifact also passes the files-only acceptance flow described in stage 7.
 
 Retain the current React settings, options/chart, itinerary/map, Missing info,
 pricing forms, and report/export features. Replace their planner API calls with

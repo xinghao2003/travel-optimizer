@@ -74,7 +74,7 @@ configuration in the function environment. No secrets belong in the public JSON.
 routes, and Vite. Native Vite forwards only `/api/flights` and `/api/transit`.
 The original planner server is unnecessary for the native interface.
 
-`vercel.json` selects `frontend/dist-native`, maps `/` to `/native.html`, and
+`vercel.json` selects `frontend/dist-native` with its `index.html` root entry and
 configures both Python entries with 60-second platform limits. The runtime
 dependencies remain pinned through `pyproject.toml` and `uv.lock`. These files
 prepare the hosting boundary; no deployment was performed.

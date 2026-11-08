@@ -5,7 +5,6 @@
   "buildCommand": "npm --prefix frontend run build:native",
   "devCommand": "uv run python tools/prepare_static_planner.py && npm --prefix frontend run dev:native",
   "outputDirectory": "frontend/dist-native",
-  "rewrites": [{ "source": "/", "destination": "/native.html" }],
   "functions": {
     "api/flights.py": {
       "maxDuration": 60,

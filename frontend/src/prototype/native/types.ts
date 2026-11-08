@@ -3,6 +3,7 @@ import { elapsed, micros, iso, MINUTE, modelTimestamp } from "./time";
 import type { CostBound } from "./time";
 
 export type Spec = TripSpec;
+export const NATIVE_SOLVER_REVISION = 1;
 export type Fare = Offer;
 export type Rule = PricingRule;
 export type Journey = { raw: Movement; dep: bigint | null; arr: bigint | null };

@@ -1,6 +1,15 @@
 # Wayfinder Routes
 
-Browser-first experiment: see [the isolated prototype instructions](docs/browser-prototype.md).
+The [native browser application](docs/native-planner.md) runs the complete Planner
+with browser-owned trips, discovery and optimization, plus stateless flight and
+transit functions. Build it with `npm.cmd --prefix frontend run build:native`;
+the static site is `frontend/dist-native/`, with `index.html` as its root entry.
+See [migration acceptance and validation](docs/static-migration-acceptance.md).
+
+The original Python application and independent Python/Pyodide solver remain
+available as references. The Windows startup instructions below run that
+original stack. Use the native guide for the static application; the earlier
+limited experiment has [separate instructions](docs/browser-prototype.md).
 
 A local multimodal trip optimizer that compares total party transportation cost with hours spent in required cities, including positioning from home and back.
 

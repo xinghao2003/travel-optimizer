@@ -13,6 +13,7 @@ import { PlannerRepository } from "./repository";
 import { BrowserDiscovery } from "./search";
 import { BrowserProviders } from "./providers";
 import type { SearchProvider } from "./providers";
+import { NATIVE_SOLVER_REVISION } from "./types";
 
 type Continuous = { job: OptimizationJob; promise: Promise<void> };
 function object(value: unknown): Record<string, unknown> {
@@ -58,7 +59,10 @@ export class BrowserPlannerApi {
   async config(): Promise<PlannerConfig> { return { transit_routing_configured: (await this.providers.settings()).transit_enabled }; }
   async readTrip(id: string) {
     const trip = await this.repository.requireTrip(id);
-    if (trip.result) trip.result = refreshQuoteFreshness(trip.result, Date.now() * 1000);
+    if (trip.result) {
+      trip.result = refreshQuoteFreshness(trip.result, Date.now() * 1000);
+      if (trip.native_solver_revision !== NATIVE_SOLVER_REVISION) trip.result.trip_revision = -1;
+    }
     return { ...trip, ...tripMetadata(trip, await this.airports()) };
   }
   private async stopForEdit(id: string) {
@@ -105,7 +109,7 @@ export class BrowserPlannerApi {
         const trip = await this.repository.requireTrip(job.trip_id);
         if (trip.revision !== job.trip_revision) { job.status = "paused"; job.pause_reason = "changes"; break; }
         if (stopping()) break;
-        if (trip.result?.optimization_complete && trip.result.trip_revision === trip.revision && trip.result.snapshot_revision === trip.snapshot?.revision
+        if (trip.native_solver_revision === NATIVE_SOLVER_REVISION && trip.result?.optimization_complete && trip.result.trip_revision === trip.revision && trip.result.snapshot_revision === trip.snapshot?.revision
           && (!trip.spec.exclude_unpriced_flights || trip.result.flight_price_revision === 2)) { job.status = "complete"; break; }
         const result = await this.calculator.calculate(job.trip_id, { expand: true, unlimited: true });
         job.batches++; job.expanded_labels = result.expanded_labels;
@@ -145,8 +149,8 @@ export class BrowserPlannerApi {
       if (!id && method === "GET") return { rules: await this.repository.list<PricingRule>("rules") };
       if (id && ["PUT", "DELETE"].includes(method)) {
         for (const trip of await this.repository.list<PlannerTrip>("trips")) await this.stopForEdit(trip.id);
-        await this.repository.editRule(id, method === "DELETE" ? null : body);
-        return { rules: await this.repository.list<PricingRule>("rules") };
+        const rule = await this.repository.editRule(id, method === "DELETE" ? null : body);
+        return method === "DELETE" ? { deleted: true } : rule;
       }
     }
     if (collection === "optimizations" && id) {

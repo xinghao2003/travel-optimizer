@@ -28,6 +28,9 @@ Checkpoint version 4 stores internal cents and epoch microseconds as BigInt
 through structured cloning. Older numeric checkpoints restart from the preserved graph. Public results
 and portable backups keep their existing JSON money fields; checkpoint size
 reporting converts BigInt to decimal strings without changing persisted state.
+Trip records also retain a native solver revision with calculated results.
+Older completed caches are marked stale on read and cannot bypass continuous
+calculation merely because their trip and snapshot revisions match.
 
 Provider TTL controls cache freshness. Expired entries are deleted when the
 repository opens, after cache writes, and through explicit batch cleanup. These

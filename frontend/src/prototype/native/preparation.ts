@@ -11,7 +11,7 @@ import { duration, elapsed, iso, MINUTE, micros, pythonJson, stableId, stableMod
 import type { SolverInput, SolverResult } from "./types";
 
 export type Snapshot = { revision: number; movements: Movement[]; offers: Offer[]; coverage: Coverage; roads?: Roads; label_limit?: number | null; discovery_key?: string };
-export type PlannerTrip = Omit<SavedTrip, "snapshot"> & { snapshot: Snapshot | null };
+export type PlannerTrip = Omit<SavedTrip, "snapshot"> & { snapshot: Snapshot | null; native_solver_revision?: number };
 export type AirportCatalog = { metros: MetroAirports; airports: Record<string, { name: string; lat: number; lon: number; tz: string }> };
 export type PreparationOptions = { snapshot?: Snapshot; expand?: boolean; include_dominated?: boolean; unlimited?: boolean; now?: number; label_batch?: number; expansion_budget?: number | null };
 

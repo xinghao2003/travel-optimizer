@@ -5,6 +5,7 @@ import { discoveryKey } from "./discovery-key";
 import { PlannerError, requireMinimumStays, requireRevision } from "./edits";
 import type { PlannerTrip, Snapshot } from "./preparation";
 import type { SearchState } from "./types";
+import { NATIVE_SOLVER_REVISION } from "./types";
 import { parseBackup } from "./backup";
 import type { PlannerBackup } from "./backup";
 import type { SearchRecord } from "./search-state";
@@ -226,7 +227,7 @@ export class PlannerRepository {
       c.read(records.get(["trips", id]), value => {
         const trip = payload<PlannerTrip>(value);
         if (!trip || trip.revision !== revision || (trip.snapshot?.revision ?? 0) !== sourceSnapshotRevision) { c.result(false); return; }
-        trip.result = result;
+        trip.result = result; trip.native_solver_revision = NATIVE_SOLVER_REVISION;
         if (trip.snapshot) trip.snapshot = snapshot;
         records.put(row("trips", id, trip));
         const checkpoints = c.tx.objectStore("checkpoints");

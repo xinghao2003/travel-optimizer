@@ -1,11 +1,12 @@
-# Native Planner preview
+# Native browser Planner
 
-The existing React Planner now has a native browser entry at `/native.html`.
+The existing React Planner runs natively in the browser. Its production static
+entry is `/`; `/native.html` remains available for development and comparison.
 It uses IndexedDB for trips and prices, static airport/place catalogs, and a
 TypeScript Web Worker for calculation. The original `/` Python-backed entry,
 the older Pyodide search prototype, and the dual-solver comparison remain available.
 
-This stage connects saved-trip workflows: opening and copying trips, settings
+Connected workflows include opening and copying trips, settings
 and price edits, Missing info Apply, reusable estimates, assumed connections,
 continuous calculation of the saved graph, reports, and JSON backup controls.
 Imported active jobs are interrupted; reopening the page never starts provider
@@ -29,7 +30,8 @@ bounded round-trip selection steps and Transitous forwarding. Each uncached
 round-trip step counts as one request; remaining choices persist for Continue.
 Multi-city quotes remain manual. OSRM uses direct browser HTTP. The isolated
 provider package passed Linux native-dependency and ASGI checks. Live hosted
-provider access remains unverified, and final application parity is still pending.
+provider access remains unverified. Local migration acceptance is recorded in
+[the acceptance report](static-migration-acceptance.md).
 
 ## Run locally
 
@@ -68,22 +70,39 @@ npm.cmd run build:native
 npx.cmd vite preview --config vite.native.config.ts --configLoader runner --host 127.0.0.1 --port 5175 --strictPort
 ```
 
-`frontend/dist-native/native.html` is the current preview entry. The separate
-public directory includes only airport and place data. Python sources/runtime,
+`frontend/dist-native/index.html` is the static root entry; `native.html` is an
+identical alias. The separate public directory includes airport/place data and
+public provider configuration. Python sources/runtime,
 comparison fixtures, private snapshots, and provider caches are excluded.
-`vercel.json` also maps `/` to this entry and includes both provider functions.
-Final parity and application acceptance are still required before migration
-is complete.
+`vercel.json` selects this directory and includes both provider functions. A
+static host needs no application rewrite to open the root page.
 No deployment is part of these commands.
 
+For a files-only preview without any API proxy, run this from the worktree root:
+
+```powershell
+uv run python tools/serve_static_planner.py
+```
+
+Open `http://127.0.0.1:5176/`. This helper only serves files and supplies correct
+JavaScript MIME types on Windows. Provider searches need separately configured
+function URLs; opening and editing saved trips does not need a backend.
+
 The full regression command is `npm.cmd run test:poc`. It regenerates public
-Python reference cases and runs both the existing prototypes and native checks.
+Python reference cases, rebuilds the native artifact, and runs both the existing
+prototypes and native checks.
 To run the production-artifact interaction after starting the preview above:
 
 ```powershell
 $env:POC_STATIC_URL = 'http://127.0.0.1:5175'
 npx.cmd playwright test --config playwright.poc.config.ts native-planner.spec.ts --grep 'production static'
 ```
+
+To include the files-only acceptance flow, point `POC_STATIC_URL` at port 5176
+and also run `static-acceptance.spec.ts`. It checks the root entry, shipped file
+allowlist, multiple trips, copying, weaker options, map canvas, standalone HTML
+reports and the print-ready report page. It permits only static files and a
+mocked map style; every other network request fails the test.
 
 The production check restores a saved trip through the UI, calculates with the
 bundled worker, edits and reloads it, and verifies the downloaded backup. It rejects
@@ -97,6 +116,9 @@ representation, rather than Python pickle size.
 Shared assumed connections are retained when starting from a cached graph;
 deleting one during a search also removes it from the active graph so a later
 publication cannot restore it.
+Saved results also carry a native solver revision on their trip record. Results
+from earlier numeric implementations are marked stale and recalculated from
+the complete saved graph, even when their trip and graph revisions still match.
 
 Public provider settings are generated in `browser-data/config.json`.
 `BROWSER_FLIGHTS_URL`, `OSRM_BASE_URL` and `BROWSER_TRANSIT_URL` configure targets

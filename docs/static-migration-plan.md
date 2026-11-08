@@ -26,7 +26,8 @@ No deployment is authorized as part of this checklist.
   Their connection to the live-search prototype is still pending.
 - Native discovery windows, seed order, per-direction positioning policies,
   and independent round-trip task generation match 86 further Python cases.
-  The combined provider/discovery corpus now contains 274 comparisons.
+  The combined provider/discovery corpus now contains 372 comparisons,
+  including 47 graph-ingestion transitions and 50 shared-graph cleanup cases.
 - Complete native solver-input preparation now applies the full saved graph,
   current timing, airport-change connections and transfer choices, road/vehicle
   regeneration, manual offer precedence, effective rules, and quote freshness.
@@ -104,6 +105,12 @@ solver input and diagnostics as Python. Importing a raw saved snapshot must no
 longer skip these transformations.
 
 ## 3. Port discovery and continuation semantics
+
+Native ingestion is implemented for roads, standalone and combined flights,
+and transit, including party-specific fares, quote TTL, partial-ticket handling,
+and replacement of estimated rail with actual-date service. Shared-graph cleanup
+also removes trip-specific airport overlays. Fetching, job/round coordination,
+pagination, publication, and persistence still need native integration.
 
 Bring the complete `tasks_for`, `fetch`, `ingest`, `publish`, and `run` behavior
 into browser-owned services. Preserve optimistic date windows, seed ordering,

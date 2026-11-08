@@ -20,13 +20,22 @@ export const cents = (value: number) => new Decimal(String(value)).mul(100).toDe
 // Python round(float, n) rounds the actual IEEE-754 value, not its display string.
 export function round(value: number, places = 2): number {
   if (!Number.isFinite(value) || value === 0) return value;
+  return exactDecimal(value).toDecimalPlaces(places, Decimal.ROUND_HALF_EVEN).toNumber();
+}
+function exactDecimal(value: number): Decimal {
   const view = new DataView(new ArrayBuffer(8));
   view.setFloat64(0, value);
   const bits = view.getBigUint64(0), exponent = Number((bits >> 52n) & 2047n);
   const mantissa = (bits & ((1n << 52n) - 1n)) | (exponent ? 1n << 52n : 0n);
   const shift = (exponent || 1) - 1023 - 52;
-  const exact = new Decimal(mantissa.toString()).mul(new Decimal(2).pow(shift)).mul(value < 0 ? -1 : 1);
-  return exact.toDecimalPlaces(places, Decimal.ROUND_HALF_EVEN).toNumber();
+  return new Decimal(mantissa.toString()).mul(new Decimal(2).pow(shift)).mul(value < 0 ? -1 : 1);
+}
+/** Python's default :g format for human-readable provider assumptions. */
+export function general(value: number): string {
+  if (value === 0) return Object.is(value, -0) ? "-0" : "0";
+  const rounded = exactDecimal(value).toSignificantDigits(6, Decimal.ROUND_HALF_EVEN);
+  const exponent = rounded.e;
+  return exponent < -4 || exponent >= 6 ? rounded.toExponential().replace(/e([+-])(\d)$/, (_, sign: string, digit: string) => `e${sign}0${digit}`) : rounded.toFixed();
 }
 function instant(value: number) { return Temporal.Instant.fromEpochNanoseconds(BigInt(Math.round(value)) * 1000n); }
 export function iso(value: number, model = false) {

@@ -8,13 +8,17 @@ test("native provider normalization matches current Python schedules, connection
     const { prepareRailPayload, fallbackTask } = await import("/src/prototype/native/rail.ts");
     const { tasksFor, roughDateWindows, seedDates } = await import("/src/prototype/native/discovery.ts");
     const { iso } = await import("/src/prototype/native/time.ts");
+    const { ingest } = await import("/src/prototype/native/ingestion.ts");
+    const { shareableSnapshot } = await import("/src/prototype/native/preparation.ts");
     const { firstDifference } = await import("/src/prototype/comparison.ts");
     const corpus = await (await fetch("/tests/fixtures/native-providers.json")).json();
     const failures: { name: string; path: string; expected: unknown; actual: unknown }[] = [];
     for (const item of corpus.cases) {
       try {
         const input = item.input;
-        const result = item.operation === "flight_movement" ? flightMovement(input.origin, input.dest, input.segments, input.spec, input.roads,
+        const result = item.operation === "ingest" ? { collected: ingest(input.task, input.outcome, input.spec, input.snapshot, corpus.metros, input.now, input.transit_ttl), snapshot: input.snapshot }
+          : item.operation === "shareable_snapshot" ? shareableSnapshot(input.snapshot, input.spec)
+          : item.operation === "flight_movement" ? flightMovement(input.origin, input.dest, input.segments, input.spec, input.roads,
           new Map(input.connections.map((c: { from_airport: string; to_airport: string }) => [pairKey(c.from_airport, c.to_airport), c])))
           : item.operation === "transit_movements" ? transitMovements(input.payload, input.origin, input.dest, input.spec, input.day)
           : item.operation === "prepare_rail_payload" ? prepareRailPayload(input.payload, input.task, input.origin)

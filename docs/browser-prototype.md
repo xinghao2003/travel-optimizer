@@ -144,7 +144,7 @@ Completed checks in this experiment:
   SQLite ResourceWarnings remain in passing persistence tests.
 - Ten Chrome tests passed, covering both solvers, the actual Pyodide
   worker, mocked providers, stop/reload/resume, native checkpoint continuation,
-  274 provider/rail/discovery comparisons, and 11,964 input-model comparisons
+  372 provider/rail/discovery comparisons, and 11,964 input-model comparisons
   against Python, plus 51 complete saved-graph preparation scenarios. The largest
   current saved-trip preparation also matched in a separate read-only replay.
 - TypeScript and the production prototype build passed.

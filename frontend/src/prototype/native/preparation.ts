@@ -114,6 +114,24 @@ export function roadMovements(spec: TripSpec, roads: Roads): Movement[] {
   return result;
 }
 
+export function shareableSnapshot(snapshot: Snapshot, spec: TripSpec): Snapshot {
+  const shared = structuredClone(snapshot), places = placesOf(spec);
+  shared.movements = shared.movements.map(raw => {
+    const m = parseMovement(raw);
+    if (m.source !== "Google Flights / fast-flights" || !places.has(m.from_id) || !places.has(m.to_id)) return raw;
+    const rebuilt = flightMovement(places.get(m.from_id)!, places.get(m.to_id)!, m.segments.filter(s => s.mode === "flight"), spec, shared.roads ?? {}, new Map(), true);
+    rebuilt.id = m.id; rebuilt.search_url = m.search_url;
+    for (const charge of rebuilt.charges) {
+      if (charge.kind === "Airport access") charge.id = m.id + ":access";
+      if (charge.kind === "Airport egress") charge.id = m.id + ":egress";
+    }
+    return rebuilt;
+  });
+  shared.coverage ??= {};
+  shared.coverage.unresolved_movements = shared.movements.filter(m => m.usable === false).map(m => ({ id: m.id, from_id: m.from_id, to_id: m.to_id, assumptions: m.assumptions }));
+  return shared;
+}
+
 export function prepareSolverInput(trip: PlannerTrip, globalRules: PricingRule[], options: PreparationOptions = {}): { input: SolverInput; snapshot: Snapshot } {
   const spec = parseSpec(trip.spec), places = placesOf(spec);
   const snapshot = structuredClone(options.snapshot ?? trip.snapshot ?? { revision: 0, movements: [], offers: [], coverage: {} });

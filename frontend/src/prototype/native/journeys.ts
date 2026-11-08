@@ -3,7 +3,7 @@
  */
 import type { AirportConnection, Charge, Movement, Offer, Place, Segment, TripSpec } from "../../lib/planner";
 import { normalizeCharge, normalizeFare, normalizeJourney, normalizeSegment } from "./types";
-import { duration, iso, localDate, localTime, MINUTE, micros, round, SECOND, stableId, stableModelId, timeKey } from "./time";
+import { duration, general, iso, localDate, localTime, MINUTE, micros, round, SECOND, stableId, stableModelId, timeKey } from "./time";
 
 export type Road = { duration_minutes: number; distance_km: number | null };
 export type Roads = Record<string, Road>;
@@ -66,7 +66,7 @@ export function flightMovement(origin: Place, dest: Place, segments: RawSegment[
             duration_minutes: gap, from_timezone: previous.to_timezone, to_timezone: flight.from_timezone,
             source: connection ? "Airport transfer exceeds available layover" : "Airport change needs confirmation", assumed: true });
           usable = false;
-          assumptions.push(connection ? `Airport connection ${previous.to_id} → ${flight.from_id} needs ${connection.duration_minutes} minutes but only ${Math.max(0, gap)} are available`
+          assumptions.push(connection ? `Airport connection ${previous.to_id} → ${flight.from_id} needs ${general(connection.duration_minutes)} minutes but only ${general(Math.max(0, gap))} are available`
             : `Airport change ${previous.to_id} → ${flight.from_id}: add a verified connection before using this journey`);
         }
       } else if (gap > 0) append({ mode: "wait", from_name: previous.to_name, to_name: flight.from_name, departure: previous.arrival, arrival: flight.departure,

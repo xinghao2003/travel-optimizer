@@ -11,7 +11,7 @@ import type { SearchRecord } from "./search-state";
 import { shareableSnapshot } from "./preparation";
 
 export const DATABASE_VERSION = 1;
-export const CHECKPOINT_VERSION = 2;
+export const CHECKPOINT_VERSION = 3;
 export type Collection = "trips" | "rules" | "graphs" | "jobs" | "optimizations" | "meta";
 export type StoredRecord<T = unknown> = { schema_version: 1; collection: Collection; id: string; updated: number; payload: T };
 type Checkpoint = { trip_id: string; version: number; state: SearchState };

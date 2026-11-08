@@ -111,7 +111,7 @@ export class BrowserPlannerApi {
         job.batches++; job.expanded_labels = result.expanded_labels;
         const checkpoint = await this.repository.checkpoint(job.trip_id);
         // Browser checkpoint size is its portable representation, not Python pickle bytes.
-        job.checkpoint_bytes = checkpoint ? new Blob([JSON.stringify(checkpoint, (_key, value) => value instanceof Map ? [...value] : value)]).size : 0;
+        job.checkpoint_bytes = checkpoint ? new Blob([JSON.stringify(checkpoint, (_key, value) => typeof value === "bigint" ? value.toString() : value instanceof Map ? [...value] : value)]).size : 0;
         if ((await this.repository.requireTrip(job.trip_id)).revision !== job.trip_revision) { job.status = "paused"; job.pause_reason = "changes"; break; }
         if (stopping()) break;
         if (result.optimization_complete) { job.status = "complete"; break; }

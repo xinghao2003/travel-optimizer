@@ -1,10 +1,11 @@
 import type { Charge } from "../../lib/planner";
 import type { Fare, Journey, Missing, Price, Rule, Spec } from "./types";
 import { normalizeFare } from "./types";
-import { cents, compare, round } from "./time";
+import { addCost, cents, compare, currency, round } from "./time";
+import type { CostBound } from "./time";
 import { journeyPriceScope, sameJourneyScope } from "../../lib/journeyPricing";
 
-type Choice = { offer: Fare; low: number; high: number };
+type Choice = { offer: Fare; low: bigint; high: CostBound };
 type Entry = { choices: Choice[]; diagnostic: Missing | null; priced: Choice; unpriced: Choice; uncertain: string[] };
 export type FareIndex = { direct: Map<string, Fare[]>; bundles: Fare[]; pairs: Map<string, number[]>; larger: Map<string, number[]>; pairIds: Set<string>; resolved: Map<string, Entry> };
 const append = <T>(map: Map<string, T[]>, key: string, value: T) => { const list = map.get(key) ?? []; list.push(value); map.set(key, list); };
@@ -25,7 +26,7 @@ export function fareIndex(offers: Fare[], spec: Spec): FareIndex {
 }
 function amount(offer: Fare, spec: Spec): Choice {
   const rate = spec.exchange_rates[offer.currency];
-  return offer.low == null || rate === undefined ? { offer, low: 0, high: Infinity }
+  return offer.low == null || rate === undefined ? { offer, low: 0n, high: Infinity }
     : { offer, low: cents(offer.low * rate), high: offer.high == null ? Infinity : cents(offer.high * rate) };
 }
 function ruleOffer(id: string, journey: Journey, charge: Charge | null, spec: Spec, rules: Rule[]) {
@@ -101,12 +102,12 @@ export function pricePath(path: Journey[], offers: Fare[], spec: Spec, rules: Ru
     if (aliases.size && offer.movement_ids.some(id => aliases.has(id))) offer = { ...offer, movement_ids: offer.movement_ids.map(id => aliases.get(id) ?? id) };
     if (offer.movement_ids.every(id => components.has(id))) bundled.push(offer);
   }
-  let lower = 0, upper = 0, chosen: Fare[], uncertain = new Set<string>();
+  let lower = 0n, upper: CostBound = 0n, chosen: Fare[], uncertain = new Set<string>();
   if (!bundled.length) {
     const selected: Fare[] = []; let single = true;
     for (const entry of [...entries].reverse()) {
       const choice = upper === Infinity ? entry.unpriced : entry.priced;
-      lower += choice.low; upper += choice.high; selected.push(choice.offer);
+      lower += choice.low; upper = addCost(upper, choice.high); selected.push(choice.offer);
       single &&= entry.choices.length === 1; entry.uncertain.forEach(id => uncertain.add(id));
     }
     const ids = new Set(selected.map(offer => offer.id));
@@ -124,18 +125,18 @@ export function pricePath(path: Journey[], offers: Fare[], spec: Spec, rules: Ru
     const full = (1n << BigInt(keys.length)) - 1n;
     let flightMask = 0n;
     if (spec.exclude_unpriced_flights) for (const [id, [journey, charge]] of components) if (!charge && journey.raw.mode === "flight") flightMask |= 1n << BigInt(indexes.get(id)!);
-    const memo = new Map<bigint, [number, number, string[], number]>();
-    function cover(mask: bigint): [number, number, string[], number] {
-      if (mask === full) return [0, 0, [], 0];
+    const memo = new Map<bigint, [bigint, CostBound, string[], number]>();
+    function cover(mask: bigint): [bigint, CostBound, string[], number] {
+      if (mask === full) return [0n, 0n, [], 0];
       const known = memo.get(mask); if (known) return known;
       let bit = 0; while (mask & 1n << BigInt(bit)) bit++;
-      let best: [number, number, string[], number] | undefined;
+      let best: [bigint, CostBound, string[], number] | undefined;
       for (const choice of byBit[bit]) {
         if (mask & choice.mask) continue;
         const rest = cover(mask | choice.mask);
         let unpriced = rest[3], bits = choice.high === Infinity ? choice.mask & flightMask : 0n;
         while (bits) { unpriced++; bits &= bits - 1n; }
-        const candidate: [number, number, string[], number] = [choice.low + rest[0], choice.high + rest[1], [choice.offer.id, ...rest[2]], unpriced];
+        const candidate: [bigint, CostBound, string[], number] = [choice.low + rest[0], addCost(choice.high, rest[1]), [choice.offer.id, ...rest[2]], unpriced];
         if (!best || compare([candidate[3], candidate[1], candidate[0], candidate[2]], [best[3], best[1], best[0], best[2]]) < 0) best = candidate;
       }
       memo.set(mask, best!); return best!;
@@ -148,7 +149,7 @@ export function pricePath(path: Journey[], offers: Fare[], spec: Spec, rules: Ru
     const covered = new Set(chosen.filter(offer => amount(offer, spec).high !== Infinity).flatMap(offer => offer.movement_ids));
     for (let i = diagnostics.length - 1; i >= 0; i--) if (covered.has(diagnostics[i].component_id)) diagnostics.splice(i, 1);
   }
-  return { low_cents: lower, high_cents: upper, total_cost_myr: lower === upper ? lower / 100 : null, cost_low_myr: lower / 100, cost_high_myr: upper === Infinity ? null : upper / 100,
+  return { low_cents: lower, high_cents: upper, total_cost_myr: lower === upper ? currency(lower) : null, cost_low_myr: currency(lower), cost_high_myr: upper === Infinity ? null : currency(upper),
     estimated: chosen.some(offer => offer.estimated || offer.source === "rule" || offer.currency !== "MYR"), purchases: chosen,
     missing: upper === Infinity ? diagnostics : [], uncertainty_key: [...new Set([...diagnostics.map(item => item.component_id), ...uncertain])].sort() };
 }

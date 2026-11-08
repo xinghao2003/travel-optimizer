@@ -24,6 +24,10 @@ Stop finishes the current batch, saves its frontier, and stops. Resume restores
 the saved state; changed inputs restart safely. Completed work removes its
 checkpoint. Tests also verify that changing a previously weaker route's fare can
 make it the cheapest option, using all collected schedules.
+Checkpoint version 3 stores internal cents as BigInt through structured cloning.
+Older numeric-cents checkpoints restart from the preserved graph. Public results
+and portable backups keep their existing JSON money fields; checkpoint size
+reporting converts BigInt to decimal strings without changing persisted state.
 
 Provider TTL controls cache freshness. Expired entries are deleted when the
 repository opens, after cache writes, and through explicit batch cleanup. These

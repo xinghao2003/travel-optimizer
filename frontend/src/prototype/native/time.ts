@@ -15,7 +15,11 @@ export function modelTimestamp(value: string): string {
   return local + (zone === "+00:00" || zone === "-00:00" ? "Z" : zone);
 }
 export const duration = (value: number) => new Decimal(value).toDecimalPlaces(0, Decimal.ROUND_HALF_EVEN).toNumber();
-export const cents = (value: number) => new Decimal(String(value)).mul(100).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toNumber();
+/** Python prices are float inputs, but integer cents remain exact through cover/DP. */
+export const cents = (value: number) => BigInt(new Decimal(pythonFloat(value)).mul(100).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toFixed(0));
+export type CostBound = bigint | number; // The only numeric bound is positive Infinity.
+export const addCost = (a: CostBound, b: CostBound): CostBound => a === Infinity || b === Infinity ? Infinity : (a as bigint) + (b as bigint);
+export const currency = (value: CostBound): number => value === Infinity ? Infinity : new Decimal(String(value)).div(100).toNumber();
 
 // Python round(float, n) rounds the actual IEEE-754 value, not its display string.
 export function round(value: number, places = 2): number {
@@ -85,7 +89,7 @@ export function compare(a: unknown, b: unknown): number {
   }
   return (a as number | string) < (b as number | string) ? -1 : 1;
 }
-export function bisect(values: number[], value: number, right = false) {
+export function bisect<T extends number | bigint>(values: T[], value: T, right = false) {
   let low = 0, high = values.length;
   while (low < high) { const middle = (low + high) >>> 1; if (values[middle] < value || right && values[middle] === value) low = middle + 1; else high = middle; }
   return low;

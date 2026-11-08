@@ -9,9 +9,14 @@ test("native solver matches current Python, including fair exploration, flight e
     const { solveNative } = await import("/src/prototype/native/solver.ts");
     const { pricePath } = await import("/src/prototype/native/pricing.ts");
     const { normalizeJourney, normalizeFare } = await import("/src/prototype/native/types.ts");
+    const { cents } = await import("/src/prototype/native/time.ts");
     const { firstDifference: difference } = await import("/src/prototype/comparison.ts");
     const corpus = await (await fetch("/tests/fixtures/native-solver.json")).json();
     const failures: { name: string; path: string; expected: unknown; actual: unknown }[] = [];
+    for (const item of corpus.cent_cases ?? []) {
+      const actual = cents(item.value).toString();
+      if (actual !== item.expected) failures.push({ name: `cents:${item.value}`, path: "cents", expected: item.expected, actual });
+    }
     for (const item of [...corpus.cases, ...(corpus.generated ?? [])]) {
       try {
         const previous = item.prefix_expansions ? solveNative({ ...item.input, expansion_budget: null, label_limit: item.prefix_expansions }).state : undefined;
@@ -24,11 +29,11 @@ test("native solver matches current Python, including fair exploration, flight e
       try {
         const input = item.input;
         const result = pricePath(input.movements.map(normalizeJourney), input.offers.map(normalizeFare), input.spec, input.rules, input.extra);
-        const mismatch = difference(item.expected, JSON.parse(JSON.stringify(result)));
+        const mismatch = difference(item.expected, JSON.parse(JSON.stringify(result, (_key, value) => typeof value === "bigint" ? value.toString() : value)));
         if (mismatch) failures.push({ name: item.name, ...mismatch });
       } catch (error) { failures.push({ name: item.name, path: "exception", expected: "success", actual: String(error) }); }
     }
-    return { solverCases: corpus.cases.length, generatedCases: corpus.generated?.length ?? 0, priceCases: corpus.pricing.length, failures };
+    return { solverCases: corpus.cases.length, generatedCases: corpus.generated?.length ?? 0, priceCases: corpus.pricing.length, centCases: corpus.cent_cases?.length ?? 0, failures };
   });
   console.log(JSON.stringify(summary, null, 2));
   expect(summary.failures).toEqual([]);

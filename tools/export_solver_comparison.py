@@ -9,6 +9,7 @@ import copy
 import importlib
 import io
 import json
+import math
 import random
 from pathlib import Path
 import sqlite3
@@ -62,7 +63,8 @@ def main():
             data = normalized((spec, path, offers, rules), {})
             data["extra"] = [c.model_dump(mode="json") for c in (extra[0] if extra else kwargs.get("extra") or [])]
             output = dict(result)
-            output["high_cents"] = None if output["high_cents"] == float("inf") else output["high_cents"]
+            output["low_cents"] = str(output["low_cents"])
+            output["high_cents"] = None if output["high_cents"] == float("inf") else str(output["high_cents"])
             output["uncertainty_key"] = list(output["uncertainty_key"])
             pricing.append({"name": f"pricing-{len(pricing)+1}", "input": data, "expected": output})
         return result
@@ -74,8 +76,9 @@ def main():
         checkpoint = importlib.import_module("test_optimizer_checkpoint")
         journey_pricing = importlib.import_module("test_journey_pricing")
         fair = importlib.import_module("test_fair_exploration")
+        numeric = importlib.import_module("test_numeric_boundaries")
         suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(cls) for cls in
-            (planner.OptimizerTests, positioning.PositioningTests, transfers.AirportTransferTests, checkpoint.CheckpointTests, journey_pricing.JourneyPricingTests, fair.FlightEligibilityTests))
+            (planner.OptimizerTests, positioning.PositioningTests, transfers.AirportTransferTests, checkpoint.CheckpointTests, journey_pricing.JourneyPricingTests, fair.FlightEligibilityTests, numeric.NumericPriceTests))
         suite.addTest(fair.FairFrontierTests("test_priced_options_appear_before_large_unpriced_subtrees_are_exhausted"))
         stream = io.StringIO()
         result = unittest.TextTestRunner(stream=stream).run(suite)
@@ -120,8 +123,14 @@ def main():
         data = normalized((spec, movements, offers, []), solver_options)
         expected = original(spec, movements, offers, [], **solver_options)
         generated.append({"name":f"generated-{index+1}", "input":data, "expected":expected})
-    (directory / "native-solver.json").write_text(json.dumps({"cases": cases, "pricing": pricing, "generated":generated}, separators=(",", ":"), allow_nan=False), encoding="utf-8")
-    print(json.dumps({"fixture_calls": len(cases), "pricing_calls": len(pricing), "generated_cases":len(generated), "original_tests": result.testsRun}), flush=True)
+    # Keep integer expectations as strings: JSON's Number parser would erase
+    # the very cents this corpus is intended to check.
+    numeric_rng = random.Random(912506)
+    values = [1.0000000000000001e18, 90071992547409.91, .005, .015, 1e25]
+    values += [math.ldexp(numeric_rng.random(), numeric_rng.randint(-40, 86)) for _ in range(2000)]
+    cent_cases = [{"value": value, "expected": str(optimizer.cents(value))} for value in values]
+    (directory / "native-solver.json").write_text(json.dumps({"cases": cases, "pricing": pricing, "generated":generated, "cent_cases": cent_cases}, separators=(",", ":"), allow_nan=False), encoding="utf-8")
+    print(json.dumps({"fixture_calls": len(cases), "pricing_calls": len(pricing), "generated_cases":len(generated), "cent_cases": len(cent_cases), "original_tests": result.testsRun}), flush=True)
 
     if options.database:
         from app import planner_discovery as discovery

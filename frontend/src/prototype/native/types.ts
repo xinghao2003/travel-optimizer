@@ -1,12 +1,13 @@
 import type { Charge, Movement, Offer, PricingRule, Route, Segment, TripSpec } from "../../lib/planner";
 import { micros, iso, modelTimestamp } from "./time";
+import type { CostBound } from "./time";
 
 export type Spec = TripSpec;
 export type Fare = Offer;
 export type Rule = PricingRule;
 export type Journey = { raw: Movement; dep: number | null; arr: number | null };
 export type Missing = { component_id: string; movement_id: string; label: string; from_id: string; to_id: string; currency: string; reason: string };
-export type Price = { low_cents: number; high_cents: number; total_cost_myr: number | null; cost_low_myr: number; cost_high_myr: number | null; estimated: boolean; purchases: Fare[]; missing: Missing[]; uncertainty_key: string[] };
+export type Price = { low_cents: bigint; high_cents: CostBound; total_cost_myr: number | null; cost_low_myr: number; cost_high_myr: number | null; estimated: boolean; purchases: Fare[]; missing: Missing[]; uncertainty_key: string[] };
 export type Stay = { place_id: string; arrival: number; departure: number; hours: number };
 export type Label = {
   city: string; phase: number; mask: number; arrival: number; path: Journey[]; stays: Stay[];

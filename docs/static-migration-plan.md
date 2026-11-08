@@ -36,7 +36,7 @@ No deployment is authorized as part of this checklist.
   and a read-only replay of the largest current saved trip: 1,653 prepared
   movements, 1,649 offers, and 14 routes, with matching full results and metadata.
   The comparison page now prepares saved-trip imports through this path.
-- Matching responses on 88 captured solver calls, 21 pricing calls, and 200
+- Matching responses on 98 captured solver calls, 31 pricing calls, and 200
   deterministic generated cases. Historical performance measurements still
   predate this sync; the current saved-trip replay checks correctness only.
 - Native structured-clone checkpoint continuation and changed-input/version
@@ -106,11 +106,17 @@ business outputs. Any floating tolerance is explicit and excludes money. Changes
 to the Python reference require corresponding native parity checks. Work-counter
 or partial-result differences must be explained, not silently accepted.
 
-The final parity audit must include numeric boundaries for cents and epoch
-microseconds. Native helpers currently use JavaScript numbers for these values;
-the existing ordinary-trip corpus does not prove exact integer behavior beyond
-`Number.MAX_SAFE_INTEGER`. Resolve any supported-domain precision gap before
-claiming complete input equivalence.
+The cents boundary is now ported to exact BigInt arithmetic, including cover
+selection, accumulated totals, dominance and budgets. Public currency fields
+remain numbers, matching Python's final integer-to-float division; conversion
+does not first round the integer cents to a Number. All 2,005 additional Python
+float-to-cents cases and large-total cover/budget scenarios match. Native
+checkpoints use version 3 to invalidate the former numeric representation.
+
+The remaining time audit must include epoch-microsecond boundaries. Those
+helpers still use JavaScript numbers; the ordinary-trip corpus does not prove
+exact behavior beyond `Number.MAX_SAFE_INTEGER`. Resolve any supported-domain
+precision gap before claiming complete input equivalence.
 
 ## 2. Port complete input preparation and provider normalization
 

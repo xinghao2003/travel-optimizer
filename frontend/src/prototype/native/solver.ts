@@ -6,7 +6,8 @@ import type { Fare, Journey, Label, SearchState, SolverInput, SolverResult, Spec
 import { normalizeCharge, normalizeFare, normalizeJourney } from "./types";
 import { pricePath, fareIndex, unpricedFlightIds } from "./pricing";
 import { frontier, enqueue, dequeue, flightPricesComplete } from "./frontier";
-import { DAY, HOUR, MINUTE, addDate, at, bisect, cents, compare, datetimeString, duration, fingerprint, iso, localDate, localTime, micros, round, stableId, timeKey } from "./time";
+import { DAY, HOUR, MINUTE, addDate, at, bisect, cents, compare, currency, datetimeString, duration, fingerprint, iso, localDate, localTime, micros, round, stableId, timeKey } from "./time";
+import type { CostBound } from "./time";
 
 const SUPPLIED = "User-supplied positioning";
 type Timed = { journey: Journey; dep: number | null; arr: number | null; homeDate: string | null };
@@ -51,7 +52,7 @@ export function solveNative(input: SolverInput, previous?: SearchState, seconds 
   const movements = [...input.movements.filter(movement => movement.source !== SUPPLIED).map(normalizeJourney), ...additions.movements];
   const offers = [...additions.offers, ...input.offers.map(normalizeFare)], rules = input.rules;
   const finishAtHome = input.finish_at_home ?? true, limit = input.label_limit ?? null;
-  const signature = fingerprint([2, spec, movements.map(journey => journey.raw), offers, rules, finishAtHome, ...(spec.exclude_unpriced_flights ? ["flight-cover-v2"] : [])]);
+  const signature = fingerprint([3, spec, movements.map(journey => journey.raw), offers, rules, finishAtHome, ...(spec.exclude_unpriced_flights ? ["flight-cover-v2"] : [])]);
   const start = at(spec.start_date, spec.home_departure_earliest ?? "00:00", spec.home.timezone);
   const end = spec.home_arrival_latest != null ? at(spec.end_date, spec.home_arrival_latest, spec.home.timezone) : at(addDate(spec.end_date, 1), "00:00", spec.home.timezone) - 1;
   const lowerTime = timeKey(spec.departure_start), upperTime = timeKey(spec.departure_end);
@@ -274,9 +275,9 @@ function serialize(input: SolverInput, spec: Spec, state: SearchState, places: M
   const eligible = selectable.filter(label => spec.budget_myr === null || label.price!.low_cents <= cents(spec.budget_myr));
   const over = selectable.filter(label => spec.budget_myr !== null && label.price!.low_cents > cents(spec.budget_myr))
     .sort((a, b) => compare([a.price!.low_cents, -stay(a)], [b.price!.low_cents, -stay(b)])).slice(0, 10);
-  const finite = eligible.filter(label => label.price!.high_cents !== Infinity).sort((a, b) => a.price!.high_cents - b.price!.high_cents);
-  const highs: number[] = [], bestStays: number[] = [], bestPrices: number[] = [];
-  let bestStay = -Infinity, bestPrice = Infinity;
+  const finite = eligible.filter(label => label.price!.high_cents !== Infinity).sort((a, b) => compare(a.price!.high_cents, b.price!.high_cents));
+  const highs: CostBound[] = [], bestStays: number[] = [], bestPrices: CostBound[] = [];
+  let bestStay = -Infinity, bestPrice: CostBound = Infinity;
   for (const label of finite) { if (stay(label) > bestStay) { bestStay = stay(label); bestPrice = label.price!.high_cents; } highs.push(label.price!.high_cents); bestStays.push(bestStay); bestPrices.push(bestPrice); }
   const frontier = eligible.filter(label => {
     const i = bisect(highs, label.price!.low_cents, true) - 1;
@@ -287,7 +288,7 @@ function serialize(input: SolverInput, spec: Spec, state: SearchState, places: M
   for (const label of [...frontier, ...over]) unique.set(routeId(label), label);
   const frontierIds = new Set(frontier.map(routeId));
   if (input.include_dominated) for (const label of eligible) unique.set(routeId(label), label);
-  const thresholds = frontier.filter(label => label.price!.high_cents !== Infinity).map(label => [stay(label), label.price!.high_cents / 100]).sort(compare);
+  const thresholds = frontier.filter(label => label.price!.high_cents !== Infinity).map(label => [stay(label), currency(label.price!.high_cents)]).sort(compare);
   const thresholdStays: number[] = [], thresholdPrices: number[] = []; let maximum = -Infinity;
   for (const [hours, price] of thresholds) { maximum = Math.max(maximum, price); thresholdStays.push(hours); thresholdPrices.push(maximum); }
   const missing = new Map<string, SolverResult["missing_fares"][number]>(), routes: Route[] = [];

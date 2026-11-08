@@ -15,7 +15,7 @@ Native edit transforms cover atomic Apply, shared component estimates, reusable
 journey estimates, explicit CSV deletion targets, airport connections/transfers,
 individual/bundle fares, and assumed connections. References from current Python
 include 95 edits and 37 rejected requests. The interface adapter is connected
-for saved-trip workflows. Live search/apply coordination remains migration work.
+for saved-trip workflows and live search/apply coordination.
 
 `BrowserCalculator` runs the native solver in a Web Worker and persists unfinished
 state through IndexedDB structured cloning. It uses small internal batches while

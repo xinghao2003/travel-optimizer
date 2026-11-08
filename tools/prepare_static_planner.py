@@ -1,6 +1,7 @@
 """Build public catalogs for the native planner, without bundling Python runtime assets."""
 import argparse
 import json
+import os
 from pathlib import Path
 import sqlite3
 import sys
@@ -33,10 +34,14 @@ def main():
     airports = airportsdata.load("IATA")
     catalog = {"schema_version": 1, "airports": {code: {key: row[key] for key in ("name", "lat", "lon", "tz")} for code, row in airports.items()},
                "metros": {code: list(row.get("airports", {})) for code, row in airportsdata.load_iata_macs().items()}}
+    config = {"schema_version": 1, "flights_url": os.environ.get("BROWSER_FLIGHTS_URL", "/api/flights"),
+              "osrm_base_url": os.environ.get("OSRM_BASE_URL", "https://router.project-osrm.org"),
+              "transit_url": os.environ.get("BROWSER_TRANSIT_URL", "/api/transit"),
+              "transit_enabled": os.environ.get("BROWSER_TRANSIT_ENABLED", "").lower() == "true"}
     for public in ("public-native", "public"):
         output = ROOT / "frontend" / public / "browser-data"
         output.mkdir(parents=True, exist_ok=True)
-        for name, data in (("places", places), ("airports", catalog)):
+        for name, data in (("places", places), ("airports", catalog), ("config", config)):
             (output / f"{name}.json").write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     print(f"Prepared {len(rows)} public places and {len(airports)} airports; no trip data or Python runtime included.")
 

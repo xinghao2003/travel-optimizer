@@ -2,8 +2,8 @@ import pickle
 import unittest
 from collections import Counter, deque
 
-from app.planner_models import PricingRule, Visit, stable_id
-from app.planner_optimizer import INF, Label, SearchCheckpoint, SearchFrontier, optimize
+from app.planner_models import Charge, PricingRule, Visit, stable_id
+from app.planner_optimizer import CHECKPOINT_VERSION, INF, Label, SearchCheckpoint, SearchFrontier, optimize, price_path
 from test_optimizer_checkpoint import inputs
 from test_planner import HOME, A, B, dt, fare, movement, trip
 
@@ -110,6 +110,36 @@ class FlightEligibilityTests(unittest.TestCase):
         result = optimize(self.spec, [self.out, late_back], [fare('bundle', 40, ['out', 'back'])], [])
         self.assertEqual(result['excluded_unpriced_flight_count'], 2)
         self.assertEqual(result['feasible_count'], 0)
+
+    def test_priced_bundle_survives_unknown_airport_costs(self):
+        outward = self.out.model_copy(update={"charges": [Charge(id="access", kind="Airport access")]})
+        offers = [fare("bundle", 40, ["out", "back"], kind="round-trip")]
+        result = optimize(self.spec, [outward, self.back], offers, [])
+        self.assertEqual(result["hidden_unpriced_flight_count"], 0)
+        route = result["routes"][0]
+        self.assertEqual((route["cost_low_myr"], route["cost_high_myr"]), (40, None))
+        self.assertEqual([o["id"] for o in route["purchases"] if o["kind"] == "round-trip"], ["fare:bundle"])
+        self.assertEqual({d["component_id"] for d in result["missing_fares"]}, {"access"})
+        # An incomplete ticket still cannot pass the price filter.
+        self.assertEqual(optimize(self.spec, [outward, self.back], offers[:0], [])["routes"], [])
+
+    def test_bundle_pricing_change_invalidates_old_filtered_checkpoints(self):
+        outward = self.out.model_copy(update={"charges": [Charge(id="access", kind="Airport access")]})
+        moves = [outward, self.back]; offers = [fare("bundle", 40, ["out", "back"], kind="round-trip")]
+        checkpoint = SearchCheckpoint()
+        optimize(self.spec, moves, offers, [], checkpoint=checkpoint)
+        checkpoint.signature = stable_id(CHECKPOINT_VERSION, self.spec.model_dump(mode="json"),
+            [m.model_dump(mode="json") for m in moves], [o.model_dump(mode="json") for o in offers], [], True)
+        checkpoint.completed = []; checkpoint.expanded = 999
+        result = optimize(self.spec, moves, offers, [], checkpoint=checkpoint)
+        self.assertEqual(checkpoint.resumed_from, 0)
+        self.assertTrue(result["routes"])
+
+    def test_other_unknown_charges_do_not_change_unfiltered_pricing_policy(self):
+        outward = self.out.model_copy(update={"charges": [Charge(id="access", kind="Airport access")]})
+        spec = self.spec.model_copy(update={"exclude_unpriced_flights": False})
+        price = price_path([outward, self.back], [fare("bundle", 40, ["out", "back"], kind="round-trip")], spec, [])
+        self.assertEqual(price["cost_low_myr"], 0)
 
     def test_user_estimate_rule_can_price_a_flight_before_exploration(self):
         rule = PricingRule(id='out-estimate', name='Outward estimate', from_id=HOME.id, to_id=A.id,

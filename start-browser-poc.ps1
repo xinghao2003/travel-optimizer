@@ -34,6 +34,8 @@ function Get-FreePort([int]$Wanted, [string]$Tag, [int[]]$Taken = @()) {
 }
 & $uv run python tools/prepare_browser_poc.py
 if ($LASTEXITCODE -ne 0) { throw 'Could not prepare browser Python assets.' }
+& $uv run python tools/prepare_static_planner.py
+if ($LASTEXITCODE -ne 0) { throw 'Could not prepare native browser catalogs and provider configuration.' }
 
 $Port = Get-FreePort $Port 'api'
 $WebPort = Get-FreePort $WebPort 'web' @($Port)

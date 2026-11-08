@@ -38,4 +38,5 @@ data/geonames/cities500.download
 /frontend/tests/fixtures/native-preparation.json
 /frontend/tests/fixtures/native-edits.json
 /frontend/tests/fixtures/native-places.json
+/frontend/tests/fixtures/native-search.json
 .vercel

@@ -16,14 +16,14 @@ No deployment is authorized as part of this checklist.
   early exclusion of flights without usable standalone or combined fares.
 - Native TypeScript solver and independent Python/Pyodide reference worker.
 - Version-1 JSON solver-input contract, enforced by both workers, with native
-  model defaults and validation matching Python on 11,964 model cases (81
+  model defaults and validation matching Python on 11,983 model cases (81
   invalid). Regenerated reference inputs carry the same contract version.
 - Native fair scheduling, relative per-call expansion budgets, flight-price
   eligibility and new response counters match current Python.
 - Native flight/transit normalization and opt-in rail sampling/projection are
   implemented as pure functions. They match 188 Python reference cases,
   including ambiguous fares, airport changes, and DST projection rejection.
-  Their connection to the live-search prototype is still pending.
+  They are connected to discovery in the full native entry.
 - Native discovery windows, seed order, per-direction positioning policies,
   and independent round-trip task generation match 86 further Python cases.
   The combined provider/discovery corpus now contains 372 comparisons,
@@ -32,11 +32,11 @@ No deployment is authorized as part of this checklist.
   current timing, airport-change connections and transfer choices, road/vehicle
   regeneration, manual offer precedence, effective rules, and quote freshness.
   Missing info metadata and persisted discovery-key compatibility are included.
-- Preparation matches 51 public recalculation scenarios, 284 discovery keys,
+- Preparation matches 51 public recalculation scenarios, 288 discovery keys,
   and a read-only replay of the largest current saved trip: 1,653 prepared
   movements, 1,649 offers, and 14 routes, with matching full results and metadata.
   The comparison page now prepares saved-trip imports through this path.
-- Matching responses on 84 captured solver calls, 20 pricing calls, and 200
+- Matching responses on 88 captured solver calls, 21 pricing calls, and 200
   deterministic generated cases. Historical performance measurements still
   predate this sync; the current saved-trip replay checks correctness only.
 - Native structured-clone checkpoint continuation and changed-input/version
@@ -46,22 +46,32 @@ No deployment is authorized as part of this checklist.
   pruning, portable backups, and a read-only SQLite exporter are implemented.
   Native worker calculation now saves/resumes checkpoints through that repository.
   The full interface now uses these services in a separate native saved-trip entry;
-  the live-search coordinator still needs integration.
+  native discovery uses its queues, cache, snapshots, edits, and worker service.
 - Native edits match 95 Python cases, including 37 rejected changes. Real browser
   storage tests cover rollback, concurrent revisions, stale workers, cache cleanup,
   backup replacement, and a previously weaker route becoming cheapest after Apply.
   A real SQLite export restored six records and reproduced the 14-route result.
 - Local prototype with browser batching, provider-response caching, one active
   saved session, and a bounded stateless one-way flight function.
-- 170 backend tests, seventeen public browser checks, and the separate native
+- Native discovery matches 13 Python lifecycle scenarios over 18 rounds and
+  79 provider outcomes. It also matches 54 manual flight URLs. Full-interface
+  tests cover in-flight Apply, saved-queue reload/continue, and independently
+  priced round trips that cover flights without standalone fares.
+- A pre-existing Python/native pricing defect is fixed in both implementations:
+  with unpriced flights excluded, unrelated unknown airport costs no longer
+  cause a valid priced flight bundle to be discarded. Covered flights are not
+  listed as missing fares. Affected old checkpoints/results restart/recalculate.
+- 173 backend tests, twenty-three public browser checks, and the separate native
   production-artifact interaction passed. Private migration replay remains
   optional. Native and earlier prototype production builds have passed.
 
 The native solver now also runs through the full Planner at `/native.html`.
 That entry uses local places/nearest lookup and browser-owned saved trips, edits,
 calculation, continuous calculation, and backups. Its static production build
-excludes Python and comparison data. Live provider search is explicitly unavailable
-there until its coordinator is connected. The older live-search prototype still
+excludes Python and comparison data. Its native discovery coordinator is connected;
+the complete provider-function implementation is still pending. Provider integration
+tests use recorded/mocked responses, rather than hosted-runtime evidence.
+The older live-search prototype still
 uses Python/Pyodide for discovery planning, result normalization, and solving.
 The default `/` entry continues to use the original Python planner API.
 Neither preview is yet a complete native replacement for the application.
@@ -91,11 +101,17 @@ business outputs. Any floating tolerance is explicit and excludes money. Changes
 to the Python reference require corresponding native parity checks. Work-counter
 or partial-result differences must be explained, not silently accepted.
 
+The final parity audit must include numeric boundaries for cents and epoch
+microseconds. Native helpers currently use JavaScript numbers for these values;
+the existing ordinary-trip corpus does not prove exact integer behavior beyond
+`Number.MAX_SAFE_INTEGER`. Resolve any supported-domain precision gap before
+claiming complete input equivalence.
+
 ## 2. Port complete input preparation and provider normalization
 
 The pure preparation path is implemented and checked against the real Python
 `DiscoveryManager.recalculate` path. Saved-trip imports in the comparison page
-use it; live discovery and the complete Planner interface still need integration.
+use it; it is also connected to native discovery and the complete Planner interface.
 The exported global rules must accompany an imported trip to reproduce server
 pricing. A trip record alone cannot recover rules stored separately in SQLite.
 
@@ -122,8 +138,12 @@ longer skip these transformations.
 Native ingestion is implemented for roads, standalone and combined flights,
 and transit, including party-specific fares, quote TTL, partial-ticket handling,
 and replacement of estimated rail with actual-date service. Shared-graph cleanup
-also removes trip-specific airport overlays. Fetching, job/round coordination,
-pagination, publication, and persistence still need native integration.
+also removes trip-specific airport overlays. Native fetching, job/round coordination,
+pagination, publication, and persistence are now connected. Python lifecycle
+replay covers 18 rounds, including in-flight edits, cancellation, cache accounting,
+failed-query retries, deadline expiry and discovery-derived ticket queries.
+Provider-only function completion remains stage 6; live hosted compatibility is
+not established by these recorded/mocked browser checks.
 
 Bring the complete `tasks_for`, `fetch`, `ingest`, `publish`, and `run` behavior
 into browser-owned services. Preserve optimistic date windows, seed ordering,
@@ -151,7 +171,8 @@ and final solver outputs. Include pause/reload/continue and edits during search.
 The repository, pure edit semantics, portable backup boundary, SQLite exporter,
 and persisted native calculation service are implemented and tested; see
 [browser storage](browser-storage.md). The complete interface and active-search
-Apply/continuation coordination have not yet been connected to them.
+Apply/continuation coordination are connected to them. Reload preserves paused
+queues, and the user chooses when to continue provider requests.
 
 Expand IndexedDB from one active prototype session to the application's trip
 repository: multiple trips, create/copy/delete, graph snapshots, offers, airport
@@ -183,7 +204,9 @@ Saved-trip integration is implemented at `/native.html`; see
 [local usage and production checks](native-planner.md). Missing info Apply and
 backup restore/download run through the full interface without planner API calls.
 Local catalog lookup matches 90 Python searches and nearest-place queries.
-Live search coordination remains necessary to complete this stage.
+Native live-search coordination is connected and verified against recorded
+outcomes, including an interaction through the full interface. Completion still
+requires the full provider boundary and broader final acceptance below.
 
 Retain the current React settings, options/chart, itinerary/map, Missing info,
 pricing forms, and report/export features. Replace their planner API calls with

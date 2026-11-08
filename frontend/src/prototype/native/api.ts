@@ -10,6 +10,9 @@ import { loadPlaces } from "./places";
 import type { AirportCatalog, PlannerTrip } from "./preparation";
 import { refreshQuoteFreshness, tripMetadata } from "./preparation";
 import { PlannerRepository } from "./repository";
+import { BrowserDiscovery } from "./search";
+import { BrowserProviders } from "./providers";
+import type { SearchProvider } from "./providers";
 
 type Continuous = { job: OptimizationJob; promise: Promise<void> };
 function object(value: unknown): Record<string, unknown> {
@@ -23,10 +26,14 @@ function list(value: unknown, maximum: number): unknown[] {
 
 export class BrowserPlannerApi {
   readonly calculator: BrowserCalculator;
+  readonly discovery: BrowserDiscovery;
+  readonly providers: SearchProvider;
   private continuous = new Map<string, Continuous>();
   private opening?: Promise<void>;
-  constructor(readonly repository = new PlannerRepository(), readonly airports: () => Promise<AirportCatalog> = loadAirportCatalog) {
+  constructor(readonly repository = new PlannerRepository(), readonly airports: () => Promise<AirportCatalog> = loadAirportCatalog, provider?: SearchProvider) {
     this.calculator = new BrowserCalculator(repository);
+    this.providers = provider ?? new BrowserProviders(repository, airports);
+    this.discovery = new BrowserDiscovery(repository, this.calculator, this.providers, airports);
   }
   ready(): Promise<void> {
     return this.opening ??= (async () => {
@@ -48,7 +55,7 @@ export class BrowserPlannerApi {
       }
     })();
   }
-  async config(): Promise<PlannerConfig> { return { transit_routing_configured: false }; }
+  async config(): Promise<PlannerConfig> { return { transit_routing_configured: (await this.providers.settings()).transit_enabled }; }
   async readTrip(id: string) {
     const trip = await this.repository.requireTrip(id);
     if (trip.result) trip.result = refreshQuoteFreshness(trip.result, Date.now() * 1000);
@@ -56,18 +63,20 @@ export class BrowserPlannerApi {
   }
   private async stopForEdit(id: string) {
     for (const active of this.continuous.values()) if (active.job.trip_id === id) { await this.stopContinuous(active.job.id, "changes"); await active.promise; }
-    await this.calculator.stop(id);
+    if (!this.discovery.isRunning(id)) await this.calculator.stop(id);
+  }
+  private async calculate(id: string, options: CalculationOptions = {}) {
+    const { bundle_candidates: _candidates, ...result } = await this.calculator.calculate(id, options); return result;
   }
   private async edit(id: string, transform: (trip: PlannerTrip) => PlannerTrip, shareGraph = false) {
     await this.stopForEdit(id);
-    await this.repository.updateTrip(id, transform, shareGraph);
-    return this.calculator.calculate(id);
+    await this.discovery.change(id, () => this.repository.updateTrip(id, transform, shareGraph), false);
+    return this.calculate(id);
   }
   private async applied(id: string, transform: (trip: PlannerTrip) => PlannerTrip) {
     await this.stopForEdit(id);
-    const trip = await this.repository.updateTrip(id, transform);
-    if (trip.snapshot) await this.calculator.calculate(id);
-    return { trip: await this.readTrip(id), job: null, updating: false };
+    const job = await this.discovery.applyChanges(id, transform);
+    return { trip: await this.readTrip(id), job, updating: !!job?.updating_options };
   }
   async startContinuous(id: string): Promise<OptimizationJob> {
     for (const active of this.continuous.values()) {
@@ -77,6 +86,7 @@ export class BrowserPlannerApi {
     const trip = await this.repository.requireTrip(id); requireMinimumStays(trip.spec);
     if (!trip.snapshot) throw new PlannerError("Search transport before checking saved combinations.", 409);
     if ((await this.repository.list<Job>("jobs")).some(j => j.trip_id === id && ["queued", "running"].includes(j.status))) throw new PlannerError("Stop the transport search before checking combinations continuously.", 409);
+    if (this.discovery.isRunning(id)) throw new PlannerError("Wait for the in-flight transport request to finish before checking combinations.", 409);
     const job: OptimizationJob = { id: crypto.randomUUID().replaceAll("-", ""), trip_id: id, trip_revision: trip.revision, status: "queued", batches: 0,
       expanded_labels: trip.result?.expanded_labels ?? 0, checkpoint_bytes: 0, pause_reason: null };
     await this.repository.put("optimizations", job.id, job);
@@ -95,7 +105,8 @@ export class BrowserPlannerApi {
         const trip = await this.repository.requireTrip(job.trip_id);
         if (trip.revision !== job.trip_revision) { job.status = "paused"; job.pause_reason = "changes"; break; }
         if (stopping()) break;
-        if (trip.result?.optimization_complete && trip.result.trip_revision === trip.revision && trip.result.snapshot_revision === trip.snapshot?.revision) { job.status = "complete"; break; }
+        if (trip.result?.optimization_complete && trip.result.trip_revision === trip.revision && trip.result.snapshot_revision === trip.snapshot?.revision
+          && (!trip.spec.exclude_unpriced_flights || trip.result.flight_price_revision === 2)) { job.status = "complete"; break; }
         const result = await this.calculator.calculate(job.trip_id, { expand: true, unlimited: true });
         job.batches++; job.expanded_labels = result.expanded_labels;
         const checkpoint = await this.repository.checkpoint(job.trip_id);
@@ -146,26 +157,29 @@ export class BrowserPlannerApi {
         return structuredClone(job);
       }
     }
-    if (collection === "searches" && id && method === "GET") {
-      const job = await this.repository.get<Job>("jobs", id);
-      if (!job) throw new PlannerError("Search not found.", 404);
-      return job;
+    if (collection === "searches" && id) {
+      if (method === "GET") return this.discovery.status(id);
+      if (method === "POST" && action === "cancel") return this.discovery.cancel(id);
+      if (method === "POST" && action === "continue") {
+        const job = await this.discovery.status(id);
+        return this.discovery.start(job.trip_id, body.budget === undefined ? 100 : parseInteger(body.budget), id, body.minutes == null ? null : parseFiniteNumber(body.minutes));
+      }
     }
-    if (collection === "searches" || collection === "trips" && action === "searches") throw new PlannerError("Live provider search is not connected in this native preview yet. Import a browser backup to calculate saved trips.", 503);
     if (collection === "trips") {
       if (!id && method === "GET") return { trips: await this.repository.summaries() };
       if (!id && method === "POST") return this.repository.createTrip(raw);
       if (id && !action) {
         if (method === "GET") return this.readTrip(id);
         if (method === "DELETE") { await this.repository.deleteTrip(id); return { deleted: true }; }
-        if (method === "PUT") { await this.stopForEdit(id); await this.repository.updateSpec(id, body.spec, expectedRevision(body.expected_revision)); return this.readTrip(id); }
+        if (method === "PUT") { await this.stopForEdit(id); await this.discovery.change(id, () => this.repository.updateSpec(id, body.spec, expectedRevision(body.expected_revision)), false); return this.readTrip(id); }
       }
       if (method === "POST" && action === "duplicate") return this.repository.duplicateTrip(id);
+      if (method === "POST" && action === "searches") return this.discovery.start(id, body.budget === undefined ? 100 : parseInteger(body.budget), undefined, body.minutes == null ? null : parseFiniteNumber(body.minutes));
       if (method === "POST" && action === "optimize") {
         for (const flag of ["expand", "include_dominated"] as const) if (body[flag] !== undefined && typeof body[flag] !== "boolean") throw new PlannerError("Invalid calculation flag.");
         const options: CalculationOptions = { expand: body.expand as boolean | undefined, include_dominated: body.include_dominated as boolean | undefined,
           minutes: body.minutes == null ? null : parseFiniteNumber(body.minutes) };
-        return this.calculator.calculate(id, options);
+        return this.calculate(id, options);
       }
       if (method === "POST" && action === "optimizations") return this.startContinuous(id);
       if (method === "POST" && action === "apply") { const changes = parseApplyChanges(body), catalog = await this.airports(); return this.applied(id, trip => applyMissingInfo(trip, changes, catalog)); }

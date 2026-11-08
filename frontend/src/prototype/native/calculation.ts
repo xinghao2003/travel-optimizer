@@ -4,10 +4,12 @@ import { completeResult, prepareSolverInput } from "./preparation";
 import type { PreparationOptions } from "./preparation";
 import { PlannerRepository } from "./repository";
 import type { SearchState, SolverInput, SolverResult } from "./types";
+import type { BundleCandidate } from "./search-state";
 import { PlannerError } from "./edits";
 
 export type CalculationOptions = PreparationOptions & { minutes?: number | null; deadline?: number };
-type Active = { stop(): void; includeDominated: boolean; promise: Promise<Result> };
+export type CalculationResult = Result & { bundle_candidates: BundleCandidate[] };
+type Active = { stop(): void; includeDominated: boolean; promise: Promise<CalculationResult> };
 type Reply = { result: SolverResult; checkpoint: SearchState };
 class WorkerSolver {
   private worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
@@ -45,7 +47,7 @@ export class BrowserCalculator {
     active.stop();
     return active.promise;
   }
-  async calculate(id: string, options: CalculationOptions = {}): Promise<Result> {
+  async calculate(id: string, options: CalculationOptions = {}): Promise<CalculationResult> {
     const prior = this.active.get(id);
     if (prior) {
       if (!options.expand && (!options.include_dominated || prior.includeDominated)) return prior.promise;
@@ -58,7 +60,7 @@ export class BrowserCalculator {
     this.active.set(id, active);
     return active.promise;
   }
-  private async run(id: string, options: CalculationOptions, stopped: () => boolean): Promise<Result> {
+  private async run(id: string, options: CalculationOptions, stopped: () => boolean): Promise<CalculationResult> {
     if (options.minutes != null && (!Number.isFinite(options.minutes) || options.minutes <= 0 || options.minutes > 1440)) throw new PlannerError("Choose a calculation round longer than 0 and no more than 1440 minutes.");
     const deadline = options.deadline ?? (options.minutes == null ? Infinity : performance.now() + options.minutes * 60_000);
     const [trip, rules, checkpoint] = await Promise.all([this.repository.requireTrip(id), this.repository.list<PricingRule>("rules"), this.repository.checkpoint(id)]);
@@ -77,8 +79,9 @@ export class BrowserCalculator {
         expanded = state.expanded - roundStart;
         if (input.expansion_budget == null) delete reply.result.safety_limit_reached;
         else reply.result.safety_limit_reached = reply.result.remaining_labels > 0 && expanded >= input.expansion_budget;
-        const result = completeResult(reply.result, prepared.snapshot, trip);
-        const saved = await this.repository.saveCalculation(id, trip.revision, sourceRevision, prepared.snapshot, result, state);
+        const result = completeResult(reply.result, prepared.snapshot, trip) as CalculationResult;
+        const { bundle_candidates: _candidates, ...persisted } = result;
+        const saved = await this.repository.saveCalculation(id, trip.revision, sourceRevision, prepared.snapshot, persisted, state);
         if (!saved) return result; // Its revision keeps the caller from accepting stale results.
         if (trip.snapshot) sourceRevision = prepared.snapshot.revision;
         this.updated(id, result);

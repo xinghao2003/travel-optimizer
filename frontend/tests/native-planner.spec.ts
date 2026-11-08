@@ -110,7 +110,14 @@ test("production static Planner restores and edits a saved trip without a planne
     { schema_version: 1, collection: "trips", id: sample.trip.id, updated: 1, payload: sample.trip },
     ...sample.rules.map((rule: { id: string }) => ({ schema_version: 1, collection: "rules", id: rule.id, updated: 1, payload: rule }))] };
   const forbidden: string[] = [], errors: string[] = [];
-  page.on("request", request => { if (/\/api\/|pyodide|jsdelivr|browser-python|\/src\//.test(request.url())) forbidden.push(request.url()); });
+  let providerCalls = 0;
+  page.on("request", request => { if (/\/api\/(?:v2|data)|pyodide|jsdelivr|browser-python|\/src\//.test(request.url())) forbidden.push(request.url()); });
+  await page.route("**/api/flights", route => { providerCalls++; return route.fulfill({ json: { status: "empty", options: [], search_url: "https://www.google.com/travel/flights" } }); });
+  await page.route("**/table/v1/driving/**", route => {
+    const count = new URL(route.request().url()).pathname.split("/").pop()!.split(";").length;
+    return route.fulfill({ json: { code: "Ok", distances: Array.from({ length: count }, (_, i) => Array.from({ length: count }, (_, j) => i === j ? 0 : 10000)),
+      durations: Array.from({ length: count }, (_, i) => Array.from({ length: count }, (_, j) => i === j ? 0 : 1200)) } });
+  });
   page.on("pageerror", error => errors.push(error.message));
   await page.goto(new URL("/native.html", process.env.POC_STATIC_URL!).href);
   await page.getByLabel("More actions").click();
@@ -133,5 +140,16 @@ test("production static Planner restores and edits a saved trip without a planne
   const trip = saved.records.find((record: { collection: string; id: string }) => record.collection === "trips" && record.id === sample.trip.id).payload;
   expect(trip.spec.name).toBe("Static artifact trip");
   expect(trip.result.routes.length).toBe(sample.expected_result.routes.length);
+  await page.getByLabel("More actions").click();
+  await page.getByRole("button", { name: "Edit trip", exact: true }).click();
+  await page.getByRole("button", { name: "Start a new search", exact: true }).click();
+  await expect.poll(() => providerCalls).toBeGreaterThan(0);
+  await page.getByLabel("More actions").click();
+  await expect(page.getByRole("button", { name: /Download browser backup/ })).toBeEnabled();
+  const afterSearch = page.waitForEvent("download");
+  await page.getByRole("button", { name: /Download browser backup/ }).click();
+  const afterPath = await (await afterSearch).path(), searched = JSON.parse(await readFile(afterPath!, "utf8"));
+  const job = searched.records.find((record: { collection: string }) => record.collection === "jobs").payload;
+  expect(job.status).toBe("complete"); expect(job.cursor).toBe(job.queue.length); expect(job.requests).toBeGreaterThan(0);
   expect(forbidden).toEqual([]); expect(errors).toEqual([]);
 });

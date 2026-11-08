@@ -409,6 +409,7 @@ class DiscoveryManager:
                     break
                 previous = trip.get("result") or {}
                 if (previous.get("optimization_complete") and previous.get("trip_revision") == trip["revision"]
+                        and (not trip["spec"].get("exclude_unpriced_flights") or previous.get("flight_price_revision") == 2)
                         and previous.get("snapshot_revision") == trip["snapshot"].get("revision")):
                     job["status"] = "complete"
                     break

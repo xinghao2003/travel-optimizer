@@ -242,11 +242,15 @@ def price_path(path: list[Movement], offers: list[FareOffer], spec: TripSpec,
                 if mask & (1 << i):
                     by_bit[i].append(option)
         full = (1 << len(keys))-1
+        # If unpriced flights are excluded, eligibility takes precedence over
+        # the lower-bound tie between covers whose unrelated costs are unknown.
+        flight_mask = sum(1 << indexes[id] for id, (m, charge) in components.items()
+                          if spec.exclude_unpriced_flights and charge is None and m.mode == "flight")
         memo = {}
 
         def cover(mask):
             if mask == full:
-                return 0, 0, ()
+                return 0, 0, (), 0
             known = memo.get(mask)
             if known is not None:
                 return known
@@ -255,15 +259,19 @@ def price_path(path: list[Movement], offers: list[FareOffer], spec: TripSpec,
             for covered, offer, lo, hi in by_bit[bit]:
                 if mask & covered:
                     continue
-                lower, upper, selected = cover(mask | covered)
-                candidates.append((lo+lower, hi+upper, (offer.id, *selected)))
-            known = memo[mask] = min(candidates, key=_cover_key)
+                lower, upper, selected, unpriced = cover(mask | covered)
+                unpriced += (covered & flight_mask).bit_count() if hi == INF else 0
+                candidates.append((lo+lower, hi+upper, (offer.id, *selected), unpriced))
+            known = memo[mask] = min(candidates, key=lambda item: (item[3], *_cover_key(item)))
             return known
 
-        lower, upper, selected = cover(0)
+        lower, upper, selected, _ = cover(0)
         chosen_ids = set(selected)
         chosen = [o for _, o, _, _ in choices if o.id in chosen_ids]
         uncertain = {o.id for _, o, lo, hi in choices if lo != hi}
+    if spec.exclude_unpriced_flights:
+        covered = {id for offer in chosen if _amount(offer, spec)[1] != INF for id in offer.movement_ids}
+        diagnostics = [d for d in diagnostics if d["component_id"] not in covered]
     unknown = tuple(sorted({d["component_id"] for d in diagnostics} | uncertain))
     return {"low_cents": lower, "high_cents": upper, "total_cost_myr": lower/100 if lower == upper else None,
             "cost_low_myr": lower/100, "cost_high_myr": upper/100 if upper != INF else None,
@@ -464,6 +472,8 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
         signature_inputs = (spec.model_dump(mode="json"), [m.model_dump(mode="json") for m in movements],
                             [o.model_dump(mode="json") for o in offers],
                             [r.model_dump(mode="json") for r in rules], finish_at_home)
+        if spec.exclude_unpriced_flights:
+            signature_inputs += ("flight-cover-v2",)
         signature = stable_id(CHECKPOINT_VERSION, *signature_inputs)
         if isinstance(checkpoint.queue, deque):
             legacy_signature = stable_id(1, *signature_inputs)
@@ -928,6 +938,8 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
             "optimality_scope": "Retrieved schedules, fare offers, and road departures at readiness / connection / return-boundary events"}
     if include_dominated:
         response["dominated_routes"] = [r for r in results if r["budget_status"] != "over" and r["id"] not in frontier_ids]
+    if spec.exclude_unpriced_flights:
+        response["flight_price_revision"] = 2
     if expansion_budget is not None:
         response["safety_limit_reached"] = bool(queue) and expanded - round_start_expanded >= expansion_budget
     return response

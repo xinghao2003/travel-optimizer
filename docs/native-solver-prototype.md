@@ -9,7 +9,9 @@ Correctness and feature parity govern migration acceptance; RAM and timing
 measurements below are informational.
 
 The worktree includes local and remote main **9571a88** through merge
-**b3705e6**. Python `planner_optimizer.py` is unchanged from that main commit.
+**b3705e6**. Both implementations now also correct the priced-bundle/unknown-access
+case described in [the native preview](native-planner.md); Python remains an
+independent reference implementation with its own regression test.
 The native port includes reusable journey-price scopes, fair branch scheduling,
 early flight-price eligibility, and relative per-call expansion budgets.
 
@@ -91,7 +93,7 @@ absolute times should not be treated as universal. Browser memory readings are
 not unique physical memory or a peak-heap measurement. Mobile suitability is
 not established for either implementation by these results.
 
-The production native worker is **219,179 bytes minified**, or **69,484 bytes
+The earlier native worker snapshot was **219,179 bytes minified**, or **69,484 bytes
 with gzip**, including its timezone, decimal, and hashing dependencies. It
 avoids the roughly 16 MB of uncompressed Pyodide runtime/package asset files.
 These are solver-asset sizes, not complete application downloads; actual
@@ -99,19 +101,20 @@ network transfer depends on HTTP compression and caching.
 
 ## Current validation at 9571a88
 
-The native solver matched **84 captured solver calls, 20 direct pricing calls,
+The native solver matched **88 captured solver calls, 21 direct pricing calls,
 and 200 deterministic generated cases**. Native structured-clone checkpoint
 continuation, relative budgets, and changed-input/version invalidation passed.
 Old experimental native checkpoints restart under version 2; they are not
-migrated from the old stack representation. The full worktree passed **170
-backend tests, fifteen browser workflow tests** with the optional private SQLite
-migration replay enabled (fourteen public tests by default), and the prototype production
-build. Existing SQLite ResourceWarnings remain in passing persistence tests.
+migrated from the old stack representation. The flight-price correction also
+invalidates older filtered checkpoints using a pricing-revision signature tag.
+The full worktree passed **173 backend tests** and the native/static checks
+recorded in [the migration plan](static-migration-plan.md). Existing SQLite
+ResourceWarnings remain in passing persistence tests.
 
 ## Validation and reproduction
 
-`tools/export_solver_comparison.py` executes 54 existing tests, captures 84
-solver calls and 20 direct pricing calls, and adds 200 deterministic generated
+`tools/export_solver_comparison.py` executes 57 existing tests, captures 88
+solver calls and 21 direct pricing calls, and adds 200 deterministic generated
 trips across one to four cities, timezones including DST, visit order, budgets,
 fare uncertainty, bundles, unpriced-flight exclusions, and partial budgets.
 Resumed calls replay the same prefix before comparing the next call, preserving
@@ -138,7 +141,7 @@ shared-graph cleanup cases that remove trip-specific airport overlays. Retrieval
 times are explicit in references; provider requests are mocked or absent.
 
 `tools/export_contract_comparison.py` validates model inputs through current
-Python/Pydantic and regenerates 11,964 native comparisons, including 81 rejected
+Python/Pydantic and regenerates 11,983 native comparisons, including 81 rejected
 inputs. It covers all captured solver inputs, complete default values, unknown
 fields, model constraints, numeric coercions, offset-aware timestamps, Unix
 seconds/milliseconds, journey scopes, and contract-version rejection. The native
@@ -153,8 +156,8 @@ results, cache pruning, portable backups, and read-only SQLite migration. The
 real native calculation service persists and resumes worker batches, honors
 per-call expansion budgets, stops without dropping its current frontier, and
 can promote a previously weaker route after a fare correction. These services
-are described in [browser storage](browser-storage.md); the full Planner
-interface still needs its browser API adapter.
+are described in [browser storage](browser-storage.md). The full Planner's native
+adapter and discovery coordinator are connected at `/native.html`.
 
 `tools/export_preparation_comparison.py` replays 51 public saved graphs through
 the real Python recalculation path. The browser compares prepared inputs,
@@ -162,7 +165,7 @@ snapshots, complete/partial results, airport catalog metadata, Missing info
 metadata, and discovery keys. It covers transfer alternatives and airport
 changes, manual overrides, stale quotes, timetable buffers, disabled fallback,
 intercity road regeneration, own/rental cars, empty trips, and saved-trip imports.
-Another 284 discovery keys and explicit float-hash edge cases must match.
+Another 288 discovery keys and explicit float-hash edge cases must match.
 
 The largest current saved trip was also replayed without provider calls using
 read-only SQLite. Its 1,653 prepared movements, 1,649 effective offers, 14 routes,

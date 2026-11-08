@@ -51,7 +51,7 @@ export function solveNative(input: SolverInput, previous?: SearchState, seconds 
   const movements = [...input.movements.filter(movement => movement.source !== SUPPLIED).map(normalizeJourney), ...additions.movements];
   const offers = [...additions.offers, ...input.offers.map(normalizeFare)], rules = input.rules;
   const finishAtHome = input.finish_at_home ?? true, limit = input.label_limit ?? null;
-  const signature = fingerprint([2, spec, movements.map(journey => journey.raw), offers, rules, finishAtHome]);
+  const signature = fingerprint([2, spec, movements.map(journey => journey.raw), offers, rules, finishAtHome, ...(spec.exclude_unpriced_flights ? ["flight-cover-v2"] : [])]);
   const start = at(spec.start_date, spec.home_departure_earliest ?? "00:00", spec.home.timezone);
   const end = spec.home_arrival_latest != null ? at(spec.end_date, spec.home_arrival_latest, spec.home.timezone) : at(addDate(spec.end_date, 1), "00:00", spec.home.timezone) - 1;
   const lowerTime = timeKey(spec.departure_start), upperTime = timeKey(spec.departure_end);
@@ -334,5 +334,6 @@ function serialize(input: SolverInput, spec: Spec, state: SearchState, places: M
     label_limit: input.label_limit ?? null, snapshot_revision: input.snapshot_revision ?? 0, trip_revision: input.trip_revision ?? 0,
     optimality_scope: "Retrieved schedules, fare offers, and road departures at readiness / connection / return-boundary events" };
   if (input.include_dominated) result.dominated_routes = routes.filter(route => route.budget_status !== "over" && !frontierIds.has(route.id));
+  if (spec.exclude_unpriced_flights) Object.assign(result, { flight_price_revision: 2 });
   return result;
 }

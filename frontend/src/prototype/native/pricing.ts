@@ -121,23 +121,32 @@ export function pricePath(path: Journey[], offers: Fare[], spec: Spec, rules: Ru
       const choice: Covered = { ...amount(offer, spec), mask }; choices.push(choice);
       for (let i = 0; i < keys.length; i++) if (mask & 1n << BigInt(i)) byBit[i].push(choice);
     }
-    const full = (1n << BigInt(keys.length)) - 1n, memo = new Map<bigint, [number, number, string[]]>();
-    function cover(mask: bigint): [number, number, string[]] {
-      if (mask === full) return [0, 0, []];
+    const full = (1n << BigInt(keys.length)) - 1n;
+    let flightMask = 0n;
+    if (spec.exclude_unpriced_flights) for (const [id, [journey, charge]] of components) if (!charge && journey.raw.mode === "flight") flightMask |= 1n << BigInt(indexes.get(id)!);
+    const memo = new Map<bigint, [number, number, string[], number]>();
+    function cover(mask: bigint): [number, number, string[], number] {
+      if (mask === full) return [0, 0, [], 0];
       const known = memo.get(mask); if (known) return known;
       let bit = 0; while (mask & 1n << BigInt(bit)) bit++;
-      let best: [number, number, string[]] | undefined;
+      let best: [number, number, string[], number] | undefined;
       for (const choice of byBit[bit]) {
         if (mask & choice.mask) continue;
         const rest = cover(mask | choice.mask);
-        const candidate: [number, number, string[]] = [choice.low + rest[0], choice.high + rest[1], [choice.offer.id, ...rest[2]]];
-        if (!best || compare([candidate[1], candidate[0], candidate[2]], [best[1], best[0], best[2]]) < 0) best = candidate;
+        let unpriced = rest[3], bits = choice.high === Infinity ? choice.mask & flightMask : 0n;
+        while (bits) { unpriced++; bits &= bits - 1n; }
+        const candidate: [number, number, string[], number] = [choice.low + rest[0], choice.high + rest[1], [choice.offer.id, ...rest[2]], unpriced];
+        if (!best || compare([candidate[3], candidate[1], candidate[0], candidate[2]], [best[3], best[1], best[0], best[2]]) < 0) best = candidate;
       }
       memo.set(mask, best!); return best!;
     }
     const selection = cover(0n); lower = selection[0]; upper = selection[1];
     const ids = new Set(selection[2]); chosen = choices.filter(choice => ids.has(choice.offer.id)).map(choice => choice.offer);
     uncertain = new Set(choices.filter(choice => choice.low !== choice.high).map(choice => choice.offer.id));
+  }
+  if (spec.exclude_unpriced_flights) {
+    const covered = new Set(chosen.filter(offer => amount(offer, spec).high !== Infinity).flatMap(offer => offer.movement_ids));
+    for (let i = diagnostics.length - 1; i >= 0; i--) if (covered.has(diagnostics[i].component_id)) diagnostics.splice(i, 1);
   }
   return { low_cents: lower, high_cents: upper, total_cost_myr: lower === upper ? lower / 100 : null, cost_low_myr: lower / 100, cost_high_myr: upper === Infinity ? null : upper / 100,
     estimated: chosen.some(offer => offer.estimated || offer.source === "rule" || offer.currency !== "MYR"), purchases: chosen,

@@ -1,5 +1,5 @@
 /** Persistent browser records, with synchronous transforms inside IDB requests. */
-import type { PricingRule, Result, SavedSummary } from "../../lib/planner";
+import type { PricingRule, Result, SavedSummary, TripSpec } from "../../lib/planner";
 import { parseRule, parseSpec } from "./contracts";
 import { discoveryKey } from "./discovery-key";
 import { PlannerError, requireMinimumStays, requireRevision } from "./edits";
@@ -7,6 +7,8 @@ import type { PlannerTrip, Snapshot } from "./preparation";
 import type { SearchState } from "./types";
 import { parseBackup } from "./backup";
 import type { PlannerBackup } from "./backup";
+import type { SearchRecord } from "./search-state";
+import { shareableSnapshot } from "./preparation";
 
 export const DATABASE_VERSION = 1;
 export const CHECKPOINT_VERSION = 2;
@@ -178,6 +180,45 @@ export class PlannerRepository {
   }
   checkpoint(tripId: string): Promise<SearchState | undefined> {
     return this.transaction(["checkpoints"], "readonly", c => c.read(c.tx.objectStore("checkpoints").get(tripId), (value: Checkpoint | undefined) => c.result(value?.version === CHECKPOINT_VERSION ? value.state : undefined)));
+  }
+  saveDiscovery(job: SearchRecord, spec: TripSpec): Promise<boolean> {
+    return this.transaction(["records"], "readwrite", c => {
+      const records = c.tx.objectStore("records");
+      c.read(records.get(["trips", job.trip_id]), value => {
+        const trip = payload<PlannerTrip>(value);
+        if (!trip) { job.status = "cancelled"; records.put(row("jobs", job.id, job)); c.result(false); return; }
+        const manual = trip.snapshot?.movements.filter(m => m.source === "User-defined connection") ?? [];
+        const merged = new Map(job.snapshot.movements.map(m => [m.id, m]));
+        for (const m of manual) merged.set(m.id, m);
+        const movements = [...merged.values()];
+        if (JSON.stringify(movements) !== JSON.stringify(job.snapshot.movements)) job.snapshot.revision++;
+        job.snapshot.movements = movements;
+        job.snapshot.coverage.unresolved_movements = movements.filter(m => m.usable === false).map(m => ({ id: m.id, from_id: m.from_id, to_id: m.to_id, assumptions: m.assumptions }));
+        records.put(row("graphs", job.discovery_key, shareableSnapshot(job.snapshot, spec)));
+        const matches = discoveryKey(parseSpec(trip.spec)) === job.discovery_key;
+        if (matches) { trip.snapshot = job.snapshot; records.put(row("trips", trip.id, trip)); }
+        else job.status = "superseded";
+        records.put(row("jobs", job.id, job)); c.result(matches);
+      });
+    });
+  }
+  saveDiscoveryCoverage(job: SearchRecord): Promise<void> {
+    return this.transaction(["records"], "readwrite", c => {
+      const records = c.tx.objectStore("records");
+      c.read(records.get(["graphs", job.discovery_key]), value => {
+        const graph = payload<Snapshot>(value);
+        if (graph) { graph.coverage = { ...job.snapshot.coverage, unresolved_movements: graph.coverage.unresolved_movements }; records.put(row("graphs", job.discovery_key, graph)); }
+      });
+      c.read(records.get(["trips", job.trip_id]), value => {
+        const trip = payload<PlannerTrip>(value);
+        if (trip?.snapshot && discoveryKey(parseSpec(trip.spec)) === job.discovery_key) {
+          trip.snapshot.coverage = { ...trip.snapshot.coverage, ...Object.fromEntries(Object.entries(job.snapshot.coverage).filter(([key]) => !["unresolved_movements", "airport_connections_required"].includes(key))) };
+          if (trip.result) trip.result.coverage = trip.snapshot.coverage;
+          records.put(row("trips", trip.id, trip));
+        }
+        records.put(row("jobs", job.id, job));
+      });
+    });
   }
   saveCalculation(id: string, revision: number, sourceSnapshotRevision: number, snapshot: Snapshot, result: Result, state?: SearchState): Promise<boolean> {
     return this.transaction(["records", "checkpoints"], "readwrite", c => {

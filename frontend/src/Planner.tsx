@@ -149,6 +149,7 @@ export default function Planner({ storageActions, externalRevision = 0 }: { stor
     setError(null); setResult(null); setJob(null); setOptimization(null); setSelectedId(null); setComparisonId(null); setPanel("options");
     try {
     const record = await api<SavedTrip>(`/trips/${id}`);
+    if (record.spec.exclude_unpriced_flights && record.result && record.result.flight_price_revision !== 2) record.result.trip_revision = -1;
     if (token !== session.current) return;
     accept(record, true); setSaveStatus("Saved");
     // Settings and saved options are available before status/recalculation finish.

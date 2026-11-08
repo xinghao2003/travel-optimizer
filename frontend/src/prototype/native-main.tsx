@@ -24,6 +24,7 @@ function BackupDialog({ onClose, onImported }: { onClose(): void; onImported(): 
     if (!file) return;
     setBusy(true); setError("");
     try {
+      await service.ready();
       await service.repository.importBackup(JSON.parse(await file.text()), replace);
       const trips = await service.repository.summaries(), selected = await service.repository.get<string>("meta", "selected-trip");
       const id = trips.some(t => t.id === selected) ? selected : trips[0]?.id;

@@ -138,10 +138,11 @@ another local port. Screenshots and test artifacts are under ignored
 
 Completed checks in this experiment:
 
-- 143 backend tests passed after syncing main, including the adapter/function checks. Existing
+- 170 backend tests passed after syncing main `9571a88`, including the adapter/function checks. Existing
   SQLite ResourceWarnings remain in passing persistence tests.
-- Seven Chrome workflow tests passed, covering both solvers, the actual Pyodide
-  worker, mocked providers, stop/reload/resume, and native checkpoint continuation.
+- Eight Chrome tests passed, covering both solvers, the actual Pyodide
+  worker, mocked providers, stop/reload/resume, native checkpoint continuation,
+  and 188 provider/rail normalization comparisons against Python.
 - TypeScript and the production prototype build passed.
 - A single live KUL → PEN query for 2026-12-07 through the local flight function
   returned 19 validated options in about 1.3 seconds. This is one transport smoke

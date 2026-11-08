@@ -17,6 +17,10 @@ No deployment is authorized as part of this checklist.
 - Native TypeScript solver and independent Python/Pyodide reference worker.
 - Native fair scheduling, relative per-call expansion budgets, flight-price
   eligibility and new response counters match current Python.
+- Native flight/transit normalization and opt-in rail sampling/projection are
+  implemented as pure functions. They match 188 Python reference cases,
+  including ambiguous fares, airport changes, and DST projection rejection.
+  Their connection to the live-search prototype is still pending.
 - Matching responses on 84 captured solver calls, 20 pricing calls, and 200
   deterministic generated cases. The previous large saved-trip comparison
   predates this sync and has not been repeated against the new scheduler.
@@ -25,7 +29,7 @@ No deployment is authorized as part of this checklist.
   durable version-1 migration remains available in the reference backend.
 - Local prototype with browser batching, provider-response caching, one active
   saved session, and a bounded stateless one-way flight function.
-- 170 backend tests, seven browser tests, and the prototype production build passed.
+- 170 backend tests, eight browser tests, and the prototype production build passed.
 
 The native solver currently runs through the comparison page. The live-search
 prototype still uses Python/Pyodide for discovery planning, result normalization,

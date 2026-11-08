@@ -1,5 +1,5 @@
-import type { Charge, Movement, Offer, PricingRule, Route, TripSpec } from "../../lib/planner";
-import { micros, iso } from "./time";
+import type { Charge, Movement, Offer, PricingRule, Route, Segment, TripSpec } from "../../lib/planner";
+import { micros, iso, modelTimestamp } from "./time";
 
 export type Spec = TripSpec;
 export type Fare = Offer;
@@ -25,6 +25,12 @@ export function normalizeFare(offer: Partial<Fare>): Fare {
 export function normalizeCharge(charge: Charge): Charge {
   return Object.assign({ mode: "taxi", distance_km: null, low: null, high: null, currency: "MYR", source: "unknown", from_id: null, to_id: null, country_code: null }, charge);
 }
+export function normalizeSegment(segment: Pick<Segment, "mode" | "from_name" | "to_name"> & Partial<Segment>): Segment {
+  return { departure: null, arrival: null, from_id: null, to_id: null, from_timezone: null, to_timezone: null,
+    operator: null, service: null, source: null, duration_minutes: null, assumed: false, interline_with_previous: false, ...segment,
+    ...(segment.departure != null ? { departure: modelTimestamp(segment.departure) } : {}),
+    ...(segment.arrival != null ? { arrival: modelTimestamp(segment.arrival) } : {}) };
+}
 export function normalizeJourney(movement: Movement): Journey {
   const dep = movement.departure === null ? null : micros(movement.departure);
   const arr = movement.arrival === null ? null : micros(movement.arrival);
@@ -33,8 +39,6 @@ export function normalizeJourney(movement: Movement): Journey {
     departure: dep === null ? null : iso(dep, true), arrival: arr === null ? null : iso(arr, true),
     duration_minutes: dep !== null && arr !== null ? (arr - dep) / 60_000_000 : movement.duration_minutes }) as Movement;
   raw.charges = raw.charges.map(normalizeCharge);
-  raw.segments = raw.segments.map(segment => Object.assign({ departure: null, arrival: null, from_id: null, to_id: null,
-    from_timezone: null, to_timezone: null, operator: null, service: null, source: null, duration_minutes: null,
-    assumed: false, interline_with_previous: false }, segment));
+  raw.segments = raw.segments.map(normalizeSegment);
   return { raw, dep, arr };
 }

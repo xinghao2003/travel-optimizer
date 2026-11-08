@@ -6,6 +6,14 @@ import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 export const SECOND = 1_000_000, MINUTE = 60 * SECOND, HOUR = 60 * MINUTE, DAY = 24 * HOUR;
 Decimal.set({ precision: 80 });
 export const micros = (value: string) => Number(Temporal.Instant.from(value).epochNanoseconds / 1000n);
+/** Pydantic datetime JSON preserves a segment's offset and uses Z for UTC. */
+export function modelTimestamp(value: string): string {
+  const offset = value.match(/(Z|[+-]\d{2}:?\d{2})$/i)?.[0];
+  if (!offset) return Temporal.PlainDateTime.from(value).toString({ fractionalSecondDigits: 6 }).replace(/\.000000$/, "");
+  const zone = offset.toUpperCase() === "Z" ? "+00:00" : offset.replace(/^([+-]\d{2})(\d{2})$/, "$1:$2");
+  const local = Temporal.Instant.from(value).toZonedDateTimeISO(zone).toPlainDateTime().toString({ fractionalSecondDigits: 6 }).replace(/\.000000$/, "");
+  return local + (zone === "+00:00" || zone === "-00:00" ? "Z" : zone);
+}
 export const duration = (value: number) => new Decimal(value).toDecimalPlaces(0, Decimal.ROUND_HALF_EVEN).toNumber();
 export const cents = (value: number) => new Decimal(String(value)).mul(100).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toNumber();
 
@@ -31,6 +39,13 @@ export const localDate = (value: number, zone: string) => instant(value).toZoned
 export const localTime = (value: number, zone: string) => instant(value).toZonedDateTimeISO(zone).toPlainTime().toString({ fractionalSecondDigits: 6 });
 export const timeKey = (value: string) => Temporal.PlainTime.from(value).toString({ fractionalSecondDigits: 6 });
 export const addDate = (day: string, days: number) => Temporal.PlainDate.from(day).add({ days }).toString();
+export const daysBetween = (from: string, to: string) => Temporal.PlainDate.from(from).until(Temporal.PlainDate.from(to)).days;
+export const weekday = (day: string) => Temporal.PlainDate.from(day).dayOfWeek - 1;
+export function shiftWallDate(value: number, day: string, zone: string): number {
+  const local = Temporal.PlainDate.from(day).toPlainDateTime(instant(value).toZonedDateTimeISO(zone).toPlainTime());
+  // Rail projections reject both ambiguous and nonexistent local times.
+  return Number(local.toZonedDateTime(zone, { disambiguation: "reject" }).epochNanoseconds / 1000n);
+}
 export function at(day: string, time: string, zone: string) {
   const local = Temporal.PlainDate.from(day).toPlainDateTime(Temporal.PlainTime.from(time));
   // Match zoneinfo's default fold=0, including its pre-transition offset in gaps.

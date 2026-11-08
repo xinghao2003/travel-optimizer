@@ -99,7 +99,7 @@ and 200 deterministic generated cases**. Native structured-clone checkpoint
 continuation, relative budgets, and changed-input/version invalidation passed.
 Old experimental native checkpoints restart under version 2; they are not
 migrated from the old stack representation. The full worktree passed **170
-backend tests, seven browser workflow tests**, and the prototype production
+backend tests, eight browser workflow tests**, and the prototype production
 build. Existing SQLite ResourceWarnings remain in passing persistence tests.
 
 ## Validation and reproduction
@@ -116,6 +116,15 @@ for an outdated Python implementation.
 Browser tests compare every captured response, test native checkpoint
 structured-clone/resumption and invalidation, and verify that TypeScript runs
 without loading Python before both independent workers are compared.
+
+`tools/export_provider_comparison.py` runs 98 existing Python tests and captures
+the provider normalization and rail sampling/projection boundaries. It also
+adds explicit incomplete/ambiguous GTFS fare cases. The native provider test
+compares 188 responses, including all schedule segments, generated IDs, airport
+charges, usable flags, assumptions, and fare products. These pure native
+functions are not yet connected to live search; airport-transfer alternatives,
+complete solver-input preparation, orchestration, and storage remain in the
+static migration plan.
 
 To export a private saved trip's exact prepared solver inputs, read its database
 without modifying it:

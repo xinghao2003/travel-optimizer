@@ -30,4 +30,5 @@ data/geonames/cities500.download
 /frontend/dist-poc/
 /.vercel/
 /frontend/tests/fixtures/native-solver.json
+/frontend/tests/fixtures/native-providers.json
 .vercel

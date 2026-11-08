@@ -51,12 +51,22 @@ export function at(day: string, time: string, zone: string) {
   // Match zoneinfo's default fold=0, including its pre-transition offset in gaps.
   return Number(local.toZonedDateTime(zone, { disambiguation: "compatible" }).epochNanoseconds / 1000n);
 }
-export function pythonJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(pythonJson).join(", ")}]`;
-  if (value !== null && typeof value === "object") return `{${Object.keys(value).sort().map(key => `${pythonJson(key)}: ${pythonJson((value as Record<string, unknown>)[key])}`).join(", ")}}`;
+/** Float fields stay floats even when JSON.parse has erased a trailing .0. */
+export function pythonFloat(value: number): string {
+  if (!Number.isFinite(value)) throw new Error("A model float must be finite.");
+  if (Object.is(value, -0)) return "-0.0";
+  const magnitude = Math.abs(value);
+  if (magnitude !== 0 && (magnitude < .0001 || magnitude >= 1e16)) return value.toExponential().replace(/e([+-])(\d)$/, (_, sign: string, digit: string) => `e${sign}0${digit}`);
+  return String(value) + (Number.isInteger(value) ? ".0" : "");
+}
+export function pythonJson(value: unknown, floatFields?: ReadonlySet<string>, field?: string): string {
+  if (typeof value === "number" && field !== undefined && floatFields?.has(field)) return pythonFloat(value);
+  if (Array.isArray(value)) return `[${value.map(item => pythonJson(item, floatFields)).join(", ")}]`;
+  if (value !== null && typeof value === "object") return `{${Object.keys(value).sort().map(key => `${pythonJson(key)}: ${pythonJson((value as Record<string, unknown>)[key], floatFields, key)}`).join(", ")}}`;
   return JSON.stringify(value).replace(/[\u007f-\uffff]/g, character => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
 }
 export const stableId = (...parts: unknown[]) => bytesToHex(sha256(utf8ToBytes(pythonJson(parts)))).slice(0, 24);
+export const stableModelId = (floatFields: string[], ...parts: unknown[]) => bytesToHex(sha256(utf8ToBytes(pythonJson(parts, new Set(floatFields))))).slice(0, 24);
 export const fingerprint = (value: unknown) => bytesToHex(sha256(utf8ToBytes(JSON.stringify(value))));
 export function compare(a: unknown, b: unknown): number {
   if (a === b) return 0;

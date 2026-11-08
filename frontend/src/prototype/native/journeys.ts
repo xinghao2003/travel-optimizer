@@ -3,7 +3,7 @@
  */
 import type { AirportConnection, Charge, Movement, Offer, Place, Segment, TripSpec } from "../../lib/planner";
 import { normalizeCharge, normalizeFare, normalizeJourney, normalizeSegment } from "./types";
-import { duration, iso, localDate, localTime, MINUTE, micros, round, SECOND, stableId, timeKey } from "./time";
+import { duration, iso, localDate, localTime, MINUTE, micros, round, SECOND, stableId, stableModelId, timeKey } from "./time";
 
 export type Road = { duration_minutes: number; distance_km: number | null };
 export type Roads = Record<string, Road>;
@@ -12,10 +12,10 @@ export const pairKey = (from: string | null | undefined, to: string | null | und
 export const timestamp = (value: string | number) => typeof value === "number" ? duration(value * SECOND) : micros(value);
 const modelTime = (value: number) => iso(value, true);
 
-export function flightMovement(origin: Place, dest: Place, segments: RawSegment[], spec: TripSpec, roads: Roads, connections: Map<string, AirportConnection> = new Map()): Movement {
+export function flightMovement(origin: Place, dest: Place, segments: RawSegment[], spec: TripSpec, roads: Roads, connections: Map<string, AirportConnection> = new Map(), normalizedSegments = false): Movement {
   if (!segments.length) throw new Error("A flight journey needs at least one segment.");
   const rawDeparture = timestamp(segments[0].departure!), rawArrival = timestamp(segments[segments.length - 1].arrival!);
-  const id = "flight:" + stableId(origin.id, dest.id, segments, spec.adults);
+  const id = "flight:" + (normalizedSegments ? stableModelId(["duration_minutes"], origin.id, dest.id, segments, spec.adults) : stableId(origin.id, dest.id, segments, spec.adults));
   const assumptions: string[] = [], charges: Charge[] = [], accessMinutes: number[] = [];
   let usable = true;
   for (const [kind, city, airport, reverse] of [["access", origin, segments[0].from_id, false], ["egress", dest, segments[segments.length - 1].to_id, true]] as const) {

@@ -27,15 +27,23 @@ No deployment is authorized as part of this checklist.
 - Native discovery windows, seed order, per-direction positioning policies,
   and independent round-trip task generation match 86 further Python cases.
   The combined provider/discovery corpus now contains 274 comparisons.
+- Complete native solver-input preparation now applies the full saved graph,
+  current timing, airport-change connections and transfer choices, road/vehicle
+  regeneration, manual offer precedence, effective rules, and quote freshness.
+  Missing info metadata and persisted discovery-key compatibility are included.
+- Preparation matches 51 public recalculation scenarios, 284 discovery keys,
+  and a read-only replay of the largest current saved trip: 1,653 prepared
+  movements, 1,649 offers, and 14 routes, with matching full results and metadata.
+  The comparison page now prepares saved-trip imports through this path.
 - Matching responses on 84 captured solver calls, 20 pricing calls, and 200
-  deterministic generated cases. The previous large saved-trip comparison
-  predates this sync and has not been repeated against the new scheduler.
+  deterministic generated cases. Historical performance measurements still
+  predate this sync; the current saved-trip replay checks correctness only.
 - Native structured-clone checkpoint continuation and changed-input/version
   invalidation tested. Old experimental native checkpoints restart; Python's
   durable version-1 migration remains available in the reference backend.
 - Local prototype with browser batching, provider-response caching, one active
   saved session, and a bounded stateless one-way flight function.
-- 170 backend tests, nine browser tests, and the prototype production build passed.
+- 170 backend tests, ten browser tests, and the prototype production build passed.
 
 The native solver currently runs through the comparison page. The live-search
 prototype still uses Python/Pyodide for discovery planning, result normalization,
@@ -70,6 +78,12 @@ to the Python reference require corresponding native parity checks. Work-counter
 or partial-result differences must be explained, not silently accepted.
 
 ## 2. Port complete input preparation and provider normalization
+
+The pure preparation path is implemented and checked against the real Python
+`DiscoveryManager.recalculate` path. Saved-trip imports in the comparison page
+use it; live discovery and the complete Planner interface still need integration.
+The exported global rules must accompany an imported trip to reproduce server
+pricing. A trip record alone cannot recover rules stored separately in SQLite.
 
 Port the operations surrounding `DiscoveryManager.recalculate`, not only the
 solver call. They include:

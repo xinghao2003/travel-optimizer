@@ -27,9 +27,11 @@ data/geonames/cities500.download
 
 # Isolated browser prototype build output and local Vercel settings
 /frontend/public/browser-python/
+/frontend/public/browser-data/
 /frontend/dist-poc/
 /.vercel/
 /frontend/tests/fixtures/native-solver.json
 /frontend/tests/fixtures/native-providers.json
 /frontend/tests/fixtures/native-contracts.json
+/frontend/tests/fixtures/native-preparation.json
 .vercel

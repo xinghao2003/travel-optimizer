@@ -19,8 +19,11 @@ Use **Run both solvers** for the built-in example, or import a graph exported
 from the search prototype. A full original trip record with a snapshot, or an
 explicit solver input (`spec`, `movements`, `offers`, `rules`), is also accepted.
 When comparing a prepared solver input, both workers get precisely those inputs.
-Importing an original trip is not a replacement for all original server-side
-preprocessing of airport-transfer variants and other overlays.
+Saved-trip imports now run native input preparation first: current timing,
+airport-change connections, airport-transfer alternatives, road/vehicle inputs,
+manual fare precedence, trip rules, and stale quotes. Supply separately stored
+global pricing rules in the record's `rules` field too; a trip record alone
+does not contain those rules. Both solver workers receive the prepared result.
 
 **Run TypeScript only** downloads no Pyodide runtime. The native code runs in its
 own Web Worker, independently of the Python reference. **Run Python only** uses
@@ -101,7 +104,7 @@ and 200 deterministic generated cases**. Native structured-clone checkpoint
 continuation, relative budgets, and changed-input/version invalidation passed.
 Old experimental native checkpoints restart under version 2; they are not
 migrated from the old stack representation. The full worktree passed **170
-backend tests, nine browser workflow tests**, and the prototype production
+backend tests, ten browser workflow tests**, and the prototype production
 build. Existing SQLite ResourceWarnings remain in passing persistence tests.
 
 ## Validation and reproduction
@@ -126,9 +129,8 @@ compares 274 responses, including all schedule segments, generated IDs, airport
 charges, usable flags, assumptions, fare products, date windows, seed order,
 and independent return-ticket tasks. Generated discovery inputs include four
 visits, DST boundaries, flexible/fixed dates, own-car recovery, and home time
-limits. These pure native functions are not yet connected to live search; airport-transfer alternatives,
-complete solver-input preparation, orchestration, and storage remain in the
-static migration plan.
+limits. These pure native functions are not yet connected to live search;
+orchestration and application storage remain in the static migration plan.
 
 `tools/export_contract_comparison.py` validates model inputs through current
 Python/Pydantic and regenerates 11,964 native comparisons, including 81 rejected
@@ -138,6 +140,29 @@ seconds/milliseconds, journey scopes, and contract-version rejection. The native
 worker enforces this boundary before solving; Python remains independently
 validated by `planner_models.SolverInput`. This corpus is regression evidence,
 not proof for every possible coercion or timezone database version.
+
+`tools/export_preparation_comparison.py` replays 51 public saved graphs through
+the real Python recalculation path. The browser compares prepared inputs,
+snapshots, complete/partial results, airport catalog metadata, Missing info
+metadata, and discovery keys. It covers transfer alternatives and airport
+changes, manual overrides, stale quotes, timetable buffers, disabled fallback,
+intercity road regeneration, own/rental cars, empty trips, and saved-trip imports.
+Another 284 discovery keys and explicit float-hash edge cases must match.
+
+The largest current saved trip was also replayed without provider calls using
+read-only SQLite. Its 1,653 prepared movements, 1,649 effective offers, 14 routes,
+full result, snapshot, and editing metadata matched native preparation. These
+are current correctness checks, separate from historical performance trials.
+
+To repeat that private check (output remains under ignored diagnostics):
+
+```powershell
+uv run python tools/export_saved_preparation.py --database path/to/planner.sqlite3
+$env:POC_PREPARATION_SAVED = (Resolve-Path data/diagnostics/native-comparison/saved-preparation.json).Path
+cd frontend
+npx.cmd playwright test --config playwright.poc.config.ts native-preparation.spec.ts
+Remove-Item Env:POC_PREPARATION_SAVED
+```
 
 To export a private saved trip's exact prepared solver inputs, read its database
 without modifying it:

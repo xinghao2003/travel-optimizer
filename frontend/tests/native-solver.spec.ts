@@ -86,5 +86,12 @@ test("comparison page runs native without Pyodide, then compares both independen
   await page.getByText("Inspect results", { exact: true }).click();
   await expect(page.locator("details pre")).toContainText('"expanded_labels": 10');
   await expect(page.locator("details pre")).toContainText('"safety_limit_reached": true');
+  const preparedCorpus = JSON.parse(await readFile("tests/fixtures/native-preparation.json", "utf8"));
+  const saved = preparedCorpus.cases.find((item: { expected_result: { routes: unknown[] }; trip: { airport_transfer_estimates?: unknown[] } }) => item.expected_result.routes.length && item.trip.airport_transfer_estimates?.length);
+  await page.getByLabel("Comparison input JSON").setInputFiles({ name: "saved-trip.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify({ ...saved.trip, rules: saved.rules })) });
+  await expect(page.getByText(`${saved.expected_input.movements.length} journeys`, { exact: false })).toBeVisible();
+  await page.getByRole("button", { name: "Run both solvers", exact: true }).click();
+  await expect(page.getByRole("status")).toHaveText("Comparison finished.");
+  await expect(page.getByText("Results match, including route IDs, fares, diagnostics, and search counters.")).toBeVisible();
   await page.screenshot({ path: "../data/diagnostics/native-comparison/comparison.png", fullPage: true });
 });

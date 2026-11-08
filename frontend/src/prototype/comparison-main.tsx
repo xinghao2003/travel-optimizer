@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { example } from "./example";
 import { firstDifference, SolverRunner, type Measurement } from "./comparison";
 import type { SolverInput } from "./native/types";
+import { importSolverInput } from "./native/import-input";
 import "../styles.css";
 import "./prototype.css";
 
@@ -36,12 +37,7 @@ function App() {
     if (!file) return;
     try {
       const data = JSON.parse(await file.text());
-      const raw = data.input ?? data, graph = raw.graph ?? raw.snapshot ?? raw;
-      if (!raw.spec || !Array.isArray(graph.movements) || !Array.isArray(graph.offers)) throw new Error("Import solver input or a full trip graph JSON.");
-      setInput({ schema_version: raw.schema_version, spec: raw.spec, movements: graph.movements, offers: [...graph.offers, ...(raw.graph || raw.snapshot ? raw.offers ?? [] : [])],
-        rules: [...(raw.rules ?? []), ...(raw.journey_pricing_rules ?? [])], snapshot_revision: raw.snapshot_revision ?? graph.revision ?? 0,
-        trip_revision: raw.trip_revision ?? raw.revision ?? 0, finish_at_home: raw.finish_at_home, include_dominated: raw.include_dominated,
-        label_limit: raw.label_limit, expansion_budget: raw.expansion_budget });
+      setInput(importSolverInput(data));
       setName(file.name); setResults({}); setError("");
     } catch (reason) { setError(String(reason)); }
   }

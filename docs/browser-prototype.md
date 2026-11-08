@@ -52,8 +52,10 @@ it does not load checkpoint bytes from uploaded files.
 
 The worker uses Pyodide **314.0.7**, its bundled Pydantic, and explicit `tzdata`.
 `tools/prepare_browser_poc.py` copies the shared Python modules and public airport
-coordinates into generated static assets. It runs before the prototype starts
-or builds. The browser downloads the Python runtime and dependencies from the
+coordinates into generated static assets. It also writes the native airport and
+metro catalog under `/browser-data/`. The startup script and Vercel build command
+run it automatically; run it before a standalone `build:poc` command too.
+The browser downloads the Python runtime and dependencies from the
 pinned jsDelivr distribution. First use therefore requires internet access.
 
 Solving uses short cooperative slices (150 ms requested). The worker processes
@@ -140,10 +142,11 @@ Completed checks in this experiment:
 
 - 170 backend tests passed after syncing main `9571a88`, including the adapter/function checks. Existing
   SQLite ResourceWarnings remain in passing persistence tests.
-- Nine Chrome tests passed, covering both solvers, the actual Pyodide
+- Ten Chrome tests passed, covering both solvers, the actual Pyodide
   worker, mocked providers, stop/reload/resume, native checkpoint continuation,
   274 provider/rail/discovery comparisons, and 11,964 input-model comparisons
-  against Python.
+  against Python, plus 51 complete saved-graph preparation scenarios. The largest
+  current saved-trip preparation also matched in a separate read-only replay.
 - TypeScript and the production prototype build passed.
 - A single live KUL → PEN query for 2026-12-07 through the local flight function
   returned 19 validated options in about 1.3 seconds. This is one transport smoke

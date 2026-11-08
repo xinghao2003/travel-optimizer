@@ -2,7 +2,7 @@ import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
   testDir: "tests",
-  testMatch: /(?:browser-prototype|native-solver|native-providers|native-contracts)\.spec\.ts/,
+  testMatch: /(?:browser-prototype|native-solver|native-providers|native-contracts|native-preparation)\.spec\.ts/,
   timeout: 90000,
   workers: 1,
   outputDir: "../data/diagnostics/browser-poc/test-results",

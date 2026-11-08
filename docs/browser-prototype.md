@@ -142,7 +142,7 @@ Completed checks in this experiment:
   SQLite ResourceWarnings remain in passing persistence tests.
 - Eight Chrome tests passed, covering both solvers, the actual Pyodide
   worker, mocked providers, stop/reload/resume, native checkpoint continuation,
-  and 188 provider/rail normalization comparisons against Python.
+  and 274 provider/rail/discovery comparisons against Python.
 - TypeScript and the production prototype build passed.
 - A single live KUL → PEN query for 2026-12-07 through the local flight function
   returned 19 validated options in about 1.3 seconds. This is one transport smoke

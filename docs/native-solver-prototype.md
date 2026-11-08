@@ -120,9 +120,11 @@ without loading Python before both independent workers are compared.
 `tools/export_provider_comparison.py` runs 98 existing Python tests and captures
 the provider normalization and rail sampling/projection boundaries. It also
 adds explicit incomplete/ambiguous GTFS fare cases. The native provider test
-compares 188 responses, including all schedule segments, generated IDs, airport
-charges, usable flags, assumptions, and fare products. These pure native
-functions are not yet connected to live search; airport-transfer alternatives,
+compares 274 responses, including all schedule segments, generated IDs, airport
+charges, usable flags, assumptions, fare products, date windows, seed order,
+and independent return-ticket tasks. Generated discovery inputs include four
+visits, DST boundaries, flexible/fixed dates, own-car recovery, and home time
+limits. These pure native functions are not yet connected to live search; airport-transfer alternatives,
 complete solver-input preparation, orchestration, and storage remain in the
 static migration plan.
 

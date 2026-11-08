@@ -21,6 +21,9 @@ No deployment is authorized as part of this checklist.
   implemented as pure functions. They match 188 Python reference cases,
   including ambiguous fares, airport changes, and DST projection rejection.
   Their connection to the live-search prototype is still pending.
+- Native discovery windows, seed order, per-direction positioning policies,
+  and independent round-trip task generation match 86 further Python cases.
+  The combined provider/discovery corpus now contains 274 comparisons.
 - Matching responses on 84 captured solver calls, 20 pricing calls, and 200
   deterministic generated cases. The previous large saved-trip comparison
   predates this sync and has not been repeated against the new scheduler.

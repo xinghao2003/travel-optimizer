@@ -48,7 +48,7 @@ export type OptimizationJob = {
 };
 
 export type PlannerTransport = (path: string, method: string, body?: unknown) => Promise<unknown>;
-export type PlannerConfig = { transit_routing_configured: boolean };
+export type PlannerConfig = { transit_routing_configured: boolean; contact_url?: string };
 let browserTransport: PlannerTransport | undefined;
 let browserConfig: (() => Promise<PlannerConfig>) | undefined;
 export function installPlannerTransport(transport: PlannerTransport, config: () => Promise<PlannerConfig>) {

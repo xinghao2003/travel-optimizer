@@ -56,7 +56,10 @@ export class BrowserPlannerApi {
       }
     })();
   }
-  async config(): Promise<PlannerConfig> { return { transit_routing_configured: (await this.providers.settings()).transit_enabled }; }
+  async config(): Promise<PlannerConfig> {
+    const settings = await this.providers.settings();
+    return { transit_routing_configured: settings.transit_enabled, contact_url: settings.contact_url };
+  }
   async readTrip(id: string) {
     const trip = await this.repository.requireTrip(id);
     if (trip.result) {

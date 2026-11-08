@@ -85,6 +85,7 @@ export default function Planner({ storageActions, externalRevision = 0 }: { stor
   const [error, setError] = useState<AppError | null>(null);
   const [saveStatus, setSaveStatus] = useState("Not saved yet");
   const [transitConfigured, setTransitConfigured] = useState(true);
+  const [contactUrl, setContactUrl] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(true);
   const [exportOpen, setExportOpen] = useState(false);
   // The selected workspace tab. "options" on a wide screen shows the itinerary in the side panel.
@@ -201,6 +202,7 @@ export default function Planner({ storageActions, externalRevision = 0 }: { stor
     void Promise.all([api<{ trips: SavedSummary[] }>("/trips"), api<{ rules: PricingRule[] }>("/pricing-rules"), plannerConfig()]).then(async ([trips, data, config]) => {
       if (!active) return;
       setSummaries(trips.trips); setRules(data.rules); setTransitConfigured(config.transit_routing_configured);
+      setContactUrl(config.contact_url ?? null);
       setInitialLoad(false);
       const id = localStorage.getItem("wayfinder:last-trip");
       if (id && trips.trips.some(t => t.id === id)) await openTrip(id);
@@ -1019,7 +1021,7 @@ export default function Planner({ storageActions, externalRevision = 0 }: { stor
       </div>
     </div>}
     </>}
-    <footer className="p-footer">Wayfinder Routes · Flights via fast-flights · Scheduled transit via <a href="https://transitous.org/sources/" target="_blank" rel="noreferrer">Transitous sources</a> · Road estimates via OSRM · Cities © GeoNames · Airports © airportsdata · Map © OpenStreetMap contributors</footer></main>
+    <footer className="p-footer">Wayfinder Routes · Flights via fast-flights · Scheduled transit via <a href="https://transitous.org/sources/" target="_blank" rel="noreferrer">Transitous sources</a> · Road estimates via OSRM · Cities © GeoNames · Airports © airportsdata · Map © OpenStreetMap contributors{contactUrl && <> · <a href={contactUrl} target="_blank" rel="noreferrer">Contact</a></>}</footer></main>
     </div>
     {exportOpen && <ExportDialog canSelect={!!selected} canCurrent={!!saved} hasDrafts={dirty || draftTotal > 0} onClose={() => setExportOpen(false)} onExport={shareTrips} />}
     {showApplyBar && <ApplyBar counts={draftCounts} invalid={invalidCount} applying={applyState} error={applyError} busy={busy} searchActive={active}

@@ -65,7 +65,7 @@ class TransitQuery(BaseModel):
 
 @app.get("/api/transit")
 async def transit(request: Annotated[TransitQuery, Query()]):
-    contact = os.environ.get("TRANSITOUS_CONTACT_URL", "").strip()
+    contact = os.environ.get("TRANSITOUS_CONTACT_URL", "https://github.com/xinghao2003/travel-optimizer").strip()
     if not contact:
         raise HTTPException(503, "Set TRANSITOUS_CONTACT_URL after coordinating routing use before enabling Transitous.")
     base = os.environ.get("TRANSITOUS_API_BASE_URL", "https://api.transitous.org/api").rstrip("/")

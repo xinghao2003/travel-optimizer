@@ -110,9 +110,12 @@ test("production static Planner restores and edits a saved trip without a planne
     { schema_version: 1, collection: "trips", id: sample.trip.id, updated: 1, payload: sample.trip },
     ...sample.rules.map((rule: { id: string }) => ({ schema_version: 1, collection: "rules", id: rule.id, updated: 1, payload: rule }))] };
   const forbidden: string[] = [], errors: string[] = [];
-  let providerCalls = 0;
+  let providerCalls = 0, transitCalls = 0;
   page.on("request", request => { if (/\/api\/(?:v2|data)|pyodide|jsdelivr|browser-python|\/src\//.test(request.url())) forbidden.push(request.url()); });
   await page.route("**/api/flights", route => { providerCalls++; return route.fulfill({ json: { status: "empty", options: [], search_url: "https://www.google.com/travel/flights" } }); });
+  await page.route("https://api.transitous.org/api/v6/plan?*", route => {
+    transitCalls++; return route.fulfill({ json: { itineraries: [] }, headers: { "Access-Control-Allow-Origin": "*" } });
+  });
   await page.route("**/table/v1/driving/**", route => {
     const count = new URL(route.request().url()).pathname.split("/").pop()!.split(";").length;
     return route.fulfill({ json: { code: "Ok", distances: Array.from({ length: count }, (_, i) => Array.from({ length: count }, (_, j) => i === j ? 0 : 10000)),
@@ -151,5 +154,6 @@ test("production static Planner restores and edits a saved trip without a planne
   const afterPath = await (await afterSearch).path(), searched = JSON.parse(await readFile(afterPath!, "utf8"));
   const job = searched.records.find((record: { collection: string }) => record.collection === "jobs").payload;
   expect(job.status).toBe("complete"); expect(job.cursor).toBe(job.queue.length); expect(job.requests).toBeGreaterThan(0);
+  expect(transitCalls).toBeGreaterThan(0);
   expect(forbidden).toEqual([]); expect(errors).toEqual([]);
 });

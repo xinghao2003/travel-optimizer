@@ -3,7 +3,8 @@
 The native Planner owns trips, search queues, prices, caches and optimization.
 Only provider HTTP operations run in `api/flights.py` and `api/transit.py`.
 Neither entry imports the planner API, discovery manager or SQLite store.
-OSRM remains a direct browser request. Multi-city flight quotes remain manual,
+OSRM and Transitous use direct browser requests by default; the Transitous
+function is an optional proxy. Multi-city flight quotes remain manual,
 as in the Python provider adapter.
 
 ## Flight protocol 2
@@ -38,7 +39,16 @@ per HTTP request. One return invocation performs at most two upstream requests.
 The local per-process admission limit is three flight calls; excess calls return
 429. This is not a global rate limiter across function instances or users.
 
-## Transitous and configuration
+## Direct Transitous requests and optional proxy
+
+The default native client calls `https://api.transitous.org/api/v6/plan`
+directly. Search planning, response normalization, pagination, rail fallback
+and caching stay in the browser. No transit backend is required. Requests use
+an origin referrer for cross-origin calls, and the application footer includes
+a Contact link to `https://github.com/xinghao2003/travel-optimizer` by default.
+This follows Transitous' [browser identification policy](https://transitous.org/api/).
+
+Set `BROWSER_TRANSIT_URL=/api/transit` to choose the optional proxy instead.
 
 `GET /api/transit` accepts validated coordinates, offset-aware time, supported
 transit modes, search window, transfer time, radius and pagination cursor. It
@@ -50,8 +60,8 @@ and timed-out requests return 429, 502 and 504 respectively.
 
 Server environment:
 
-- `TRANSITOUS_CONTACT_URL`: required before enabling routing, after coordinating
-  application use with the provider. Without it the endpoint returns 503.
+- `TRANSITOUS_CONTACT_URL`: defaults to the repository URL above for the optional
+  proxy's User-Agent. An explicitly empty value disables that proxy with 503.
 - `TRANSITOUS_API_BASE_URL`: defaults to `https://api.transitous.org/api`.
 - `BROWSER_ALLOWED_ORIGINS`: comma-separated exact static-site origins for a
   separately hosted function backend. Same-origin hosting needs no CORS setting.
@@ -59,14 +69,17 @@ Server environment:
 Public build environment:
 
 - `BROWSER_FLIGHTS_URL`: defaults to `/api/flights`.
-- `BROWSER_TRANSIT_URL`: defaults to `/api/transit`.
-- `BROWSER_TRANSIT_ENABLED`: defaults to false; explicitly enable after setup.
+- `BROWSER_TRANSIT_URL`: defaults to `https://api.transitous.org/api/v6/plan`.
+- `BROWSER_TRANSIT_ENABLED`: defaults to true; set false to disable transit.
+- `TRANSITOUS_CONTACT_URL`: also sets the public footer contact when exported
+  during the build; an unset or blank value uses the repository URL.
 - `OSRM_BASE_URL`: existing direct road-routing endpoint.
 
 `prepare_static_planner.py` reads process environment variables and generates
 `browser-data/config.json`. It does not load `.env` automatically. Export the
-public build variables before building; keep provider contact and server-only
-configuration in the function environment. No secrets belong in the public JSON.
+public build variables before building. The contact URL is deliberately public;
+server-only settings stay in the function environment. No secrets belong in the
+public JSON. The original Python reference stack retains its own contact gate.
 
 ## Local and package validation
 
@@ -99,6 +112,13 @@ its report remains under ignored `data/diagnostics/linux-provider-check/`.
 This proves the isolated source and native dependencies work in that Linux
 environment. It does not prove Vercel's actual generated bundle, hosted routing,
 or live providers' availability and bot handling from a hosting IP.
+The later default-contact change to the optional transit proxy is covered by
+the ASGI tests; the native dependencies and flight-function source are unchanged.
+
+A subsequent real Chrome check read a cross-origin response directly from the
+Transitous endpoint using the browser referrer. It intentionally omitted route
+parameters and received a readable 400 validation response, without calculating
+a route. This verifies browser/CORS access, not successful timetable retrieval.
 
 Backend tests cover successful, empty, partial, failed, timed-out and busy
 operations, validation, CORS and whole-party pricing. A real-browser test covers

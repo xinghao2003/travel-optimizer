@@ -2,7 +2,8 @@
 
 The implementation runs the complete existing Planner from static files, with
 native TypeScript discovery, optimization and IndexedDB persistence. Only flight
-retrieval and optional Transitous routing need the stateless Python functions.
+retrieval needs a Python function by default. Transitous and OSRM run directly
+from the browser, with an optional Transitous proxy.
 The independent Python/Pyodide solver and original application remain available.
 No application was deployed, pushed or merged into main as part of this work.
 
@@ -21,10 +22,10 @@ Implementation stages are separate commits on `codex/browser-poc` in the
 | Persistence, edits and migration | IndexedDB stores trips, rules, shared graphs, jobs, results, native checkpoints and an isolated TTL cache. Native edits match 95 Python cases, including 37 rejected changes. Real browser tests verify atomic rollback, revision conflicts, stale worker rejection, cache pruning without losing user data, copies, deletion guards, JSON backup replacement and SQLite migration. A formerly weaker route becomes cheapest after Apply. Old checkpoints restart; old completed native result caches are marked stale and recalculated. |
 | Complete interface and static catalogs | The existing settings, Options/chart, itinerary/map, Missing info, staged CSV and pricing forms use the native API adapter. Static place lookup matches 90 Python searches/nearest queries, preserving custom coordinates and the original application limits. Production interactions restore, calculate, edit, reload, search through mocked provider responses, export backups and display results without planner API/source/Python requests. |
 | Static artifact and reports | `build:native` emits `index.html`, its identical `native.html` alias, application JS/CSS and three public catalog/config JSON files. An explicit shipped-file allowlist excludes Python, fixtures, private snapshots and development tooling. A plain files-only HTTP server exercises the root, multiple trips, weaker options, map canvas, copied settings, standalone selected/all-trip HTML reports and the print-ready report page. Its network allowlist permits static files and the mocked map style only. |
-| Thin backend | Flight protocol 2 has bounded one-way/conditional-return operations with whole-party fares; multi-city quotes remain manual. Transitous forwarding has validated parameters and explicit provider contact. Tests cover successful, empty, partial, failed, timed-out and busy operations, CORS and input validation. The ten-file provider package passes native primp loopback HTTP and ASGI checks on Linux x86_64/Python 3.13.17. All ten current source hashes still match that checked package. Neither entry imports the planner API, discovery manager or store. |
+| Thin backend | Flight protocol 2 has bounded one-way/conditional-return operations with whole-party fares; multi-city quotes remain manual. Optional Transitous forwarding has validated parameters and a repository contact default. Tests cover successful, empty, partial, failed, timed-out and busy operations, CORS and input validation. The provider-function stage's ten-file package passed native primp loopback HTTP and ASGI checks on Linux x86_64/Python 3.13.17. Its flight source and native dependencies remain unchanged; the later transit contact default is covered by ASGI tests. Neither entry imports the planner API, discovery manager or store. |
 
 The full Python suite passed **194 tests**. The regenerated reference suite,
-native production build and browser suite passed **29 checks**, including the
+native production build and browser suite passed **30 checks**, including the
 optional private migration replay and both production-artifact workflows.
 Existing SQLite ResourceWarnings occur in passing reference tests. Build chunk
 size warnings remain informational; resource measurements are not acceptance
@@ -66,9 +67,10 @@ See [storage migration](browser-storage.md) and [provider checks](provider-funct
   graphs, edits and queues migrate through portable JSON; computation restarts
   safely when versions or solver inputs change. TTL pruning touches only the
   provider cache. Origin changes require backup export/import.
-- Transitous is disabled until routing use/contact is configured. OSRM remains
-  direct browser HTTP; provider function URLs can be configured independently
-  of the static host. No secret belongs in the public configuration.
+- Transitous and OSRM use direct browser HTTP by default. The site identifies
+  itself through its referrer and a public Contact link to the repository.
+  Transit can be disabled or routed through the optional proxy using build
+  settings. No secret belongs in the public configuration.
 - Linux package validation is native-runtime and ASGI evidence, not a Vercel
   deployment or verification of its generated bundle. Live providers' behavior
   from a hosting IP, bot handling and hosted routing remain unverified.

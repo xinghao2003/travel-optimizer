@@ -9,7 +9,7 @@ import { PlannerRepository } from "./repository";
 import { flightSearchUrl, TRANSIT_DISABLED, TRANSIT_MODES } from "./search-state";
 import { at, fingerprint, pythonFloat } from "./time";
 
-export type ProviderSettings = { schema_version: 1; flights_url: string; osrm_base_url: string; transit_url: string; transit_enabled: boolean };
+export type ProviderSettings = { schema_version: 1; flights_url: string; osrm_base_url: string; transit_url: string; transit_enabled: boolean; contact_url?: string };
 export type Retrieved = { outcome: ProviderOutcome; usedRequest: boolean };
 export type SearchProvider = { settings(): Promise<ProviderSettings>; fetch(task: ProviderTask, spec: TripSpec, snapshot: Snapshot): Promise<Retrieved> };
 export type ProviderPlan = { key: string; url: string; init?: RequestInit; ttl: number; nodes?: string[] };
@@ -18,7 +18,8 @@ export function loadProviderSettings(): Promise<ProviderSettings> {
   return config ??= fetch("/browser-data/config.json").then(async response => {
     if (!response.ok) throw new Error("Provider configuration is missing. Run tools/prepare_static_planner.py.");
     const value = await response.json();
-    if (value.schema_version !== 1 || ["flights_url", "osrm_base_url", "transit_url"].some(k => typeof value[k] !== "string") || typeof value.transit_enabled !== "boolean") throw new Error("Invalid browser provider configuration.");
+    if (value.schema_version !== 1 || ["flights_url", "osrm_base_url", "transit_url"].some(k => typeof value[k] !== "string") || typeof value.transit_enabled !== "boolean"
+      || value.contact_url !== undefined && typeof value.contact_url !== "string") throw new Error("Invalid browser provider configuration.");
     return value as ProviderSettings;
   });
 }
@@ -55,7 +56,8 @@ export function providerPlan(task: ProviderTask, spec: TripSpec, catalog: Airpor
     searchWindow: String(Math.trunc(seconds(spec.departure_end) - seconds(spec.departure_start))), timetableView: "true", numItineraries: "10", joinInterlinedLegs: "false", minTransferTime: String(spec.timing.connection_minutes) });
   if (task.rail_radius) { params.set("transitModes", TRANSIT_MODES.rail); params.set("radius", pythonFloat(spec.rail_fallback!.station_radius_km * 1000)); params.set("directModes", ""); }
   if (task.cursor) params.set("pageCursor", String(task.cursor));
-  return { key, url: settings.transit_url + (settings.transit_url.includes("?") ? "&" : "?") + params, ttl: 21600 };
+  return { key, url: settings.transit_url + (settings.transit_url.includes("?") ? "&" : "?") + params,
+    init: { referrerPolicy: "strict-origin-when-cross-origin" }, ttl: 21600 };
 }
 export class BrowserProviders implements SearchProvider {
   private pending = new Map<string, Promise<Retrieved>>();

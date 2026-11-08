@@ -64,9 +64,14 @@ No deployment is authorized as part of this checklist.
   with unpriced flights excluded, unrelated unknown airport costs no longer
   cause a valid priced flight bundle to be discarded. Covered flights are not
   listed as missing fares. Affected old checkpoints/results restart/recalculate.
-- 194 backend tests and all 29 browser checks passed, including the native
+- 194 backend tests and all 30 browser checks passed, including the native
   production-artifact interaction and optional private migration replay. Native
   and earlier prototype production builds have passed.
+- Transitous and OSRM default to direct browser requests. The native footer
+  exposes the repository as its default contact; the optional transit proxy
+  remains configurable. Browser tests cover the direct URL, origin referrer,
+  contact link, caching and explicit opt-out. A parameter-free live Chrome
+  request also confirmed the Transitous response is readable across origins.
 
 Implementation and local acceptance are complete; the requirement-by-requirement
 evidence is in [the acceptance report](static-migration-acceptance.md).

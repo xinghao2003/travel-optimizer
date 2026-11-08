@@ -1,5 +1,35 @@
 import { expect, test } from "@playwright/test";
 
+test("Transitous defaults to direct browser HTTP with an origin referrer and repository contact", async ({ page }) => {
+  const calls: { url: string; referer?: string }[] = [], proxied: string[] = [];
+  page.on("request", request => { if (new URL(request.url()).pathname === "/api/transit") proxied.push(request.url()); });
+  await page.route("https://api.transitous.org/api/v6/plan?*", async route => {
+    calls.push({ url: route.request().url(), referer: (await route.request().allHeaders()).referer });
+    return route.fulfill({ json: { itineraries: [] }, headers: { "Access-Control-Allow-Origin": "*" } });
+  });
+  await page.goto("/native.html");
+  await expect(page.getByRole("link", { name: "Contact", exact: true })).toHaveAttribute("href", "https://github.com/xinghao2003/travel-optimizer");
+  const result = await page.evaluate(async () => {
+    const { BrowserProviders, providerPlan } = await import("/src/prototype/native/providers.ts"), { PlannerRepository } = await import("/src/prototype/native/repository.ts");
+    const { loadAirportCatalog } = await import("/src/prototype/native/catalog.ts");
+    const corpus = await (await fetch("/tests/fixtures/native-preparation.json")).json(), spec = corpus.cases[5].trip.spec;
+    const repository = new PlannerRepository("direct-transit-" + crypto.randomUUID()), providers = new BrowserProviders(repository, loadAirportCatalog);
+    const task = { kind: "transit" as const, key: "direct-test", from_id: spec.home.id, to_id: spec.visits[0].place.id, date: spec.start_date };
+    const snapshot = { revision: 0, movements: [], offers: [], coverage: {} }, settings = await providers.settings();
+    const first = await providers.fetch(task, spec, snapshot), cached = await providers.fetch(task, spec, snapshot);
+    const disabled = await new BrowserProviders(repository, loadAirportCatalog, async () => ({ ...settings, transit_enabled: false })).fetch(task, spec, snapshot);
+    const proxy = providerPlan(task, spec, await loadAirportCatalog(), { ...settings, transit_url: "/api/transit" });
+    await repository.close();
+    return { enabled: settings.transit_enabled, url: settings.transit_url, contact: settings.contact_url,
+      first: { status: first.outcome.status, request: first.usedRequest }, cached: cached.usedRequest,
+      disabled: { status: disabled.outcome.status, request: disabled.usedRequest }, optionalProxy: proxy.url.startsWith("/api/transit?") };
+  });
+  expect(result).toEqual({ enabled: true, url: "https://api.transitous.org/api/v6/plan", contact: "https://github.com/xinghao2003/travel-optimizer",
+    first: { status: "empty", request: true }, cached: false, disabled: { status: "unsupported", request: false }, optionalProxy: true });
+  expect(calls).toHaveLength(1); expect(calls[0].referer).toBe(new URL(page.url()).origin + "/");
+  expect(proxied).toEqual([]);
+});
+
 test("bounded round-trip choices persist across reload, Stop, and Continue with whole-party prices", async ({ page }) => {
   let calls = 0, release!: () => void, entered!: () => void;
   const waiting = new Promise<void>(resolve => { release = resolve; }), active = new Promise<void>(resolve => { entered = resolve; });

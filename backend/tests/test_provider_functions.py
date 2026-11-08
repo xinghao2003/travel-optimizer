@@ -141,6 +141,9 @@ class ProviderHttpTests(unittest.IsolatedAsyncioTestCase):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=transit_api.app), base_url="http://test") as client:
             with patch.dict(os.environ, {"TRANSITOUS_CONTACT_URL": ""}):
                 self.assertEqual((await client.get("/api/transit", params=params)).status_code, 503)
+            with patch.dict(os.environ, {"TRANSITOUS_API_BASE_URL": "https://transit.test/api"}, clear=True), patch.object(transit_api.httpx, "AsyncClient", return_value=outbound) as factory:
+                self.assertEqual((await client.get("/api/transit", params=params)).status_code, 200)
+                self.assertEqual(factory.call_args.kwargs["headers"]["User-Agent"], "WayfinderRoutes/1.1 (https://github.com/xinghao2003/travel-optimizer)")
             with patch.dict(os.environ, {"TRANSITOUS_CONTACT_URL": "https://app.example/contact", "TRANSITOUS_API_BASE_URL": "https://transit.test/api"}), patch.object(transit_api.httpx, "AsyncClient", return_value=outbound) as factory:
                 result = await client.get("/api/transit", params=params)
                 self.assertEqual(result.status_code, 200)

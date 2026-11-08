@@ -36,8 +36,9 @@ def main():
                "metros": {code: list(row.get("airports", {})) for code, row in airportsdata.load_iata_macs().items()}}
     config = {"schema_version": 1, "flights_url": os.environ.get("BROWSER_FLIGHTS_URL", "/api/flights"),
               "osrm_base_url": os.environ.get("OSRM_BASE_URL", "https://router.project-osrm.org"),
-              "transit_url": os.environ.get("BROWSER_TRANSIT_URL", "/api/transit"),
-              "transit_enabled": os.environ.get("BROWSER_TRANSIT_ENABLED", "").lower() == "true"}
+              "transit_url": os.environ.get("BROWSER_TRANSIT_URL", "https://api.transitous.org/api/v6/plan"),
+              "transit_enabled": os.environ.get("BROWSER_TRANSIT_ENABLED", "true").lower() == "true",
+              "contact_url": os.environ.get("TRANSITOUS_CONTACT_URL", "").strip() or "https://github.com/xinghao2003/travel-optimizer"}
     for public in ("public-native", "public"):
         output = ROOT / "frontend" / public / "browser-data"
         output.mkdir(parents=True, exist_ok=True)

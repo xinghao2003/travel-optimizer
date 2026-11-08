@@ -26,9 +26,10 @@ save the edits and wait for the user to continue. Rail fallback and transit
 pagination use the existing Python behavior; multi-city quotes remain manual.
 
 The [provider functions](provider-functions.md) now support one-way flights,
-bounded round-trip selection steps and Transitous forwarding. Each uncached
+bounded round-trip selection steps and optional Transitous forwarding. Each uncached
 round-trip step counts as one request; remaining choices persist for Continue.
-Multi-city quotes remain manual. OSRM uses direct browser HTTP. The isolated
+Multi-city quotes remain manual. OSRM and Transitous use direct browser HTTP
+by default; only flight searches require the provider backend. The isolated
 provider package passed Linux native-dependency and ASGI checks. Live hosted
 provider access remains unverified. Local migration acceptance is recorded in
 [the acceptance report](static-migration-acceptance.md).
@@ -122,9 +123,12 @@ the complete saved graph, even when their trip and graph revisions still match.
 
 Public provider settings are generated in `browser-data/config.json`.
 `BROWSER_FLIGHTS_URL`, `OSRM_BASE_URL` and `BROWSER_TRANSIT_URL` configure targets
-independently of the static host. Transit is disabled by default; enable
-`BROWSER_TRANSIT_ENABLED=true` only after its contact/routing use is coordinated
-and its provider endpoint is available. No secret belongs in this public file.
+independently of the static host. Transit is enabled by default and calls
+`https://api.transitous.org/api/v6/plan` directly. The footer's Contact link
+defaults to this repository. Export `TRANSITOUS_CONTACT_URL` before building to
+change that public link. Set `BROWSER_TRANSIT_ENABLED=false` to disable transit,
+or `BROWSER_TRANSIT_URL=/api/transit` to use the optional proxy. Browser requests
+identify the site through their origin referrer. No secret belongs in this public file.
 
 The independent Python and TypeScript solvers also fix an existing fare-selection
 defect discovered by the live search test: with Skip flights without a price,

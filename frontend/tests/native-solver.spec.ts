@@ -9,13 +9,23 @@ test("native solver matches current Python, including fair exploration, flight e
     const { solveNative } = await import("/src/prototype/native/solver.ts");
     const { pricePath } = await import("/src/prototype/native/pricing.ts");
     const { normalizeJourney, normalizeFare } = await import("/src/prototype/native/types.ts");
-    const { cents } = await import("/src/prototype/native/time.ts");
+    const { cents, duration, micros, iso } = await import("/src/prototype/native/time.ts");
+    const { timestamp } = await import("/src/prototype/native/journeys.ts");
     const { firstDifference: difference } = await import("/src/prototype/comparison.ts");
     const corpus = await (await fetch("/tests/fixtures/native-solver.json")).json();
     const failures: { name: string; path: string; expected: unknown; actual: unknown }[] = [];
     for (const item of corpus.cent_cases ?? []) {
       const actual = cents(item.value).toString();
       if (actual !== item.expected) failures.push({ name: `cents:${item.value}`, path: "cents", expected: item.expected, actual });
+    }
+    for (const item of corpus.timestamp_cases ?? []) {
+      const value = typeof item.value === "number" ? timestamp(item.value) : micros(item.value), actual = { micros: value.toString(), iso: iso(value) }, expected = { micros: item.micros, iso: item.iso };
+      const mismatch = difference(expected, actual);
+      if (mismatch) failures.push({ name: `timestamp:${item.value}`, ...mismatch });
+    }
+    for (const item of corpus.timedelta_cases ?? []) {
+      const actual = duration(item.value, item.unit, item.extra).toString();
+      if (actual !== item.expected) failures.push({ name: `timedelta:${item.value}:${item.unit}`, path: "microseconds", expected: item.expected, actual });
     }
     for (const item of [...corpus.cases, ...(corpus.generated ?? [])]) {
       try {
@@ -33,7 +43,7 @@ test("native solver matches current Python, including fair exploration, flight e
         if (mismatch) failures.push({ name: item.name, ...mismatch });
       } catch (error) { failures.push({ name: item.name, path: "exception", expected: "success", actual: String(error) }); }
     }
-    return { solverCases: corpus.cases.length, generatedCases: corpus.generated?.length ?? 0, priceCases: corpus.pricing.length, centCases: corpus.cent_cases?.length ?? 0, failures };
+    return { solverCases: corpus.cases.length, generatedCases: corpus.generated?.length ?? 0, priceCases: corpus.pricing.length, centCases: corpus.cent_cases?.length ?? 0, timestampCases: corpus.timestamp_cases?.length ?? 0, timedeltaCases: corpus.timedelta_cases?.length ?? 0, failureCount: failures.length, failures: failures.slice(0, 10) };
   });
   console.log(JSON.stringify(summary, null, 2));
   expect(summary.failures).toEqual([]);

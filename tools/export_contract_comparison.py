@@ -75,6 +75,11 @@ def main():
     minimal_input = dict(spec=spec, movements=[movement], offers=[offer])
     variants("envelope", models.SolverInput, minimal_input, [dict(schema_version=2), dict(expansion_budget=0), dict(label_limit=-1),
         dict(trip_revision=-1), dict(finish_at_home="false"), dict(snapshot_revision="3")])
+    for value in [253402214400001, 253402214400001.125, -62135423999999, 16725225600001, 16725225600001.25,
+                  -.0000005, .0000005, .0000015, -1.0000005, 1.0000005, 1969.1234567]:
+        case(f"numeric-timestamp-boundary-{value}", models.Segment, {**segment, "departure": value})
+    for year in [1, 1680, 2255, 2500, 9998]:
+        case(f"microsecond-movement-{year}", models.Movement, {**movement, "departure": f"{year:04}-02-10T09:00:00.000001Z", "arrival": f"{year:04}-02-10T09:00:00.000002Z"})
     path = ROOT / "frontend/tests/fixtures/native-contracts.json"
     path.write_text(json.dumps(dict(cases=cases), separators=(",", ":"), allow_nan=False), encoding="utf-8")
     print(json.dumps(dict(cases=len(cases), invalid=sum(not item["valid"] for item in cases))))

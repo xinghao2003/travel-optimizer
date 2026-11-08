@@ -7,7 +7,7 @@ import { ingest } from "./ingestion";
 import { fallbackTask, searchModes } from "./rail";
 import type { RailTask } from "./rail";
 import type { Snapshot } from "./preparation";
-import { at, localDate, micros, stableId } from "./time";
+import { at, localDate, maxInstant, micros, stableId } from "./time";
 
 export type BundleCandidate = { from_id: string; to_id: string; segments: { mode: string; departure: string }[] }[];
 export type BundleLink = NonNullable<Coverage["bundle_links"]>[number] & { manual_only?: boolean };
@@ -95,7 +95,7 @@ export function recordOutcome(job: SearchRecord, task: ProviderTask, outcome: Pr
   }
   if (task.kind === "transit") {
     const payload = (outcome.payload ?? {}) as { nextPageCursor?: string; itineraries?: { startTime?: string }[] }, origin = places.get(task.from_id!);
-    const times = (payload.itineraries ?? []).filter(i => i.startTime).map(i => micros(i.startTime!)), latest = times.length ? Math.max(...times) : null;
+    const times = (payload.itineraries ?? []).filter(i => i.startTime).map(i => micros(i.startTime!)), latest = times.length ? maxInstant(...times) : null;
     const limit = origin ? at(task.rail_reference_date ?? task.date!, spec.departure_end, origin.timezone) : null;
     if (payload.nextPageCursor && latest && limit && latest <= limit) {
       const more = { ...task, cursor: payload.nextPageCursor, key: stableId(task.from_id, task.to_id, task.date, task.rail_reference_date ?? null, task.rail_radius ?? null, payload.nextPageCursor) };

@@ -46,7 +46,7 @@ export function providerPlan(task: ProviderTask, spec: TripSpec, catalog: Airpor
   const start = at(day, spec.departure_start, origin.timezone);
   // Wall-time subtraction matches Python datetime.combine without DST elapsed-time adjustment.
   const seconds = (time: string) => { const [h, m, s] = time.split(":").map(Number); return h * 3600 + m * 60 + (s || 0); };
-  const offset = Math.round((at(day, spec.departure_start, "UTC") - start) / 1_000_000), abs = Math.abs(offset);
+  const offset = Number((at(day, spec.departure_start, "UTC") - start) / 1_000_000n), abs = Math.abs(offset);
   const local = day + "T" + spec.departure_start.slice(0, 8).padEnd(8, ":00") + (offset < 0 ? "-" : "+")
     + String(Math.floor(abs / 3600)).padStart(2, "0") + ":" + String(Math.floor(abs / 60) % 60).padStart(2, "0")
     + (abs % 60 ? ":" + String(abs % 60).padStart(2, "0") : "");

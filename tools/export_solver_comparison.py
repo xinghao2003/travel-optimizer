@@ -78,7 +78,7 @@ def main():
         fair = importlib.import_module("test_fair_exploration")
         numeric = importlib.import_module("test_numeric_boundaries")
         suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(cls) for cls in
-            (planner.OptimizerTests, positioning.PositioningTests, transfers.AirportTransferTests, checkpoint.CheckpointTests, journey_pricing.JourneyPricingTests, fair.FlightEligibilityTests, numeric.NumericPriceTests))
+            (planner.OptimizerTests, positioning.PositioningTests, transfers.AirportTransferTests, checkpoint.CheckpointTests, journey_pricing.JourneyPricingTests, fair.FlightEligibilityTests, numeric.NumericPriceTests, numeric.NumericTimeTests))
         suite.addTest(fair.FairFrontierTests("test_priced_options_appear_before_large_unpriced_subtrees_are_exhausted"))
         stream = io.StringIO()
         result = unittest.TextTestRunner(stream=stream).run(suite)
@@ -129,8 +129,31 @@ def main():
     values = [1.0000000000000001e18, 90071992547409.91, .005, .015, 1e25]
     values += [math.ldexp(numeric_rng.random(), numeric_rng.randint(-40, 86)) for _ in range(2000)]
     cent_cases = [{"value": value, "expected": str(optimizer.cents(value))} for value in values]
-    (directory / "native-solver.json").write_text(json.dumps({"cases": cases, "pricing": pricing, "generated":generated, "cent_cases": cent_cases}, separators=(",", ":"), allow_nan=False), encoding="utf-8")
-    print(json.dumps({"fixture_calls": len(cases), "pricing_calls": len(pricing), "generated_cases":len(generated), "cent_cases": len(cent_cases), "original_tests": result.testsRun}), flush=True)
+    epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+    timestamps = [f"{year:04}-02-10T09:00:00.{fraction:06}+00:00" for year in [1, 1680, 2255, 2500, 9999] for fraction in [1, 123457, 999999]]
+    timestamps += ['1969-12-31T23:59:59.9999999Z', '1900-01-01T00:00:00.1234567+08:00', '2500-01-01T00:00:00.1234567-05:00',
+                   1700000000.0000015, 10000000000.000002]
+    timestamp_cases = []
+    for value in timestamps:
+        parsed = datetime.fromtimestamp(value, timezone.utc) if isinstance(value, (int, float)) else datetime.fromisoformat(value).astimezone(timezone.utc)
+        delta = parsed - epoch
+        timestamp_cases.append({"value": value, "micros": str((delta.days * 86400 + delta.seconds) * 1_000_000 + delta.microseconds), "iso": parsed.isoformat()})
+    timedelta_cases = []
+    duration_rng = random.Random(170086)
+    for unit, factor in [('minutes', 60_000_000), ('hours', 3_600_000_000)]:
+        values = [1.0000000083333334, .5 / factor, 1 + .5 / factor, -1 - .5 / factor]
+        values += [duration_rng.randrange(8760) + duration_rng.choice([.5, 1.5, 2.5, 3.5]) / factor for _ in range(500)]
+        for value in values:
+            delta = timedelta(**{unit: value})
+            timedelta_cases.append({"value": value, "unit": factor, "expected": str((delta.days * 86400 + delta.seconds) * 1_000_000 + delta.microseconds)})
+    for _ in range(200):
+        minutes = duration_rng.randrange(1000) + duration_rng.random() * 4 / 60_000_000
+        hours = duration_rng.randrange(1000) + duration_rng.random() * 4 / 3_600_000_000
+        delta = timedelta(minutes=minutes, hours=hours)
+        timedelta_cases.append({"value": minutes, "unit": 60_000_000, "extra": [hours, 3_600_000_000],
+                                "expected": str((delta.days * 86400 + delta.seconds) * 1_000_000 + delta.microseconds)})
+    (directory / "native-solver.json").write_text(json.dumps({"cases": cases, "pricing": pricing, "generated":generated, "cent_cases": cent_cases, "timestamp_cases": timestamp_cases, "timedelta_cases": timedelta_cases}, separators=(",", ":"), allow_nan=False), encoding="utf-8")
+    print(json.dumps({"fixture_calls": len(cases), "pricing_calls": len(pricing), "generated_cases":len(generated), "cent_cases": len(cent_cases), "timestamp_cases": len(timestamp_cases), "timedelta_cases": len(timedelta_cases), "original_tests": result.testsRun}), flush=True)
 
     if options.database:
         from app import planner_discovery as discovery

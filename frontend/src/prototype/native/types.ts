@@ -1,17 +1,17 @@
 import type { Charge, Movement, Offer, PricingRule, Route, Segment, TripSpec } from "../../lib/planner";
-import { micros, iso, modelTimestamp } from "./time";
+import { elapsed, micros, iso, MINUTE, modelTimestamp } from "./time";
 import type { CostBound } from "./time";
 
 export type Spec = TripSpec;
 export type Fare = Offer;
 export type Rule = PricingRule;
-export type Journey = { raw: Movement; dep: number | null; arr: number | null };
+export type Journey = { raw: Movement; dep: bigint | null; arr: bigint | null };
 export type Missing = { component_id: string; movement_id: string; label: string; from_id: string; to_id: string; currency: string; reason: string };
 export type Price = { low_cents: bigint; high_cents: CostBound; total_cost_myr: number | null; cost_low_myr: number; cost_high_myr: number | null; estimated: boolean; purchases: Fare[]; missing: Missing[]; uncertainty_key: string[] };
-export type Stay = { place_id: string; arrival: number; departure: number; hours: number };
+export type Stay = { place_id: string; arrival: bigint; departure: bigint; hours: number };
 export type Label = {
-  city: string; phase: number; mask: number; arrival: number; path: Journey[]; stays: Stay[];
-  reward: boolean; own_location: string; own_used: boolean; rental_pickup: string | null; rental_start: number | null;
+  city: string; phase: number; mask: number; arrival: bigint; path: Journey[]; stays: Stay[];
+  reward: boolean; own_location: string; own_used: boolean; rental_pickup: string | null; rental_start: bigint | null;
   charges: Charge[]; departure_gateway: string; arrival_gateway: string; price: Price | null;
   return_mask: number; revisiting: boolean; history: unknown[]; stay_hours: number;
 };
@@ -38,7 +38,7 @@ export function normalizeJourney(movement: Movement): Journey {
   const raw = Object.assign({ schedule_estimated: false, schedule_reference_date: null, template_id: null, usable: true, distance_km: null, transfers: 0, vehicle_kind: null,
     segments: [], charges: [], search_url: null, assumptions: [] }, movement, {
     departure: dep === null ? null : iso(dep, true), arrival: arr === null ? null : iso(arr, true),
-    duration_minutes: dep !== null && arr !== null ? (arr - dep) / 60_000_000 : movement.duration_minutes }) as Movement;
+    duration_minutes: dep !== null && arr !== null ? elapsed(arr - dep, MINUTE) : movement.duration_minutes }) as Movement;
   raw.charges = raw.charges.map(normalizeCharge);
   raw.segments = raw.segments.map(normalizeSegment);
   return { raw, dep, arr };

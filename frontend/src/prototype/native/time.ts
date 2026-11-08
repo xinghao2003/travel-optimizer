@@ -5,7 +5,12 @@ import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 
 export const SECOND = 1_000_000, MINUTE = 60 * SECOND, HOUR = 60 * MINUTE, DAY = 24 * HOUR;
 Decimal.set({ precision: 80 });
-export const micros = (value: string) => Number(Temporal.Instant.from(value).epochNanoseconds / 1000n);
+export function micros(value: string): bigint {
+  const nanos = Temporal.Instant.from(value).epochNanoseconds;
+  // Python truncates fractional seconds within the wall-clock second. BigInt
+  // division truncates toward zero, so negative epochs need floor division.
+  return (nanos < 0n ? nanos - 999n : nanos) / 1000n;
+}
 /** Pydantic datetime JSON preserves a segment's offset and uses Z for UTC. */
 export function modelTimestamp(value: string): string {
   const offset = value.match(/(Z|[+-]\d{2}:?\d{2})$/i)?.[0];
@@ -14,7 +19,26 @@ export function modelTimestamp(value: string): string {
   const local = Temporal.Instant.from(value).toZonedDateTimeISO(zone).toPlainDateTime().toString({ fractionalSecondDigits: 6 }).replace(/\.000000$/, "");
   return local + (zone === "+00:00" || zone === "-00:00" ? "Z" : zone);
 }
-export const duration = (value: number) => new Decimal(value).toDecimalPlaces(0, Decimal.ROUND_HALF_EVEN).toNumber();
+/** CPython timedelta scales whole units separately, then rounds the combined
+ * fractional microseconds once. Multiplying the full float first can erase
+ * which side of a half-microsecond the input occupies. */
+export function duration(value: number, unit = 1, extra?: [number, number]): bigint {
+  let whole = 0n, fraction = 0;
+  for (const [amount, scale] of [[value, unit], ...(extra ? [extra] : [])]) {
+    const integer = Math.trunc(amount), scaled = (amount - integer) * scale, scaledWhole = Math.trunc(scaled);
+    whole += BigInt(integer) * BigInt(scale) + BigInt(scaledWhole);
+    fraction += scaled - scaledWhole;
+  }
+  const integer = Math.trunc(fraction), rest = fraction - integer;
+  whole += BigInt(integer);
+  if (Math.abs(rest) > .5 || Math.abs(rest) === .5 && whole % 2n !== 0n) whole += rest < 0 ? -1n : 1n;
+  return whole;
+}
+export const unixMicros = (value: number) => duration(value, SECOND);
+/** Match timedelta.total_seconds(), then the caller's minutes/hours division. */
+export const elapsed = (value: bigint, unit = SECOND) => new Decimal(value.toString()).div(SECOND).toNumber() / (unit / SECOND);
+export const minInstant = (...values: bigint[]) => values.reduce((a, b) => a < b ? a : b);
+export const maxInstant = (...values: bigint[]) => values.reduce((a, b) => a > b ? a : b);
 /** Python prices are float inputs, but integer cents remain exact through cover/DP. */
 export const cents = (value: number) => BigInt(new Decimal(pythonFloat(value)).mul(100).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toFixed(0));
 export type CostBound = bigint | number; // The only numeric bound is positive Infinity.
@@ -41,28 +65,28 @@ export function general(value: number): string {
   const exponent = rounded.e;
   return exponent < -4 || exponent >= 6 ? rounded.toExponential().replace(/e([+-])(\d)$/, (_, sign: string, digit: string) => `e${sign}0${digit}`) : rounded.toFixed();
 }
-function instant(value: number) { return Temporal.Instant.fromEpochNanoseconds(BigInt(Math.round(value)) * 1000n); }
-export function iso(value: number, model = false) {
+function instant(value: bigint | number) { return Temporal.Instant.fromEpochNanoseconds((typeof value === "bigint" ? value : BigInt(Math.round(value))) * 1000n); }
+export function iso(value: bigint | number, model = false) {
   let text = instant(value).toString({ fractionalSecondDigits: 6 });
   if (text.endsWith(".000000Z")) text = text.replace(".000000Z", "Z");
   return model ? text : text.replace(/Z$/, "+00:00");
 }
-export const datetimeString = (value: number) => iso(value).replace("T", " ");
-export const localDate = (value: number, zone: string) => instant(value).toZonedDateTimeISO(zone).toPlainDate().toString();
-export const localTime = (value: number, zone: string) => instant(value).toZonedDateTimeISO(zone).toPlainTime().toString({ fractionalSecondDigits: 6 });
+export const datetimeString = (value: bigint) => iso(value).replace("T", " ");
+export const localDate = (value: bigint | number, zone: string) => instant(value).toZonedDateTimeISO(zone).toPlainDate().toString();
+export const localTime = (value: bigint, zone: string) => instant(value).toZonedDateTimeISO(zone).toPlainTime().toString({ fractionalSecondDigits: 6 });
 export const timeKey = (value: string) => Temporal.PlainTime.from(value).toString({ fractionalSecondDigits: 6 });
 export const addDate = (day: string, days: number) => Temporal.PlainDate.from(day).add({ days }).toString();
 export const daysBetween = (from: string, to: string) => Temporal.PlainDate.from(from).until(Temporal.PlainDate.from(to)).days;
 export const weekday = (day: string) => Temporal.PlainDate.from(day).dayOfWeek - 1;
-export function shiftWallDate(value: number, day: string, zone: string): number {
+export function shiftWallDate(value: bigint, day: string, zone: string): bigint {
   const local = Temporal.PlainDate.from(day).toPlainDateTime(instant(value).toZonedDateTimeISO(zone).toPlainTime());
   // Rail projections reject both ambiguous and nonexistent local times.
-  return Number(local.toZonedDateTime(zone, { disambiguation: "reject" }).epochNanoseconds / 1000n);
+  return local.toZonedDateTime(zone, { disambiguation: "reject" }).epochNanoseconds / 1000n;
 }
 export function at(day: string, time: string, zone: string) {
   const local = Temporal.PlainDate.from(day).toPlainDateTime(Temporal.PlainTime.from(time));
   // Match zoneinfo's default fold=0, including its pre-transition offset in gaps.
-  return Number(local.toZonedDateTime(zone, { disambiguation: "compatible" }).epochNanoseconds / 1000n);
+  return local.toZonedDateTime(zone, { disambiguation: "compatible" }).epochNanoseconds / 1000n;
 }
 /** Float fields stay floats even when JSON.parse has erased a trailing .0. */
 export function pythonFloat(value: number): string {

@@ -7,7 +7,7 @@ import { discoveryKey } from "./discovery-key";
 import { flightMovement, pairKey } from "./journeys";
 import type { Roads } from "./journeys";
 import { RAIL_FALLBACK_SOURCE } from "./rail";
-import { iso, MINUTE, micros, pythonJson, stableId, stableModelId } from "./time";
+import { duration, elapsed, iso, MINUTE, micros, pythonJson, stableId, stableModelId } from "./time";
 import type { SolverInput, SolverResult } from "./types";
 
 export type Snapshot = { revision: number; movements: Movement[]; offers: Offer[]; coverage: Coverage; roads?: Roads; label_limit?: number | null; discovery_key?: string };
@@ -93,7 +93,7 @@ export function requiredAirportConnections(movements: Movement[], connections: M
       const key = pairKey(a.to_id, b.from_id), connection = connections.get(key);
       const pair = pairs.get(key) ?? { from_airport: a.to_id, to_airport: b.from_id, from_name: a.to_name, to_name: b.from_name, journey_count: 0, unresolved_journey_count: 0 };
       pair.journey_count++;
-      if (!connection || connection.duration_minutes > (micros(b.departure!) - micros(a.arrival!)) / MINUTE) pair.unresolved_journey_count++;
+      if (!connection || connection.duration_minutes > elapsed(micros(b.departure!) - micros(a.arrival!), MINUTE)) pair.unresolved_journey_count++;
       pairs.set(key, pair);
     }
   }
@@ -147,9 +147,9 @@ export function prepareSolverInput(trip: PlannerTrip, globalRules: PricingRule[]
       for (const c of updated.charges) if (c.kind === "Airport access" || c.kind === "Airport egress") c.id = m.id + (c.kind === "Airport access" ? ":access" : ":egress");
       m = updated;
     } else if (["Transitous / MOTIS", RAIL_FALLBACK_SOURCE].includes(m.source) && m.segments.length) {
-      const dep = micros(m.segments[0].departure!) - spec.timing.transit_before_minutes * MINUTE;
-      const arr = micros(m.segments[m.segments.length - 1].arrival!) + spec.timing.transit_after_minutes * MINUTE;
-      m = { ...m, departure: iso(dep, true), arrival: iso(arr, true), duration_minutes: (arr - dep) / MINUTE };
+      const dep = micros(m.segments[0].departure!) - duration(spec.timing.transit_before_minutes, MINUTE);
+      const arr = micros(m.segments[m.segments.length - 1].arrival!) + duration(spec.timing.transit_after_minutes, MINUTE);
+      m = { ...m, departure: iso(dep, true), arrival: iso(arr, true), duration_minutes: elapsed(arr - dep, MINUTE) };
     }
     normalized.push(m);
   }

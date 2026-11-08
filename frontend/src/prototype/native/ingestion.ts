@@ -9,7 +9,7 @@ import { prepareRailPayload, RAIL_FALLBACK_SOURCE, searchModes } from "./rail";
 import type { RailTask } from "./rail";
 import { roadMovements } from "./preparation";
 import type { Snapshot } from "./preparation";
-import { general, iso, localDate, SECOND, stableId } from "./time";
+import { duration, general, iso, localDate, SECOND, stableId } from "./time";
 
 export type ProviderTask = { kind: "road" | "flight" | "bundle" | "transit"; key: string; from_id?: string; to_id?: string; date?: string; legs?: FlightLeg[];
   round_trip_selection?: string[][]; round_trip_root?: string;
@@ -62,9 +62,9 @@ export function ingest(task: ProviderTask, outcome: ProviderOutcome, spec: TripS
   }
   for (const m of collected) movements.set(m.id, m);
   for (const offer of fares) {
-    const retrieved = outcome.retrieved_at === undefined ? now : timestamp(outcome.retrieved_at);
+    const retrieved = outcome.retrieved_at === undefined ? BigInt(now) : timestamp(outcome.retrieved_at);
     offer.adults = spec.adults; offer.retrieved_at = iso(retrieved, true);
-    offer.expires_at = iso(retrieved + (task.kind === "flight" || task.kind === "bundle" ? 900 : transitTtl) * SECOND, true);
+    offer.expires_at = iso(retrieved + duration(task.kind === "flight" || task.kind === "bundle" ? 900 : transitTtl, SECOND), true);
     offers.set(offer.id, offer);
   }
   if (task.kind === "transit" && collected.some(m => m.mode === "rail" && !m.schedule_estimated) && !task.rail_reference_date) {

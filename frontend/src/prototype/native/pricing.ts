@@ -155,7 +155,7 @@ export function pricePath(path: Journey[], offers: Fare[], spec: Spec, rules: Ru
 }
 
 /** Keep a flight if a finite standalone fare or a complete ticket can price it. */
-export function unpricedFlightIds(movements: Journey[], index: FareIndex, spec: Spec, rules: Rule[], start: number, end: number): Set<string> {
+export function unpricedFlightIds(movements: Journey[], index: FareIndex, spec: Spec, rules: Rule[], start: bigint, end: bigint): Set<string> {
   const available = new Set<string>();
   for (const journey of movements) {
     const m = journey.raw;

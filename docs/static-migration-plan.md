@@ -16,7 +16,7 @@ No deployment is authorized as part of this checklist.
   early exclusion of flights without usable standalone or combined fares.
 - Native TypeScript solver and independent Python/Pyodide reference worker.
 - Version-1 JSON solver-input contract, enforced by both workers, with native
-  model defaults and validation matching Python on 11,983 model cases (81
+  model defaults and validation matching Python on 12,120 model cases (81
   invalid). Regenerated reference inputs carry the same contract version.
 - Native fair scheduling, relative per-call expansion budgets, flight-price
   eligibility and new response counters match current Python.
@@ -32,11 +32,11 @@ No deployment is authorized as part of this checklist.
   current timing, airport-change connections and transfer choices, road/vehicle
   regeneration, manual offer precedence, effective rules, and quote freshness.
   Missing info metadata and persisted discovery-key compatibility are included.
-- Preparation matches 51 public recalculation scenarios, 288 discovery keys,
+- Preparation matches 51 public recalculation scenarios, 307 discovery keys,
   and a read-only replay of the largest current saved trip: 1,653 prepared
   movements, 1,649 offers, and 14 routes, with matching full results and metadata.
   The comparison page now prepares saved-trip imports through this path.
-- Matching responses on 98 captured solver calls, 31 pricing calls, and 200
+- Matching responses on 107 captured solver calls, 31 pricing calls, and 200
   deterministic generated cases. Historical performance measurements still
   predate this sync; the current saved-trip replay checks correctness only.
 - Native structured-clone checkpoint continuation and changed-input/version
@@ -64,7 +64,7 @@ No deployment is authorized as part of this checklist.
   with unpriced flights excluded, unrelated unknown airport costs no longer
   cause a valid priced flight bundle to be discarded. Covered flights are not
   listed as missing fares. Affected old checkpoints/results restart/recalculate.
-- 184 backend tests and all 26 browser checks passed, including the native
+- 194 backend tests and all 26 browser checks passed, including the native
   production-artifact interaction and optional private migration replay. Native
   and earlier prototype production builds have passed.
 
@@ -111,12 +111,16 @@ selection, accumulated totals, dominance and budgets. Public currency fields
 remain numbers, matching Python's final integer-to-float division; conversion
 does not first round the integer cents to a Number. All 2,005 additional Python
 float-to-cents cases and large-total cover/budget scenarios match. Native
-checkpoints use version 3 to invalidate the former numeric representation.
+checkpoints use version 4 to invalidate the former numeric representations.
 
-The remaining time audit must include epoch-microsecond boundaries. Those
-helpers still use JavaScript numbers; the ordinary-trip corpus does not prove
-exact behavior beyond `Number.MAX_SAFE_INTEGER`. Resolve any supported-domain
-precision gap before claiming complete input equivalence.
+Native epoch microseconds are now BigInt throughout preparation, discovery,
+normalization and optimization. Added references exercise one-microsecond
+schedules in years 1, 1680, 2255, 2500 and 9998, short connections, commitments,
+last-microsecond trip bounds and generated road IDs. Twenty timestamp conversions
+and 1,208 unit-duration cases also match Python, including half-microsecond
+rounding and combined minutes/hours. Pydantic's numeric timestamp contract is
+checked separately from provider Unix seconds. Timezone database differences
+and every possible JSON coercion remain outside the demonstrated corpus.
 
 ## 2. Port complete input preparation and provider normalization
 

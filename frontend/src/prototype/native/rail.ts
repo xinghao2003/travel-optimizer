@@ -76,13 +76,13 @@ export function prepareRailPayload(payload: unknown, task: RailTask, origin: Pla
           if (meters === null || meters > 100) throw new Error("Station access time was not supplied.");
         }
       }
-      let delta = 0;
+      let delta = 0n;
       if (task.rail_reference_date) {
         const local = parseTime(riding[0].startTime);
         if (localDate(local, origin.timezone) !== task.rail_reference_date) continue;
         delta = shiftWallDate(local, task.date, origin.timezone) - local;
       }
-      let previousEnd: number | null = null;
+      let previousEnd: bigint | null = null;
       for (const leg of legs) {
         const start = parseTime(leg.startTime) + delta, end = parseTime(leg.endTime) + delta;
         if (previousEnd !== null && start < previousEnd) throw new Error("Overlapping timetable legs.");

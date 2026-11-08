@@ -2,7 +2,7 @@
  * All input settings are normalized TripSpec values; no provider I/O here.
  */
 import type { Place, TripSpec } from "../../lib/planner";
-import { addDate, at, daysBetween, duration, HOUR, localDate, micros, round, stableId } from "./time";
+import { addDate, at, daysBetween, duration, HOUR, localDate, maxInstant, micros, minInstant, round, stableId } from "./time";
 import { pairKey } from "./journeys";
 import { searchModes } from "./rail";
 
@@ -11,9 +11,9 @@ export type FlightLeg = { from_id: string; to_id: string; date: string; from_cod
 export type DiscoveryTask = { kind: "road"; key: string } | { kind: "flight" | "transit"; key: string; from_id: string; to_id: string; date: string }
   | { kind: "bundle"; key: string; ticket_kind: "round-trip" | "multi-city"; legs: FlightLeg[] };
 export const placesOf = (spec: TripSpec) => new Map([spec.home, ...spec.departures, ...spec.arrivals, ...spec.visits.map(v => v.place)].map(place => [place.id, place]));
-export function bounds(spec: TripSpec): [number, number] {
+export function bounds(spec: TripSpec): [bigint, bigint] {
   return [at(spec.start_date, spec.home_departure_earliest ?? "00:00", spec.home.timezone),
-    spec.home_arrival_latest != null ? at(spec.end_date, spec.home_arrival_latest, spec.home.timezone) : at(addDate(spec.end_date, 1), "00:00", spec.home.timezone) - 1];
+    spec.home_arrival_latest != null ? at(spec.end_date, spec.home_arrival_latest, spec.home.timezone) : at(addDate(spec.end_date, 1), "00:00", spec.home.timezone) - 1n];
 }
 export function* permutations<T>(values: T[], count = values.length): Generator<T[]> {
   if (count === 0) { yield []; return; }
@@ -32,8 +32,8 @@ export function seedDates(spec: TripSpec): string[] {
   const days = daysBetween(spec.start_date, spec.end_date), count = spec.visits.length + 1;
   return Array.from({ length: count }, (_, i) => addDate(spec.start_date, round(days * i / Math.max(1, count - 1), 0)));
 }
-export function roughDateWindows(spec: TripSpec): Map<string, [number, number]> {
-  const [start, end] = bounds(spec), windows = new Map<string, [number, number]>();
+export function roughDateWindows(spec: TripSpec): Map<string, [bigint, bigint]> {
+  const [start, end] = bounds(spec), windows = new Map<string, [bigint, bigint]>();
   if (spec.cars.own_enabled) {
     for (const [a, b] of permutations([...placesOf(spec).keys()], 2)) windows.set(pairKey(a, b), [start, end]);
     return windows;
@@ -46,10 +46,10 @@ export function roughDateWindows(spec: TripSpec): Map<string, [number, number]> 
     for (let i = 0; i + 1 < path.length; i++) {
       const a = path[i], b = path[i + 1];
       if (unspent.has(a)) { elapsed += stays.get(a)!; unspent.delete(a); }
-      const earliest = start + duration(elapsed * HOUR), latest = end - duration([...unspent].reduce((sum, id) => sum + stays.get(id)!, 0) * HOUR);
+      const earliest = start + duration(elapsed, HOUR), latest = end - duration([...unspent].reduce((sum, id) => sum + stays.get(id)!, 0), HOUR);
       if (earliest > latest) continue;
       const key = pairKey(a, b), old = windows.get(key) ?? [earliest, latest];
-      windows.set(key, [Math.min(old[0], earliest), Math.max(old[1], latest)]);
+      windows.set(key, [minInstant(old[0], earliest), maxInstant(old[1], latest)]);
     }
   }
   return windows;
@@ -97,7 +97,7 @@ export function tasksFor(spec: TripSpec, metros: MetroAirports, transitEnabled: 
     const key = pairKey(item.from_id, item.to_id), days = flightDays.get(key) ?? [];
     days.push(item.date); flightDays.set(key, days);
   }
-  const minimum = duration(spec.visits.reduce((sum, visit) => sum + visit.min_stay_hours, 0) * HOUR), bundles: DiscoveryTask[] = [];
+  const minimum = duration(spec.visits.reduce((sum, visit) => sum + visit.min_stay_hours, 0), HOUR), bundles: DiscoveryTask[] = [];
   for (const gateway of spec.departures) {
     if (!spec.arrivals.some(p => p.id === gateway.id)) continue;
     let earliest = start, latest = end;
@@ -105,8 +105,8 @@ export function tasksFor(spec: TripSpec, metros: MetroAirports, transitEnabled: 
       const [a, b] = direction === "outbound" ? [spec.home.id, gateway.id] : [gateway.id, spec.home.id];
       const services = (spec.positioning_services ?? []).filter(s => s.direction === direction && s.gateway_id === gateway.id && spec.modes.includes(s.mode) && micros(s.departure) >= start && micros(s.arrival) <= end);
       if (!searchModes(spec, a, b).length && services.length) {
-        if (direction === "outbound") earliest = Math.max(earliest, Math.min(...services.map(s => micros(s.arrival))));
-        else latest = Math.min(latest, Math.max(...services.map(s => micros(s.departure))));
+        if (direction === "outbound") earliest = maxInstant(earliest, minInstant(...services.map(s => micros(s.arrival))));
+        else latest = minInstant(latest, maxInstant(...services.map(s => micros(s.departure))));
       }
     }
     for (const visit of spec.visits) {
@@ -114,10 +114,10 @@ export function tasksFor(spec: TripSpec, metros: MetroAirports, transitEnabled: 
       if (gateway.id === dest.id) continue;
       for (const outbound of [...(flightDays.get(pairKey(gateway.id, dest.id)) ?? [])].sort()) {
         if (gateway.id === spec.home.id && spec.date_mode === "fixed" && outbound !== spec.start_date) continue;
-        const first = Math.max(earliest, at(outbound, spec.departure_start, gateway.timezone));
+        const first = maxInstant(earliest, at(outbound, spec.departure_start, gateway.timezone));
         if (first > at(outbound, spec.departure_end, gateway.timezone)) continue;
         for (const inbound of [...(flightDays.get(pairKey(dest.id, gateway.id)) ?? [])].sort()) {
-          const last = Math.min(latest, at(inbound, spec.departure_end, dest.timezone));
+          const last = minInstant(latest, at(inbound, spec.departure_end, dest.timezone));
           if (last < first + minimum || last < at(inbound, spec.departure_start, dest.timezone)) continue;
           const legs = [makeLeg(gateway, dest, outbound, metros), makeLeg(dest, gateway, inbound, metros)], key = stableId("round-trip", legs);
           if (!seen.has(key)) { seen.add(key); bundles.push({ kind: "bundle", ticket_kind: "round-trip", key, legs }); }

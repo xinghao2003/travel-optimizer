@@ -3,14 +3,14 @@
  */
 import type { AirportConnection, Charge, Movement, Offer, Place, Segment, TripSpec } from "../../lib/planner";
 import { normalizeCharge, normalizeFare, normalizeJourney, normalizeSegment } from "./types";
-import { duration, general, iso, localDate, localTime, MINUTE, micros, round, SECOND, stableId, stableModelId, timeKey } from "./time";
+import { duration, elapsed, general, iso, localDate, localTime, MINUTE, micros, round, stableId, stableModelId, timeKey, unixMicros } from "./time";
 
 export type Road = { duration_minutes: number; distance_km: number | null };
 export type Roads = Record<string, Road>;
 export type RawSegment = Pick<Segment, "mode" | "from_name" | "to_name"> & Partial<Segment>;
 export const pairKey = (from: string | null | undefined, to: string | null | undefined) => JSON.stringify([from, to]);
-export const timestamp = (value: string | number) => typeof value === "number" ? duration(value * SECOND) : micros(value);
-const modelTime = (value: number) => iso(value, true);
+export const timestamp = (value: string | number) => typeof value === "number" ? unixMicros(value) : micros(value);
+const modelTime = (value: bigint) => iso(value, true);
 
 export function flightMovement(origin: Place, dest: Place, segments: RawSegment[], spec: TripSpec, roads: Roads, connections: Map<string, AirportConnection> = new Map(), normalizedSegments = false): Movement {
   if (!segments.length) throw new Error("A flight journey needs at least one segment.");
@@ -31,28 +31,28 @@ export function flightMovement(origin: Place, dest: Place, segments: RawSegment[
     if (!road) assumptions.push(`${city.name}: ${minutes} minute airport transfer assumption; road routing unavailable`);
     if (minutes > 0 || (distance ?? 0) > 0) charges.push(normalizeCharge({ id: id + ":" + kind, kind: "Airport " + kind, distance_km: distance, from_id: left, to_id: right, country_code: city.country_code } as Charge));
   }
-  const dep = rawDeparture - duration((accessMinutes[0] + spec.timing.flight_before_minutes) * MINUTE);
-  const arr = rawArrival + duration((accessMinutes[1] + spec.timing.flight_after_minutes) * MINUTE);
+  const dep = rawDeparture - duration(accessMinutes[0] + spec.timing.flight_before_minutes, MINUTE);
+  const arr = rawArrival + duration(accessMinutes[1] + spec.timing.flight_after_minutes, MINUTE);
   if (arr <= dep) throw new Error("Movements need increasing timezone-aware timestamps.");
   const flights = segments.map(normalizeSegment).filter(segment => segment.mode === "flight");
   if (!flights.length) throw new Error("A flight journey needs flight segments.");
   const first = flights[0], last = flights[flights.length - 1], chronology: Segment[] = [];
   const append = (value: RawSegment) => chronology.push(normalizeSegment(value));
   if (accessMinutes[0]) append({ mode: "transfer", from_name: origin.name, to_name: first.from_name, departure: modelTime(dep),
-    arrival: modelTime(rawDeparture - spec.timing.flight_before_minutes * MINUTE), duration_minutes: accessMinutes[0], source: "Airport access",
+    arrival: modelTime(rawDeparture - duration(spec.timing.flight_before_minutes, MINUTE)), duration_minutes: accessMinutes[0], source: "Airport access",
     assumed: assumptions.some(a => a.includes(origin.name)), from_timezone: origin.timezone, to_timezone: first.from_timezone });
   if (spec.timing.flight_before_minutes) append({ mode: "wait", from_name: first.from_name, to_name: first.from_name,
-    departure: modelTime(rawDeparture - spec.timing.flight_before_minutes * MINUTE), arrival: modelTime(rawDeparture), duration_minutes: spec.timing.flight_before_minutes,
+    departure: modelTime(rawDeparture - duration(spec.timing.flight_before_minutes, MINUTE)), arrival: modelTime(rawDeparture), duration_minutes: spec.timing.flight_before_minutes,
     source: "Flight readiness buffer", assumed: true, from_timezone: first.from_timezone, to_timezone: first.from_timezone });
   for (let i = 0; i < flights.length; i++) {
     const flight = flights[i];
     if (i) {
       const previous = flights[i - 1], previousArrival = timestamp(previous.arrival!), flightDeparture = timestamp(flight.departure!);
-      const gap = (flightDeparture - previousArrival) / MINUTE;
+      const gap = elapsed(flightDeparture - previousArrival, MINUTE);
       if (previous.to_id !== flight.from_id) {
         const connection = connections.get(pairKey(previous.to_id, flight.from_id));
         if (connection && connection.duration_minutes <= gap) {
-          const transferArrival = previousArrival + duration(connection.duration_minutes * MINUTE);
+          const transferArrival = previousArrival + duration(connection.duration_minutes, MINUTE);
           append({ mode: connection.mode, from_name: previous.to_name, to_name: flight.from_name, departure: previous.arrival, arrival: modelTime(transferArrival),
             duration_minutes: connection.duration_minutes, from_id: previous.to_id, to_id: flight.from_id, from_timezone: previous.to_timezone,
             to_timezone: flight.from_timezone, source: "User-verified airport transfer", assumed: true });
@@ -75,13 +75,13 @@ export function flightMovement(origin: Place, dest: Place, segments: RawSegment[
     chronology.push(flight);
   }
   if (spec.timing.flight_after_minutes) append({ mode: "wait", from_name: last.to_name, to_name: last.to_name, departure: modelTime(rawArrival),
-    arrival: modelTime(rawArrival + spec.timing.flight_after_minutes * MINUTE), duration_minutes: spec.timing.flight_after_minutes, source: "Arrival buffer", assumed: true,
+    arrival: modelTime(rawArrival + duration(spec.timing.flight_after_minutes, MINUTE)), duration_minutes: spec.timing.flight_after_minutes, source: "Arrival buffer", assumed: true,
     from_timezone: last.to_timezone, to_timezone: last.to_timezone });
   if (accessMinutes[1]) append({ mode: "transfer", from_name: last.to_name, to_name: dest.name,
-    departure: modelTime(rawArrival + spec.timing.flight_after_minutes * MINUTE), arrival: modelTime(arr), duration_minutes: accessMinutes[1], source: "Airport egress",
+    departure: modelTime(rawArrival + duration(spec.timing.flight_after_minutes, MINUTE)), arrival: modelTime(arr), duration_minutes: accessMinutes[1], source: "Airport egress",
     assumed: assumptions.some(a => a.includes(dest.name)), from_timezone: last.to_timezone, to_timezone: dest.timezone });
   return normalizeJourney({ id, from_id: origin.id, to_id: dest.id, mode: "flight", departure: modelTime(dep), arrival: modelTime(arr), usable,
-    duration_minutes: (arr - dep) / MINUTE, transfers: segments.length - 1, segments: chronology, charges, source: "Google Flights / fast-flights", assumptions } as Movement).raw;
+    duration_minutes: elapsed(arr - dep, MINUTE), transfers: segments.length - 1, segments: chronology, charges, source: "Google Flights / fast-flights", assumptions } as Movement).raw;
 }
 
 type ObjectValue = Record<string, unknown>;
@@ -152,7 +152,7 @@ export function transitMovements(payload: unknown, origin: Place, dest: Place, s
       });
       const id = "transit:" + stableId(origin.id, dest.id, segments);
       const movement = normalizeJourney({ id, from_id: origin.id, to_id: dest.id, mode: modes.includes("rail") ? "rail" : modes[0],
-        departure: modelTime(dep - spec.timing.transit_before_minutes * MINUTE), arrival: modelTime(arr + spec.timing.transit_after_minutes * MINUTE), duration_minutes: (arr - dep) / MINUTE,
+        departure: modelTime(dep - duration(spec.timing.transit_before_minutes, MINUTE)), arrival: modelTime(arr + duration(spec.timing.transit_after_minutes, MINUTE)), duration_minutes: elapsed(arr - dep, MINUTE),
         transfers: riding.slice(1).filter(leg => !leg.interlineWithPreviousLeg).length, segments, source: "Transitous / MOTIS" } as Movement).raw;
       if (micros(movement.arrival!) <= micros(movement.departure!)) continue;
       const looped = [...new Set(riding.filter(leg => leg.loopedCalendarSince).map(leg => String(leg.loopedCalendarSince)))].sort();

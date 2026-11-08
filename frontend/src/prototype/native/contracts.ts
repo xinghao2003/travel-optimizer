@@ -5,7 +5,7 @@ import { Temporal } from "@js-temporal/polyfill";
 import type { AirportConnection, AirportTransferEstimate, Charge, JourneyPriceScope, Movement, Offer, Place, PricingRule, Segment, TripSpec } from "../../lib/planner";
 import { modes } from "../../lib/planner";
 import type { SolverInput } from "./types";
-import { daysBetween, duration, iso, micros, MINUTE, modelTimestamp, timeKey } from "./time";
+import { daysBetween, elapsed, iso, micros, MINUTE, modelTimestamp, timeKey } from "./time";
 
 type Parser<T = unknown> = (value: unknown) => T;
 type Value = Record<string, unknown>;
@@ -50,11 +50,19 @@ const date: Parser<string> = value => {
   return /^\d{4}-\d{2}-\d{2}$/.test(result) && !result.startsWith("0000") ? result : fail("Enter a valid date.");
 };
 const time: Parser<string> = value => timeKey(text()(value)).replace(/\.000000$/, "");
+function numericTimestamp(value: number): bigint {
+  // Match the pinned Pydantic-core 2.50.1 / Speedate 0.17.0 conversion,
+  // including its absolute fractional part for negative values. Its integer
+  // inference and fraction inference use floor(value) and value respectively.
+  const whole = Math.floor(value), scale = Math.abs(whole) > 20_000_000_000 ? 1000n : 1_000_000n;
+  const fraction = Math.abs(value % 1) * (Math.abs(value) > 20_000_000_000 ? 1000 : 1_000_000);
+  return BigInt(whole) * scale + BigInt(Math.round(fraction));
+}
 const datetime: Parser<string> = value => {
   // Pydantic accepts Unix seconds, or milliseconds beyond its 2e10 cutoff.
   const numeric = typeof value === "number" || typeof value === "string" && /^[+-]?\d+(?:\.\d+)?$/.test(value);
   const raw = numeric ? Number(value) : null;
-  const result = raw !== null ? iso(duration(raw * (Math.abs(raw) > 20_000_000_000 ? 1000 : 1_000_000)), true)
+  const result = raw !== null ? iso(numericTimestamp(raw), true)
     : modelTimestamp(/^\d{4}-\d{2}-\d{2}$/.test(text()(value)) ? `${value}T00:00:00` : value as string);
   return /^\d{4}-/.test(result) && !result.startsWith("0000") ? result : fail("Enter a datetime between years 1 and 9999.");
 };
@@ -157,7 +165,7 @@ export const parseMovement: Parser<Movement> = value => {
   if (movement.departure !== null) {
     awareInterval(movement.departure, movement.arrival!, "Movements need increasing timezone-aware timestamps.");
     const dep = micros(movement.departure), arr = micros(movement.arrival!);
-    movement.departure = iso(dep, true); movement.arrival = iso(arr, true); movement.duration_minutes = (arr - dep) / MINUTE;
+    movement.departure = iso(dep, true); movement.arrival = iso(arr, true); movement.duration_minutes = elapsed(arr - dep, MINUTE);
   }
   return movement;
 };

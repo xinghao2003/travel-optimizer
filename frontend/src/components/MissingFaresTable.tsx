@@ -65,13 +65,13 @@ export function GroupPrices({ groups, fares, adults, stagePrice, unstage, onAppl
   </MissingSection>;
 }
 
-/** "Price is in {JPY}. 1 {JPY} = [ ] MYR Add rate or enter the price in MYR." Add rate writes the trip's exchange rates (autosave). */
+/** "Price is in {JPY}. 1 {JPY} = [ ] MYR Add rate or enter the price in MYR." Rates are drafts until Apply. */
 export function RateField({ currency, id, added, addRate }: { currency: string; id?: string; added: boolean; addRate: (currency: string, rate: number) => void }) {
   const generated = useId();
   const inputId = id ?? generated, errorId = `${inputId}-error`;
   const [text, setText] = useState("");
   const [error, setError] = useState("");
-  if (added) return <p className="p-mi-meta" role="status">Rate for {currency} added. The options update after the trip saves.</p>;
+  if (added) return <p className="p-mi-meta" role="status">Rate for {currency} entered. Apply pending changes to update options.</p>;
   function add() {
     const rate = Number(text);
     if (text.trim() === "" || !Number.isFinite(rate) || rate <= 0) { setError("Enter a rate above 0."); return; }

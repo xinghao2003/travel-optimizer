@@ -7,7 +7,12 @@ optimization, publication, and saving. A round finishes early if no work
 remains. It pauses near its deadline otherwise.
 
 In timed mode, the provider-query batch allowance and expanded-state allowance
-do not stop the round. Provider concurrency limits, request timeouts, supported
+do not stop the round. A safety limit of 100,000 additional expanded states per
+calculation applies in both modes (`PLANNER_SOLVE_BATCH`). Reaching it pauses
+the search round with partial options and a checkpoint; Continue resumes that work.
+Each continuation can grow the saved checkpoint further. The limit bounds work
+per calculation, not total memory across repeated continuations.
+Provider concurrency limits, request timeouts, supported
 query types, and serial follow-up policies remain unchanged. Selecting
 **Requests** uses the existing count-based behavior: 100 uncached query tasks
 per batch by default, and a 25,000-state initial optimizer allowance. One query
@@ -24,8 +29,57 @@ and then that the current operation is finishing. Details show elapsed time.
 time is not charged again. The selection is restored from the saved job when
 opening the trip. A paused trip does not automatically restart calculation on
 page load. Its last calculated options remain available while newer collected
-schedules await calculation. A separate **Optimize for … minutes** action only
-works on saved schedules and makes no provider requests.
+schedules await calculation.
+
+## Continuous checking
+
+**Check more combinations** starts a separate background calculation on saved
+schedules and becomes **Stop checking**. It checks up to `PLANNER_SOLVE_BATCH`
+additional states per batch, saves a checkpoint and publishes options, then
+starts the next batch automatically. It does not use the transport-search
+request or minutes allowance, and makes no provider requests. It finishes when
+all combinations have been checked.
+
+Stop requests are cooperative. The current state expansion, result preparation
+or checkpoint saving can finish before the status changes from Stopping to
+stopped. Progress remains available for a later run. Navigation or closing the
+browser does not stop the backend job. Server shutdown stops it; after restart,
+its status is interrupted and it continues only when requested again.
+
+Only one continuous checker runs at a time, and it cannot overlap a transport
+search on the same trip. Applying edits or recalculating pauses the checker
+before proceeding. Settings changes invalidate that run; the next explicit
+check uses the changed inputs. The original transport-search queue is retained.
+
+There is no checkpoint-size limit. Batches still bound additional expansions,
+but total memory and disk use can keep growing until stopped or complete.
+The details show saved checkpoint size. A trip paused under the previous size
+limit can continue normally. A complete solve removes its checkpoint.
+
+The solver shares 16-state turns across starting journeys and departure gateways.
+When **Skip flights without a price** is enabled, flights with no usable
+standalone fare, user estimate, or combined-ticket coverage are removed before
+exploration. A combined ticket must have a finite price in a configured currency,
+match the party size, and reference components present in the saved graph.
+Its flights must still occur together on a feasible itinerary. This does not
+remove provider schedules or change the provider-search queue.
+
+Variants of the same first flight share a branch, so airport-transfer choices
+do not each get a separate share. Fully priced paths receive three turns,
+paths with priced flights but other missing costs receive two, and paths with
+unpriced flights receive one. Turns rotate among branches in each tier. A
+child's tier is recalculated as its path grows; a later combined ticket can
+cover previously unpriced flights. All tiers retain regular turns and the
+same feasibility and ticket-cover checks. This changes partial-result order
+and adds scheduling overhead; it does not make partial results exhaustive.
+Matching older depth-first checkpoints preserve completed itineraries, explored
+states, and counters while redistributing pending work into the fair schedule.
+Pending legacy paths containing an excluded flight are discarded.
+
+Results report how many completed itineraries were hidden because their flight
+prices were not applicable or complete. An empty Options panel distinguishes
+that price filter from finding no complete itinerary. Round-trip quotes cover
+their exact matching flight pair and do not price an unmatched single flight.
 
 ## What is saved
 
@@ -39,7 +93,7 @@ and weaker-route recovery experiments.
 Provider discovery retains its query queue, cursor, collected schedules and
 fares, and counters. The optimizer additionally checkpoints:
 
-- Pending states in their original expansion order.
+- Pending states, branch turns, and price-tier scheduling position.
 - Partial-state dominance records.
 - All completed histories, including currently dominated histories needed for
   combined-ticket discovery.

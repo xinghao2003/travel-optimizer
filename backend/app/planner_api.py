@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
+from typing import Literal
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, model_validator
@@ -13,6 +15,12 @@ from .planner_store import store
 from .planner_results import compact_trip, compact_result, fare_component_ids
 
 router = APIRouter(prefix="/api/v2")
+
+
+def require_minimum_stays(spec):
+    # Legacy zero-hour settings remain readable so users can correct them.
+    if any(visit.get("min_stay_hours", 0) <= 0 for visit in spec["visits"]):
+        raise HTTPException(422, "Enter a minimum stay greater than 0 hours for each city.")
 
 
 class UpdateTrip(BaseModel):
@@ -75,11 +83,26 @@ class SharedEstimatesRequest(BaseModel):
     expected_revision: int
 
 
+class MissingInfoDeletion(BaseModel):
+    kind: Literal["offer", "journey_rule", "exchange_rate", "airport_transfer", "airport_change"]
+    id: str = Field(min_length=1, max_length=1000)
+
+
 class ApplyChangesRequest(BaseModel):
     expected_revision: int
     connections: list[AirportConnection] | None = Field(default=None, max_length=120)
     transfers: list[AirportTransferEstimate] | None = Field(default=None, max_length=240)
     estimates: list[SharedFareValues] = Field(default_factory=list, max_length=5000)
+    exchange_rates: dict[str, float] = Field(default_factory=dict)
+    deletions: list[MissingInfoDeletion] = Field(default_factory=list, max_length=5000)
+
+    @model_validator(mode="after")
+    def valid_rates(self):
+        if any(len(code) != 3 or not code.isascii() or not code.isalpha() or code != code.upper()
+               or not math.isfinite(rate) or rate <= 0 or (code == "MYR" and rate != 1)
+               for code, rate in self.exchange_rates.items()):
+            raise ValueError("Use 3-letter uppercase currencies and positive MYR per unit. MYR must be 1.")
+        return self
 
 
 def get_trip(id):
@@ -101,12 +124,12 @@ async def places_nearest(latitude: float = Query(ge=-90, le=90), longitude: floa
 
 @router.get("/trips")
 async def list_trips():
-    return {"trips": [{"id": t["id"], "name": t["spec"]["name"], "revision": t["revision"],
-                       "start_date": t["spec"]["start_date"], "end_date": t["spec"]["end_date"]} for t in store.list("trips")]}
+    return {"trips": await asyncio.to_thread(store.trip_summaries)}
 
 
 @router.post("/trips", status_code=201)
 async def create_trip(spec: TripSpec):
+    require_minimum_stays(spec.model_dump(mode="json"))
     trip = store.new_trip(spec.model_dump(mode="json"))
     trip["airport_transfer_rows"] = airport_transfer_rows(spec)
     return trip
@@ -163,6 +186,8 @@ async def read_trip(id: str, include_graph: bool = False, compact: bool = False)
 
 @router.put("/trips/{id}")
 async def update_trip(id: str, request: UpdateTrip):
+    require_minimum_stays(request.spec.model_dump(mode="json"))
+    await manager.stop_continuous_for_trip(id)
     def update(trip):
         if request.expected_revision != trip["revision"]:
             raise HTTPException(409, "This trip changed. Reload it before saving.")
@@ -185,6 +210,8 @@ async def update_trip(id: str, request: UpdateTrip):
 @router.delete("/trips/{id}")
 async def delete_trip(id: str):
     get_trip(id)
+    if any(not task.done() and manager.continuous_jobs[key]["trip_id"] == id for key, task in manager.continuous_running.items()):
+        raise HTTPException(409, "Stop checking combinations before deleting this trip.")
     for job in store.list("jobs"):
         if job["trip_id"] == id and (job["status"] in {"running", "queued"} or job["id"] in manager.running):
             raise HTTPException(409, "Cancel discovery before deleting this trip.")
@@ -192,12 +219,18 @@ async def delete_trip(id: str):
         if job["trip_id"] == id:
             store.delete("jobs", job["id"])
     store.delete("trips", id)
+    for job in store.list("optimizations"):
+        if job["trip_id"] == id:
+            store.delete("optimizations", job["id"])
     return {"deleted": True}
 
 
 @router.post("/trips/{id}/searches", status_code=202)
 async def start_search(id: str, request: SearchRequest):
-    get_trip(id)
+    spec = await asyncio.to_thread(store.trip_spec, id)
+    if spec is None:
+        raise HTTPException(404, "Trip not found.")
+    require_minimum_stays(spec)
     try:
         return manager.start(id, request.budget, minutes=request.minutes)
     except ValueError as exc:
@@ -217,6 +250,10 @@ async def continue_search(id: str, request: SearchRequest):
     job = store.get("jobs", id)
     if job is None:
         raise HTTPException(404, "Search not found.")
+    spec = await asyncio.to_thread(store.trip_spec, job["trip_id"])
+    if spec is None:
+        raise HTTPException(404, "Trip not found.")
+    require_minimum_stays(spec)
     try:
         return manager.start(job["trip_id"], request.budget, id, minutes=request.minutes)
     except ValueError as exc:
@@ -236,6 +273,34 @@ async def recalculate(id: str, request: OptimizationRequest = OptimizationReques
     result = await manager.recalculate(id, expand=request.expand, include_dominated=request.include_dominated, minutes=request.minutes)
     result.pop("bundle_candidates", None)
     return await asyncio.to_thread(lambda: JSONResponse(compact_result(result) if request.compact else result))
+
+
+@router.post("/trips/{id}/optimizations", status_code=202)
+async def start_continuous_optimization(id: str):
+    spec = await asyncio.to_thread(store.trip_spec, id)
+    if spec is None:
+        raise HTTPException(404, "Trip not found.")
+    require_minimum_stays(spec)
+    try:
+        return manager.start_continuous(id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.get("/optimizations/{id}")
+async def continuous_optimization_status(id: str):
+    job = manager.continuous_status(id)
+    if job is None:
+        raise HTTPException(404, "Calculation not found.")
+    return dict(job)
+
+
+@router.post("/optimizations/{id}/stop")
+async def stop_continuous_optimization(id: str):
+    try:
+        return manager.stop_continuous(id)
+    except KeyError as exc:
+        raise HTTPException(404, "Calculation not found.") from exc
 
 
 @router.put("/trips/{id}/fares/{offer_id}")
@@ -360,9 +425,11 @@ def apply_missing_info(trip, request: ApplyChangesRequest):
     """Validate every kind before committing one revision; retain the full movement graph."""
     if trip["revision"] != request.expected_revision:
         raise HTTPException(409, "This trip changed. Reload it before saving.")
-    if request.connections is None and request.transfers is None and not request.estimates:
+    if request.connections is None and request.transfers is None and not request.estimates and not request.exchange_rates and not request.deletions:
         raise HTTPException(422, "No changes to apply.")
     updated = dict(trip)
+    if request.exchange_rates:
+        updated["spec"] = {**trip["spec"], "exchange_rates": {**trip["spec"]["exchange_rates"], **request.exchange_rates}}
     if request.connections is not None:
         updated["airport_connections"] = connection_payload(request.connections)
     if request.transfers is not None:
@@ -372,6 +439,34 @@ def apply_missing_info(trip, request: ApplyChangesRequest):
         replaced = {o["id"] for o in offers}
         updated["offers"] = [o for o in trip.get("offers", []) if o["id"] not in replaced]+offers
         updated["journey_pricing_rules"] = reusable_journey_rules(trip, request.estimates)
+    # Delete only user-entered values in this trip. Provider data and schedules remain.
+    deletion_targets = {
+        "offer": {o["id"] for o in trip.get("offers", []) if o.get("source") == "user"},
+        "journey_rule": {r["id"] for r in trip.get("journey_pricing_rules", [])},
+        "exchange_rate": set(trip["spec"]["exchange_rates"])-{"MYR"},
+        "airport_change": {f'{c["from_airport"]}>{c["to_airport"]}' for c in trip.get("airport_connections", [])},
+        "airport_transfer": {json.dumps([e["from_id"], e["to_id"], e["adults"], e["mode"]], ensure_ascii=False, separators=(",", ":")) for e in trip.get("airport_transfer_estimates", [])},
+    }
+    removed = {kind: set() for kind in deletion_targets}
+    for deletion in request.deletions:
+        if deletion.id not in deletion_targets[deletion.kind]:
+            raise HTTPException(422, "A deletion must identify an existing user-entered value in this trip. MYR and provider data cannot be deleted.")
+        removed[deletion.kind].add(deletion.id)
+    if removed["exchange_rate"] & request.exchange_rates.keys():
+        raise HTTPException(422, "Do not update and delete the same exchange rate in one batch.")
+    if request.estimates and (removed["offer"] & {o["id"] for o in offers}
+            or any("journey-estimate:"+stable_id(e.scope.model_dump(mode="json")) in removed["journey_rule"] for e in request.estimates if e.scope)):
+        raise HTTPException(422, "Do not update and delete the same saved price in one batch.")
+    if removed["offer"]:
+        updated["offers"] = [o for o in updated.get("offers", []) if o["id"] not in removed["offer"]]
+    if removed["journey_rule"]:
+        updated["journey_pricing_rules"] = [r for r in updated.get("journey_pricing_rules", []) if r["id"] not in removed["journey_rule"]]
+    if removed["exchange_rate"]:
+        updated["spec"] = {**updated["spec"], "exchange_rates": {c: r for c, r in updated["spec"]["exchange_rates"].items() if c not in removed["exchange_rate"]}}
+    if removed["airport_change"]:
+        updated["airport_connections"] = [c for c in updated.get("airport_connections", []) if f'{c["from_airport"]}>{c["to_airport"]}' not in removed["airport_change"]]
+    if removed["airport_transfer"]:
+        updated["airport_transfer_estimates"] = [e for e in updated.get("airport_transfer_estimates", []) if json.dumps([e["from_id"], e["to_id"], e["adults"], e["mode"]], ensure_ascii=False, separators=(",", ":")) not in removed["airport_transfer"]]
     updated["revision"] += 1
     updated.pop("result", None)
     return updated

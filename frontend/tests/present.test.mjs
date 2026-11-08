@@ -9,6 +9,61 @@ const {
 } = await loadTs("../src/lib/present.ts");
 const { blankTrip } = await loadTs("../src/lib/planner.ts");
 
+test("continuous checking swaps its action for Stop and lets old size pauses resume", () => {
+  const props = { invalid: false, dirty: false, saved: { snapshot: {} }, result: { optimization_complete: false }, job: null };
+  const optimization = { status: 'running', expanded_labels: 250000 };
+  const running = searchState({ ...props, optimization });
+  assert.equal(running.id, 'checking');
+  assert.equal(running.actions[0].label, 'Stop checking');
+  assert.equal(running.actions[0].run, 'stop-optimization');
+  assert.equal(running.secondary, null);
+  // Stop remains available even while the user types an invalid settings value.
+  assert.equal(searchState({ ...props, invalid: true, optimization }).actions[0].run, 'stop-optimization');
+  const stopping = searchState({ ...props, optimization: { ...optimization, status: 'stopping' } });
+  assert.equal(stopping.actions[0].disabled, true);
+  assert.match(stopping.text, /saving/);
+  const paused = searchState({ ...props, optimization: { ...optimization, status: 'paused', pause_reason: 'checkpoint' } });
+  assert.match(paused.text, /previous checkpoint-size limit.*Continue to resume without that limit/);
+  assert.equal(paused.secondary.action.label, 'Check more combinations');
+  assert.equal(searchState({ ...props, optimization: { ...optimization, status: 'cancelled' } }).secondary.action.run, 'optimize');
+});
+
+test("empty options explain completed itineraries hidden by flight-price eligibility", () => {
+  const state = optionsEmptyState({ searched: true, active: false, pending: 0, hasResult: true, best: 0,
+    refinement: [], budget: null, staySum: null, gaps: [], excludeUnpricedFlights: true, steps: [], placeName: id => id, hiddenUnpricedFlights: 74652 });
+  assert.equal(state.id, 'unpriced-flights');
+  assert.match(state.title, /Itineraries found/);
+  assert.match(state.lines[0].text, /74,652.*hidden/);
+  assert.equal(state.lines[0].action.target, 'show-unpriced-flights');
+  assert.match(state.lines[1].text, /round-trip.*both matching flights/);
+  const details = searchDetails({ saved: { snapshot: {} }, job: null, result: {
+    snapshot_revision: 1, feasible_count: 10, expanded_labels: 30, coverage: {}, excluded_unpriced_flight_count: 3,
+  } });
+  assert.ok(details.lines.some(line => /Skipped 3 flight choices.*standalone or combined-ticket price/.test(line)));
+});
+
+test("an incomplete calculation does not claim that no itinerary fits", () => {
+  const props = { searched: true, active: false, pending: 0, hasResult: true, best: 0, refinement: [],
+    budget: null, staySum: null, gaps: [], excludeUnpricedFlights: false, steps: [], placeName: id => id, calculationPending: true };
+  assert.match(optionsEmptyState(props).lines[0].text, /More combinations remain/);
+  assert.match(optionsEmptyState({ ...props, checking: true }).lines[0].text, /Checking saved combinations/);
+});
+
+test("minimum stays must be explicitly positive for every city", () => {
+  for (const value of [0, -1, NaN, Infinity, 8761]) {
+    assert.match(validateDraft({ ...blankTrip(), visits: [{ place: { id: "city" }, min_stay_hours: value }] }).stays, /minimum stay/);
+  }
+  assert.equal(validateDraft({ ...blankTrip(), visits: [{ place: { id: "city" }, min_stay_hours: .5 }] }).stays, undefined);
+});
+
+test("calculation safety pause explains partial results and offers continuation", () => {
+  const state = searchState({ invalid: false, dirty: false, saved: { snapshot: {} },
+    result: { optimization_complete: false }, job: { status: "paused", pause_reason: "calculation", optimization_pending: true, pending: 0, time_budget_seconds: 600 } });
+  assert.match(state.text, /safety limit.*Partial options/);
+  assert.equal(state.actions[0].run, "continue");
+  assert.equal(state.secondary, null);
+});
+
 test("timed rounds show time, pending optimizer continuation and the selected next allowance", () => {
   const job = { id: "j", trip_id: "t", status: "paused", processed: 10, pending: 0, failed_queries: 0,
     requests: 10, cache_hits: 0, messages: [], bundle_links: [], batch_budget: 1, batch_requests: 10,
@@ -529,7 +584,7 @@ test("draft validation lists errors in the order the settings footer reports the
   assert.deepEqual(validateDraft(draftTrip(sameDay)), { homeTimes: "Be home after you leave home." });
   assert.deepEqual(validateDraft(draftTrip({ ...sameDay, end_date: "2026-12-05" })), {});
   assert.deepEqual(validateDraft(draftTrip({ adults: 0, budget_myr: -1, visits: [{ place: place("GMP", "Seoul"), min_stay_hours: 9000 }] })), {
-    stays: "Enter 0 to 8,760 hours.", adults: "Enter 1 to 9 adults.", budget: "Enter 0 or more, or leave it blank.",
+    stays: "Enter a minimum stay greater than 0 and up to 8,760 hours for each city.", adults: "Enter 1 to 9 adults.", budget: "Enter 0 or more, or leave it blank.",
   });
 });
 

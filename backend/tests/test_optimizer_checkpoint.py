@@ -1,12 +1,13 @@
 import pickle
 import tempfile
 import unittest
+from collections import deque
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.planner_discovery import DiscoveryManager
-from app.planner_models import Visit
+from app.planner_models import Visit, stable_id
 from app.planner_optimizer import CHECKPOINT_VERSION, SearchCheckpoint, optimize
 from app.planner_store import PlannerStore
 from test_planner import HOME, A, B, dt, fare, movement, trip
@@ -25,6 +26,19 @@ def inputs():
 
 
 class CheckpointTests(unittest.TestCase):
+    def test_safety_budget_resumes_without_changing_the_final_results(self):
+        checkpoint = SearchCheckpoint()
+        result = optimize(*inputs(), checkpoint=checkpoint, expansion_budget=10)
+        self.assertTrue(result['safety_limit_reached'])
+        self.assertEqual(result['expanded_labels'], 10)
+        previous = result['expanded_labels']
+        result = optimize(*inputs(), checkpoint=checkpoint, expansion_budget=10)
+        self.assertEqual(checkpoint.resumed_from, previous)
+        self.assertEqual(result['expanded_labels'], previous + 10)
+        result = optimize(*inputs(), checkpoint=checkpoint, expansion_budget=100000)
+        self.assertFalse(result.pop('safety_limit_reached'))
+        self.assertEqual(result, optimize(*inputs()))
+
     def test_pickled_rounds_match_fresh_prefixes_and_complete_search(self):
         args = inputs()
         checkpoint = SearchCheckpoint()
@@ -80,6 +94,28 @@ class CheckpointTests(unittest.TestCase):
 
 
 class DurableCheckpointTests(unittest.IsolatedAsyncioTestCase):
+    async def test_old_durable_checkpoint_is_loaded_and_migrated(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = PlannerStore(Path(directory) / 'planner.sqlite3')
+            spec, moves, offers, rules = inputs()
+            record = store.new_trip(spec.model_dump(mode='json'))
+            record['snapshot'] = {'revision': 1, 'label_limit': 10, 'roads': {}, 'coverage': {},
+                'movements': [m.model_dump(mode='json') for m in moves],
+                'offers': [o.model_dump(mode='json') for o in offers]}
+            store.put('trips', record['id'], record)
+            checkpoint = SearchCheckpoint()
+            optimize(spec, moves, offers, rules, snapshot_revision=1, trip_revision=1,
+                     checkpoint=checkpoint, expansion_budget=10)
+            checkpoint.signature = stable_id(1, spec.model_dump(mode='json'),
+                [m.model_dump(mode='json') for m in moves], [o.model_dump(mode='json') for o in offers], [], True)
+            checkpoint.queue = deque(checkpoint.queue)
+            store.save_optimizer_checkpoint(record['id'], 1, pickle.dumps(checkpoint, protocol=5))
+            from app import planner_discovery
+            with patch.object(planner_discovery, 'optimize', wraps=optimize) as solver:
+                result = await DiscoveryManager(store).recalculate(record['id'], expand=True)
+                self.assertEqual(solver.call_args.kwargs['checkpoint'].resumed_from, 10)
+            self.assertEqual(result['routes'], optimize(spec, moves, offers, [])['routes'])
+
     async def test_restart_resumes_and_completion_removes_checkpoint(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'planner.sqlite3'

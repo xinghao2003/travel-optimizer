@@ -27,6 +27,30 @@ def query(key):
 
 
 class TimedSearchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_safety_pause_does_not_automatically_restart_solver_or_fetch(self):
+        from test_optimizer_checkpoint import inputs
+        spec, moves, offers, _ = inputs()
+        self.record.update(spec=spec.model_dump(mode='json'), snapshot={
+            'revision': 1, 'roads': {}, 'coverage': {},
+            'movements': [m.model_dump(mode='json') for m in moves],
+            'offers': [o.model_dump(mode='json') for o in offers]})
+        self.store.put('trips', self.record['id'], self.record)
+        self.manager.fetch = AsyncMock(return_value=({'status': 'empty', 'options': []}, True))
+        with patch.dict('os.environ', {'PLANNER_SOLVE_BATCH': '10'}), patch.object(discovery, 'tasks_for', return_value=[]):
+            job = self.manager.start(self.record['id'], minutes=10)
+            await self.manager.running[job['id']]
+            first = self.store.get('trips', self.record['id'])['result']
+            paused = self.store.get('jobs', job['id'])
+            self.assertEqual((paused['status'], paused['pause_reason']), ('paused', 'calculation'))
+            self.assertEqual(first['expanded_labels'], 10)
+            self.assertTrue(paused['optimization_pending'])
+            self.manager.start(self.record['id'], job_id=job['id'], minutes=10)
+            await self.manager.running[job['id']]
+            second = self.store.get('trips', self.record['id'])['result']
+            self.assertEqual(second['expanded_labels'], 20)
+            self.assertEqual(self.store.get('jobs', job['id'])['pause_reason'], 'calculation')
+        self.manager.fetch.assert_not_awaited()
+
     async def asyncSetUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
@@ -163,6 +187,8 @@ class TimedSearchTests(unittest.IsolatedAsyncioTestCase):
     async def test_search_api_accepts_time_and_rejects_invalid_minutes(self):
         import httpx
         from app import main, planner_api
+        self.record['spec']['visits'][0]['min_stay_hours'] = 1
+        self.store.put('trips', self.record['id'], self.record)
         self.manager.publish = AsyncMock()
         with patch.object(planner_api, 'store', self.store), patch.object(planner_api, 'manager', self.manager), patch.object(discovery, 'tasks_for', return_value=[]):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url='http://test') as client:

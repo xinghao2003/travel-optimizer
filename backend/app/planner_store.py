@@ -70,6 +70,16 @@ class PlannerStore:
             rows = db.execute("SELECT payload FROM records WHERE collection=? ORDER BY updated DESC", (collection,)).fetchall()
             return [expand_trip(json.loads(row[0])) if collection == "trips" else json.loads(row[0]) for row in rows]
 
+    def trip_summaries(self):
+        """Trip navigation must not expand every saved itinerary and graph."""
+        with self._lock, self._connect() as db:
+            rows = db.execute("""SELECT id, json_extract(payload, '$.spec.name') AS name,
+                json_extract(payload, '$.revision') AS revision,
+                json_extract(payload, '$.spec.start_date') AS start_date,
+                json_extract(payload, '$.spec.end_date') AS end_date
+                FROM records WHERE collection='trips' ORDER BY updated DESC""").fetchall()
+            return [dict(row) for row in rows]
+
     def delete(self, collection: str, id: str):
         with self._lock, self._connect() as db:
             db.execute("DELETE FROM records WHERE collection=? AND id=?", (collection, id))
@@ -87,6 +97,11 @@ class PlannerStore:
                 db.execute("DELETE FROM optimizer_checkpoints WHERE trip_id=?", (trip_id,))
             else:
                 db.execute("INSERT OR REPLACE INTO optimizer_checkpoints VALUES(?,?,?)", (trip_id, version, payload))
+
+    def optimizer_checkpoint_size(self, trip_id: str):
+        with self._lock, self._connect() as db:
+            row = db.execute("SELECT length(payload) FROM optimizer_checkpoints WHERE trip_id=?", (trip_id,)).fetchone()
+            return row[0] if row else 0
 
     def update(self, collection: str, id: str, transform):
         with self._lock:
@@ -113,10 +128,11 @@ class PlannerStore:
                                        "latest_job_id": None, "offers": [], "airport_connections": []})
 
     def recover(self):
-        for job in self.list("jobs"):
-            if job["status"] in {"running", "queued"}:
-                job["status"] = "interrupted"
-                self.put("jobs", job["id"], job)
+        for collection in ("jobs", "optimizations"):
+            for job in self.list(collection):
+                if job["status"] in {"running", "queued", "stopping"}:
+                    job["status"] = "interrupted"
+                    self.put(collection, job["id"], job)
 
 
 store = PlannerStore()

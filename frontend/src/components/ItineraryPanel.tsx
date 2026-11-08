@@ -2,6 +2,7 @@ import { Select, SelectItem } from "./ui/select";
 import { lazy, Suspense, useId, useRef, useState, type ComponentProps } from "react";
 import { ArrowLeft, ChevronDown, CircleAlert } from "lucide-react";
 import { Button } from "./ui/button";
+import { ComparisonPicker } from "./ComparisonPicker";
 import { InfoTip } from "./InfoTip";
 import { ModeIcon } from "./ModeIcon";
 import { Field, FixedPriceFields, Staged } from "./PlannerForms";
@@ -303,10 +304,7 @@ export function ItineraryPanel({ isWide, searched, route, displayRoutes, numbers
       <h2 id="itinerary-title" tabIndex={-1}>{title}</h2>
       {others.length > 0 && <div className="p-itin-compare">
         <label htmlFor={compareId}>Compare with</label>
-        <Select id={compareId} value={compared?.id ?? ""} onValueChange={value => onCompare(value || null)}>
-          <SelectItem value="">None</SelectItem>
-          {others.map(item => <SelectItem value={item.id} key={item.id}>Option {optionNumber(numbers.get(item.id) ?? 0)} · {priceText(item)} · {hoursText(item.stay_hours)} h</SelectItem>)}
-        </Select>
+        <ComparisonPicker id={compareId} routes={others} numbers={numbers} value={compared?.id ?? ""} onChange={onCompare} />
       </div>}
     </div>
     <div className="p-itin-price"><span className="p-itin-total">{priceText(route)}</span><Chips chips={chips} /></div>

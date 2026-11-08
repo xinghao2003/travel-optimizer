@@ -1,5 +1,6 @@
 import { blankTrip, defaultBatchSize, localInputToISO, modes, type AirportConnectionRequirement, type AirportTransferMode, type AirportTransferRow, type ApiError, type Charge, type Coverage, type Job, type Mode, type Movement, type Offer, type PricingRule, type Result, type Route, type SavedTrip, type Segment, type TripDraft } from "./planner";
 import type { MissingFareGroup } from "./missingFares";
+import type { OptimizationJob } from "./planner";
 
 // Pure display and decision helpers for the planner UI (spec sections C–G). No React here:
 // tests load this file directly.
@@ -273,7 +274,7 @@ export function compareText(selected: Route, other: Route, otherNumber: number) 
 // ---------------------------------------------------------------- status
 
 /** What a status strip button does: stop the search, start a new search, continue the search (search(true)) or recalculate with a higher limit. */
-export type StripAction = { label: string; run: "stop" | "search" | "continue" | "optimize"; tip?: string };
+export type StripAction = { label: string; run: "stop" | "search" | "continue" | "optimize" | "stop-optimization"; tip?: string; disabled?: boolean };
 export type SearchState = {
   /** Stable per state, so a live region announces state changes and not counter ticks. */
   id: string;
@@ -287,13 +288,14 @@ export type SearchState = {
 };
 
 /** The status strip (C3.1): the first matching row of the state table, plus the "Check more combinations" line. */
-export function searchState({ invalid, dirty, saved, result, job, minutes, applying = false }: {
+export function searchState({ invalid, dirty, saved, result, job, minutes, applying = false, optimization }: {
   invalid: boolean; dirty: boolean;
   saved: Pick<SavedTrip, "snapshot"> | null;
   result: Pick<Result, "discovery_required" | "optimization_complete" | "coverage"> | null;
   job: Job | null;
   minutes?: number | null;
   applying?: boolean;
+  optimization?: OptimizationJob | null;
 }): SearchState {
   const status = job?.status;
   const searched = !!saved?.snapshot || !!job;
@@ -310,10 +312,22 @@ export function searchState({ invalid, dirty, saved, result, job, minutes, apply
   // finished search can still queue transit searches when transit search was set up after the search ran.
   const secondary = !active && result?.optimization_complete === false ? {
     text: "Not all combinations were checked. Better options may exist.",
-    tip: "Continues saved computation when the inputs match. Changed data starts a new calculation. No new searches.",
-    action: { label: roundMinutes == null ? "Check more combinations" : `Optimize for ${plural(roundMinutes, "minute")}`, run: "optimize" } as StripAction,
+    tip: "Shares work across saved routes, favoring usable prices. Checks continuously until complete or stopped, with no checkpoint-size limit. Changed inputs start a new calculation. No provider searches.",
+    action: { label: "Check more combinations", run: "optimize" } as StripAction,
   } : null;
   const state = (id: string, tone: SearchState["tone"], text: string, actions: StripAction[] = [], extra: Partial<SearchState> = {}): SearchState => ({ id, tone, text, actions, secondary, ...extra });
+
+  if (optimization && ["queued", "running", "stopping"].includes(optimization.status)) {
+    const stopping = optimization.status === "stopping";
+    return state(stopping ? "stopping-checking" : "checking", "busy", stopping
+      ? "Stopping checking. The current operation and saving are finishing…"
+      : `Checking combinations continuously · ${whole(optimization.expanded_labels)} explored. Saved options update after each batch.`,
+    [{ label: stopping ? "Stopping…" : "Stop checking", run: "stop-optimization", disabled: stopping }], { secondary: null });
+  }
+  if (!active && !dirty && optimization?.status === "paused" && optimization.pause_reason === "checkpoint") return state("checking-resource", "warn",
+    "Checking paused under the previous checkpoint-size limit. Progress is saved. Continue to resume without that limit.");
+  if (!active && !dirty && optimization?.status === "failed") return state("checking-failed", "error", `Checking stopped: ${optimization.message || "Calculation failed"}. Saved progress is kept.`);
+  if (!active && !dirty && optimization?.status === "interrupted") return state("checking-interrupted", "warn", "The server stopped while checking. Saved progress can continue.");
 
   if (invalid) return { ...state("invalid", "warn", "Fix the marked fields. Options show the last saved trip."), secondary: null };
   if (dirty && result) return { ...state("updating", "busy", "Updating options…"), secondary: null };
@@ -334,7 +348,9 @@ export function searchState({ invalid, dirty, saved, result, job, minutes, apply
   if (stale) return state("stale", "warn", "Your trip changed. Search again to include the changes. Options shown use the earlier search.", [{ label: "Search again", run: "search" }]);
   if (job?.updating_options && ["paused", "cancelled", "interrupted"].includes(status!)) return state(status === "cancelled" ? "stopped" : status!, "info",
     "Changes saved. Continue the round to update options.", [timedContinue], { secondary: null });
-  if (job?.time_budget_seconds != null && ["paused", "cancelled", "interrupted"].includes(status!) && (pending > 0 || job.optimization_pending)) {
+  if (status === "paused" && job?.pause_reason === "calculation") return state("paused", "info",
+    "Calculation paused at the safety limit. Partial options are shown. Continue to check more combinations.", [timedContinue], { secondary: null });
+  if (job?.time_budget_seconds != null && ["paused", "cancelled", "interrupted"].includes(status!) && (pending > 0 || (job.optimization_pending && result?.optimization_complete !== true))) {
     const id = status === "cancelled" ? "stopped" : status!;
     const text = status === "interrupted" ? "The server stopped. Saved progress can continue."
       : `${status === "paused" ? "Round paused" : "Search stopped"}${job.optimization_pending ? (result ? ". Showing the last calculated options." : ". The calculation can continue next round.") : ` · ${left}.`}`;
@@ -374,7 +390,7 @@ const outcomeWords: [string, string][] = [["success", "found"], ["empty", "no re
 export function searchDetails({ saved, job, result }: {
   saved: Pick<SavedTrip, "snapshot"> | null;
   job: Job | null;
-  result: Pick<Result, "snapshot_revision" | "feasible_count" | "expanded_labels" | "coverage"> | null;
+  result: Pick<Result, "snapshot_revision" | "feasible_count" | "expanded_labels" | "coverage" | "excluded_unpriced_flight_count"> | null;
 }) {
   const lines: string[] = [];
   if (!saved?.snapshot && !job) return { lines, messages: [] };
@@ -393,6 +409,7 @@ export function searchDetails({ saved, job, result }: {
     `Data version ${result.snapshot_revision} · ${plural(result.feasible_count, "complete itinerary", "complete itineraries")} checked · ${plural(result.expanded_labels, "combination")} explored`,
     "Scope: best among the schedules and prices collected, not every ticket on sale.",
   );
+  if (result?.excluded_unpriced_flight_count) lines.push(`Skipped ${plural(result.excluded_unpriced_flight_count, "flight choice")} without an applicable standalone or combined-ticket price.`);
   const coverage = result?.coverage ?? saved?.snapshot?.coverage;
   const gaps = (coverage?.source_gaps ?? []).map(gap => gap === "Transitous disabled" ? "Transit search is not set up on this server." : gap);
   return { lines, messages: [...new Set([...(job?.messages ?? []), ...(coverage?.messages ?? []), ...gaps])] };
@@ -804,7 +821,7 @@ export function validateDraft(draft: TripDraft): Record<string, string> {
   if (!draft.departure_start || !draft.departure_end) errors.departureWindow = "Enter both departure times.";
   else if (hhmm(draft.departure_end) <= hhmm(draft.departure_start)) errors.departureWindow = "The latest departure must be after the earliest.";
   if (draft.start_date === draft.end_date && draft.home_departure_earliest && draft.home_arrival_latest && hhmm(draft.home_arrival_latest) <= hhmm(draft.home_departure_earliest)) errors.homeTimes = "Be home after you leave home.";
-  if (draft.visits.some(visit => !(visit.min_stay_hours >= 0 && visit.min_stay_hours <= 8760))) errors.stays = "Enter 0 to 8,760 hours.";
+  if (draft.visits.some(visit => !(Number.isFinite(visit.min_stay_hours) && visit.min_stay_hours > 0 && visit.min_stay_hours <= 8760))) errors.stays = "Enter a minimum stay greater than 0 and up to 8,760 hours for each city.";
   if (!Number.isInteger(draft.adults) || draft.adults < 1 || draft.adults > 9) errors.adults = "Enter 1 to 9 adults.";
   if (draft.budget_myr !== null && !(draft.budget_myr >= 0)) errors.budget = "Enter 0 or more, or leave it blank.";
   return errors;
@@ -1161,7 +1178,7 @@ export type OptionsTarget = NextStepTarget | "edit-trip" | "add-connection" | "o
 export type OptionsAction = { label: string; target: OptionsTarget };
 /** The Options panel when it has no best option (C12): a title (only for "no-itinerary") and lines, each with at most one action. */
 export type EmptyState = {
-  id: "not-searched" | "searching" | "searches-left" | "over-budget" | "no-itinerary";
+  id: "not-searched" | "searching" | "searches-left" | "over-budget" | "no-itinerary" | "unpriced-flights" | "combinations-left";
   title: string | null;
   lines: { text: string; action: OptionsAction | null }[];
 };
@@ -1171,15 +1188,21 @@ const editTrip: OptionsAction = { label: "Edit trip", target: "edit-trip" };
  * the no-itinerary reasons reuse their airport-change and access-time rows. `staySum` is staySumWarning() of
  * the trip. Without a result there is nothing to explain yet, so a finished search shows nothing until it arrives.
  */
-export function optionsEmptyState({ searched, active, pending, hasResult, best, refinement, budget, staySum, gaps, excludeUnpricedFlights, steps, placeName }: {
+export function optionsEmptyState({ searched, active, pending, hasResult, best, refinement, budget, staySum, gaps, excludeUnpricedFlights, steps, placeName, hiddenUnpricedFlights = 0, calculationPending = false, checking = false }: {
   searched: boolean; active: boolean; pending: number; hasResult: boolean; best: number;
   refinement: Pick<Route, "cost_low_myr">[]; budget: number | null; staySum: string | null;
   gaps: { from_id: string; to_id: string }[]; excludeUnpricedFlights: boolean; steps: NextStep[];
   placeName: (id: string) => string;
+  hiddenUnpricedFlights?: number;
+  calculationPending?: boolean; checking?: boolean;
 }): EmptyState | null {
   if (best > 0) return null;
   const line = (text: string, action: OptionsAction | null = null) => ({ text, action });
   if (!searched) return { id: "not-searched", title: null, lines: [line("No options yet. Search transport to find options. They appear while the search runs.")] };
+  if (excludeUnpricedFlights && hiddenUnpricedFlights > 0) return { id: "unpriced-flights", title: "Itineraries found, but flight prices are missing", lines: [
+    line(`${plural(hiddenUnpricedFlights, "complete itinerary", "complete itineraries")} found so far ${hiddenUnpricedFlights === 1 ? "is" : "are"} hidden because at least one flight has no applicable price.`, { label: "Show them", target: "show-unpriced-flights" }),
+    line("A round-trip price applies only when both matching flights are included. Add missing flight prices to compare complete totals."),
+  ] };
   if (refinement.length && budget !== null) {
     const from = moneyShort(Math.min(...refinement.map(route => route.cost_low_myr)));
     return { id: "over-budget", title: null, lines: [line(`No option fits your ${moneyShort(budget)} budget. ${plural(refinement.length, "option")} ${refinement.length === 1 ? "costs" : "cost"} more, from ${from}.`, { label: "Show over-budget options", target: "over-budget" })] };
@@ -1187,6 +1210,9 @@ export function optionsEmptyState({ searched, active, pending, hasResult, best, 
   if (active) return { id: "searching", title: null, lines: [line("Searching. The first options appear after a few searches.")] };
   if (pending > 0) return { id: "searches-left", title: null, lines: [line(`No complete itinerary yet. ${plural(pending, "search", "searches")} ${pending === 1 ? "is" : "are"} left.`)] };
   if (!hasResult) return null;
+  if (calculationPending) return { id: "combinations-left", title: null, lines: [line(checking
+    ? "Checking saved combinations. No complete itinerary has been found yet."
+    : "No complete itinerary found yet. More combinations remain to be checked.")] };
   const blocked = steps.filter(step => step.id === "airport-changes" || step.id === "access-time");
   return { id: "no-itinerary", title: "No itinerary fits these settings", lines: [
     ...(staySum ? [line(staySum, editTrip)] : []),

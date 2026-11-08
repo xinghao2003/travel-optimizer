@@ -93,13 +93,31 @@ class ApplyChangesTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(self.manager, 'recalculate', wraps=self.manager.recalculate) as recalculate:
             response = await self.apply({'expected_revision': 1,
                 'connections': [{'from_airport': 'GMP', 'to_airport': 'ICN', 'mode': 'rail', 'duration_minutes': 45, 'fare_amount': 13.25}],
-                'transfers': [], 'estimates': [{'component_ids': ['best', 'weaker'], 'low': 7, 'high': 7}]})
+                'transfers': [], 'exchange_rates': {'TWD': .15}, 'estimates': [{'component_ids': ['best', 'weaker'], 'low': 7, 'high': 7, 'currency': 'TWD'}]})
             self.assertEqual(response.status_code, 200, response.text)
             self.assertEqual(recalculate.await_count, 1)
         saved = PlannerStore(self.store.path).get('trips', self.record['id'])
         self.assertEqual(saved['revision'], 2)
         self.assertEqual(saved['airport_connections'][0]['fare_amount'], 13.25)
+        self.assertEqual(saved['spec']['exchange_rates']['TWD'], .15)
+        self.assertEqual(saved['result']['routes'][0]['total_cost_myr'], 11.05)
         self.assertEqual(len(saved['offers']), 2)
+
+    async def test_rates_only_apply_and_invalid_rate_roll_back_the_batch(self):
+        for rates in ({'USD': 0}, {'USD': -1}, {'USD': float('inf')}, {'MYR': 2}, {'usd': 4}, {'XX': 4}):
+            if any(value == float('inf') for value in rates.values()):
+                rates = {'USD': 'Infinity'}
+            response = await self.apply({'expected_revision': 1, 'exchange_rates': rates,
+                'connections': [{'from_airport': 'AAA', 'to_airport': 'BBB', 'mode': 'bus', 'duration_minutes': 40}]})
+            self.assertEqual(response.status_code, 422, response.text)
+            self.assertEqual(self.store.get('trips', self.record['id']), self.record)
+        with patch.object(self.manager, 'recalculate', wraps=self.manager.recalculate) as recalculate:
+            response = await self.apply({'expected_revision': 1, 'exchange_rates': {'USD': 4.5}})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(recalculate.await_count, 1)
+        saved = PlannerStore(self.store.path).get('trips', self.record['id'])
+        self.assertEqual(saved['revision'], 2)
+        self.assertEqual(saved['spec']['exchange_rates'], {'MYR': 1, 'USD': 4.5})
 
     async def test_airport_time_edit_recovers_a_previously_unusable_saved_journey(self):
         home = HOME.model_copy(update={'airport_codes': ['KUL'], 'flight_code': 'KUL'})

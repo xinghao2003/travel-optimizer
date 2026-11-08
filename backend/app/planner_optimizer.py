@@ -28,7 +28,7 @@ UTC = timezone.utc
 INF = float("inf")
 # The built-in id(): optimize uses `id` as a variable name.
 _object_key = id
-CHECKPOINT_VERSION = 1  # Bump when search-state semantics or its stored layout change.
+CHECKPOINT_VERSION = 2  # Version 1's pending deque can be migrated without losing explored work.
 
 
 @lru_cache(maxsize=None)
@@ -332,11 +332,82 @@ class Label:
         return copy
 
 
+def flight_prices_complete(label, currencies):
+    covered = {id for offer in label.price["purchases"]
+               if offer.low is not None and offer.high is not None and offer.currency in currencies
+               for id in offer.movement_ids}
+    return all(m.id in covered for m in label.path if m.mode == "flight")
+
+
+class SearchFrontier:
+    """Short depth-first turns, shared fairly across first journeys and price tiers.
+
+    Fully priced paths get three turns, flight-priced paths two, and unpriced
+    paths one. Every active branch gets turns; later bundle fares can promote
+    its children. No state is rejected because its current price is missing.
+    """
+    schedule = (0, 0, 1, 0, 1, 2)
+    quantum = 16
+
+    def __init__(self, currencies):
+        self.currencies = frozenset(currencies)
+        self.buckets = [{}, {}, {}]
+        self.turns = [deque(), deque(), deque()]
+        self.active = None
+        self.remaining = 0
+        self.slot = 0
+        self.size = 0
+
+    def __len__(self):
+        return self.size
+
+    def __iter__(self):
+        for tier in self.buckets:
+            for bucket in tier.values():
+                yield from bucket
+
+    def appendleft(self, label):
+        priority = (0 if label.price is None or label.price["high_cents"] != INF else
+                    1 if flight_prices_complete(label, self.currencies) else 2)
+        first = next((m for m in label.path if m.mode == "flight"), label.path[0] if label.path else None)
+        key = (label.departure_gateway, (first.template_id or first.id) if first else None)
+        tier = self.buckets[priority]
+        if key not in tier:
+            tier[key] = deque()
+            self.turns[priority].append(key)
+        tier[key].appendleft(label)
+        self.size += 1
+
+    def popleft(self):
+        if not self.size:
+            raise IndexError("pop from an empty frontier")
+        if self.active is not None:
+            priority, key = self.active
+            bucket = self.buckets[priority][key]
+            if self.remaining and bucket:
+                self.remaining -= 1
+                self.size -= 1
+                return bucket.popleft()
+            if bucket:
+                self.turns[priority].append(key)
+            else:
+                del self.buckets[priority][key]
+        while True:
+            priority = self.schedule[self.slot]
+            self.slot = (self.slot + 1) % len(self.schedule)
+            if self.turns[priority]:
+                key = self.turns[priority].popleft()
+                self.active = (priority, key)
+                self.remaining = self.quantum - 1
+                self.size -= 1
+                return self.buckets[priority][key].popleft()
+
+
 @dataclass
 class SearchCheckpoint:
     """Solver-owned data, including pending and explored states, rather than only the frontier."""
     signature: str | None = None
-    queue: deque | None = None
+    queue: SearchFrontier | deque | None = None
     labels: dict | None = None
     completed: list | None = None
     expanded: int = 0
@@ -346,10 +417,40 @@ class SearchCheckpoint:
     resumed_from: int = 0
 
 
+def unpriced_flight_ids(movements, fare_index, spec, rules):
+    """Exclude flights with no possible finite fare, preserving whole-ticket coverage.
+
+    A bundle's components must exist in the graph. Whether they can occur
+    together on a feasible path is still checked by the solver and price_path.
+    """
+    available = set()
+    start, end = bounds(spec)
+    for movement in movements:
+        if (movement.usable and movement.mode in spec.modes
+                and (movement.departure is None or start <= movement.departure and movement.arrival <= end)):
+            available.add(movement.id)
+            if movement.template_id:
+                available.add(movement.template_id)
+            available.update(c.id for c in movement.charges)
+    bundle_covered = {id for offer in fare_index[1]
+                      if _amount(offer, spec)[1] != INF and set(offer.movement_ids).issubset(available)
+                      for id in offer.movement_ids}
+    skipped = set()
+    for movement in movements:
+        if movement.mode != "flight":
+            continue
+        entry = fare_index[3][movement.id] = _component_choices(movement.id, movement, None, fare_index[0], spec, rules)
+        if (all(hi == INF for _, _, hi in entry[0])
+                and movement.id not in bundle_covered and movement.template_id not in bundle_covered):
+            skipped.add(movement.id)
+    return skipped
+
+
 def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer], rules: list[PricingRule],
              snapshot_revision: int = 0, trip_revision: int = 0, cancelled=None, label_limit: int | None = None,
              finish_at_home: bool = True, include_dominated: bool = False, *,
-             checkpoint: SearchCheckpoint | None = None, deadline: float | None = None) -> dict:
+             checkpoint: SearchCheckpoint | None = None, deadline: float | None = None,
+             expansion_budget: int | None = None) -> dict:
     started = clock.monotonic()
     next_progress = started + 5
     logger.debug("planner dp.start movements=%d offers=%d limit=%s", len(movements), len(offers), label_limit)
@@ -358,17 +459,24 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
     movements = [m for m in movements if m.source != SUPPLIED_SOURCE] + supplied
     offers = supplied_fares + offers
     signature = None
+    legacy_signature = None
     if checkpoint is not None:
-        signature = stable_id(CHECKPOINT_VERSION, spec.model_dump(mode="json"),
-                              [m.model_dump(mode="json") for m in movements],
-                              [o.model_dump(mode="json") for o in offers],
-                              [r.model_dump(mode="json") for r in rules], finish_at_home)
+        signature_inputs = (spec.model_dump(mode="json"), [m.model_dump(mode="json") for m in movements],
+                            [o.model_dump(mode="json") for o in offers],
+                            [r.model_dump(mode="json") for r in rules], finish_at_home)
+        signature = stable_id(CHECKPOINT_VERSION, *signature_inputs)
+        if isinstance(checkpoint.queue, deque):
+            legacy_signature = stable_id(1, *signature_inputs)
+        del signature_inputs
     fare_index = _fare_index(offers, spec)
+    skipped_flights = unpriced_flight_ids(movements, fare_index, spec, rules) if spec.exclude_unpriced_flights else set()
     places = spec.places()
     required = {v.place.id: (i, v.min_stay_hours) for i, v in enumerate(spec.visits)}
     full_mask = (1 << len(required))-1
     edges = defaultdict(list)
     for m in movements:
+        if m.id in skipped_flights:
+            continue
         if m.usable and m.from_id in places and m.to_id in places and m.mode in spec.modes:
             if spec.max_transfers is None or m.transfers <= spec.max_transfers:
                 flights = [s for s in m.segments if s.mode == "flight"]
@@ -397,11 +505,11 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
         for id, values in additions.items():
             events[id].update(values)
     bundle_ids = {id for o in offers if o.validated and len(o.movement_ids) > 1 for id in o.movement_ids}
-    queue = deque()
+    queue = SearchFrontier(spec.exchange_rates)
     for gateway in spec.departures:
         mask = (1 << required[gateway.id][0]) if gateway.id in required and gateway.id == spec.home.id else 0
-        queue.append(Label(spec.home.id, 0, mask, start, [], [], own_location=spec.home.id,
-                           departure_gateway=gateway.id))
+        queue.appendleft(Label(spec.home.id, 0, mask, start, [], [], own_location=spec.home.id,
+                               departure_gateway=gateway.id))
     labels = defaultdict(list)
     completed = []
     expanded = 0
@@ -410,8 +518,14 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
     price_reuses = 0
     if checkpoint is not None:
         checkpoint.resumed_from = 0
-        if checkpoint.signature == signature and checkpoint.queue is not None:
+        if (checkpoint.signature == signature or legacy_signature is not None and checkpoint.signature == legacy_signature) and checkpoint.queue is not None:
             queue, labels, completed = checkpoint.queue, checkpoint.labels, checkpoint.completed
+            if isinstance(queue, deque):
+                pending = queue
+                queue = SearchFrontier(spec.exchange_rates)
+                for label in reversed(pending):
+                    if not any(m.id in skipped_flights for m in label.path):
+                        queue.appendleft(label)
             expanded, pruned = checkpoint.expanded, checkpoint.pruned
             price_calculations, price_reuses = checkpoint.price_calculations, checkpoint.price_reuses
             checkpoint.resumed_from = expanded
@@ -420,6 +534,7 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
         checkpoint.signature = signature
     # Checks that depend only on a scheduled journey (and the search phase) are computed once per journey. Journeys
     # without a schedule get new times for each label, so they are checked per label.
+    round_start_expanded = expanded
     timing_cache = {}
     prepared = {}
     history_cache = {}
@@ -634,6 +749,7 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
 
     while queue:
         if ((cancelled and cancelled()) or (label_limit is not None and expanded >= label_limit)
+                or (expansion_budget is not None and expanded - round_start_expanded >= expansion_budget)
                 or (deadline is not None and clock.monotonic() >= deadline)):
             break
         label = queue.popleft()
@@ -721,13 +837,7 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
     # flight that has no standalone provider quote. Keep discovery data intact.
     selectable = completed
     if spec.exclude_unpriced_flights:
-        selectable = [x for x in completed if
-            {m.id for m in x.path if m.mode == "flight"}.issubset({
-                id for offer in x.price["purchases"]
-                if offer.low is not None and offer.high is not None
-                and offer.currency in spec.exchange_rates
-                for id in offer.movement_ids
-            })]
+        selectable = [x for x in completed if flight_prices_complete(x, spec.exchange_rates)]
     eligible = [x for x in selectable if spec.budget_myr is None or x.price["low_cents"] <= cents(spec.budget_myr)]
     over_budget = sorted((x for x in selectable if spec.budget_myr is not None and x.price["low_cents"] > cents(spec.budget_myr)), key=lambda x: (x.price["low_cents"], -stay(x)))[:10]
     finite = sorted((x for x in eligible if x.price["high_cents"] != INF), key=lambda x: x.price["high_cents"])
@@ -811,9 +921,13 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
             bundle_candidates.setdefault(tuple(signature), legs)
     logger.debug("planner dp.done routes=%d bundles=%d elapsed=%.2fs", len(results), len(bundle_candidates), clock.monotonic()-started)
     response = {"routes": [r for r in results if r["budget_status"] != "over" and r["id"] in frontier_ids], "refinement_routes": [r for r in results if r["budget_status"] == "over"], "bundle_candidates": list(bundle_candidates.values()), "missing_fares": sorted(missing.values(), key=lambda x: (-x["affected_itineraries"], -(x["break_even_myr"] or 0), x["component_id"])),
+            "hidden_unpriced_flight_count": len(completed)-len(selectable),
+            "excluded_unpriced_flight_count": len(skipped_flights),
             "expanded_labels": expanded, "pruned_labels": pruned, "feasible_count": len(completed),
             "optimization_complete": not bool(queue), "remaining_labels": len(queue), "label_limit": label_limit, "snapshot_revision": snapshot_revision, "trip_revision": trip_revision,
             "optimality_scope": "Retrieved schedules, fare offers, and road departures at readiness / connection / return-boundary events"}
     if include_dominated:
         response["dominated_routes"] = [r for r in results if r["budget_status"] != "over" and r["id"] not in frontier_ids]
+    if expansion_budget is not None:
+        response["safety_limit_reached"] = bool(queue) and expanded - round_start_expanded >= expansion_budget
     return response

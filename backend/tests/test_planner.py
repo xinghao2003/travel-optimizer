@@ -901,7 +901,7 @@ class PersistenceAndJobsTests(unittest.IsolatedAsyncioTestCase):
         manager = DiscoveryManager(self.db)
         with patch.object(endpoints, "store", self.db), patch.object(endpoints, "manager", manager):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-                response = await client.post("/api/v2/trips", json=trip().model_dump(mode="json"))
+                response = await client.post("/api/v2/trips", json=trip(visits=[Visit(place=A, min_stay_hours=1)]).model_dump(mode="json"))
                 self.assertEqual(response.status_code, 201, response.text)
                 record = response.json()
                 id = record["id"]

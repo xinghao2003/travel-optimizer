@@ -1,14 +1,14 @@
 # Browser prototype
 
 This worktree runs provider discovery and the existing optimizer in the browser.
-The server exposes only a stateless flight-search function. The original planner
+The server exposes stateless flight and transit functions. The original planner
 remains available through its existing startup script.
 
 A separate [native TypeScript versus Python comparison](native-solver-prototype.md)
 is available at <http://127.0.0.1:5174/solver-comparison.html>.
 The [full Planner native preview](native-planner.md) is at `/native.html`; it
-supports saved trips and native discovery. Its complete provider-function boundary
-is still pending; the current function supports only one-way flights.
+supports saved trips, native discovery and [bounded provider functions](provider-functions.md).
+The older Pyodide prototype described here retains its limited search interface.
 
 ## Run locally
 
@@ -31,7 +31,7 @@ form. **Search more** continues it. Only uncached provider calls consume the
 request allowance. **Stop** aborts the browser request and saves collected work;
 an interrupted task remains at the cursor for continuation. The flight server
 can finish its current request after the browser disconnects, bounded by its
-20-second transport timeout.
+bounded provider timeouts.
 
 Trip state, results, provider responses, and application-generated optimizer
 checkpoints use a separate IndexedDB database, `wayfinder-browser-prototype`.
@@ -56,8 +56,9 @@ it does not load checkpoint bytes from uploaded files.
 The worker uses Pyodide **314.0.7**, its bundled Pydantic, and explicit `tzdata`.
 `tools/prepare_browser_poc.py` copies the shared Python modules and public airport
 coordinates into generated static assets. It also writes the native airport and
-metro catalog under `/browser-data/`. The startup script and Vercel build command
-run it automatically; run it before a standalone `build:poc` command too.
+metro catalog under `/browser-data/`. The startup script runs it automatically;
+run it before a standalone `build:poc` command too. The Vercel configuration now
+builds the separate native Planner, which ships no Python runtime.
 The browser downloads the Python runtime and dependencies from the
 pinned jsDelivr distribution. First use therefore requires internet access.
 
@@ -95,15 +96,16 @@ the [OSRM service policy](https://routing.openstreetmap.de/about.html).
 - Small browser tests are compatibility evidence, not a large-trip, mobile-memory,
   or hosted Linux runtime benchmark.
 
-The separate solver comparison now includes one prepared saved-trip benchmark;
-see its own measurements and limitations. The complete live-search workflow has
-not been migrated to TypeScript or validated for full application parity.
+The separate solver comparison includes a prepared saved-trip replay. The newer
+native entry also ports discovery, storage and the full interface to TypeScript;
+see [its current validation and remaining limits](native-planner.md). The limits
+above describe this older Pyodide prototype.
 
 ## Vercel local development
 
 Vercel supplies [`vercel dev`](https://vercel.com/docs/cli/dev) for local routing
-and Python Functions. `vercel.json` describes the prototype frontend build and
-file-based `api/flights.py` function. A linked Vercel project is required by the
+and Python Functions. `vercel.json` now selects the native frontend build and
+file-based flight/transit functions. A linked Vercel project is required by the
 CLI even for local development.
 
 ```powershell
@@ -141,7 +143,8 @@ lock file, standard library, and dependency wheels. Set `POC_BASE_URL` to test
 another local port. Screenshots and test artifacts are under ignored
 `data/diagnostics/browser-poc/`.
 
-Completed checks in this experiment:
+Historical checks from the initial Pyodide experiment follow. Current migration
+checks and counts are in [the migration plan](static-migration-plan.md).
 
 - 170 backend tests passed after syncing main `9571a88`, including the adapter/function checks. Existing
   SQLite ResourceWarnings remain in passing persistence tests.

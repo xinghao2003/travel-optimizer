@@ -59,10 +59,10 @@ class FlightFunctionTests(unittest.IsolatedAsyncioTestCase):
         payload = {"legs": [{"from_id": "berlin", "to_id": "prague", "date": "2027-02-10", "from_code": "BER", "to_code": "PRG", "from_airports": ["BER"], "to_airports": ["PRG"], "timezone": "Europe/Berlin"}], "adults": 2}
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://local") as client:
             self.assertTrue((await client.get("/api/flights")).json()["stateless"])
-            with patch("api.flights.fetch_flights", return_value={"status": "success", "options": []}) as provider:
+            with patch("api.flights.fetch_flight_step", return_value={"status": "success", "options": []}) as provider:
                 response = await client.post("/api/flights", json=payload)
             self.assertEqual(response.status_code, 200)
-            self.assertEqual(provider.call_args.kwargs, {"timeout": 20})
+            self.assertEqual(provider.call_args.kwargs, {"operation": "search", "selection": None, "timeout": 15, "max_seconds": 35})
             self.assertEqual(provider.call_args.args[1], 2)
             self.assertEqual((await client.post("/api/flights", json={**payload, "url": "https://example.com"})).status_code, 422)
             self.assertEqual((await client.post("/api/flights", json={**payload, "kind": "round-trip"})).status_code, 422)

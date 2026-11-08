@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Starts only the stateless flight function and browser prototype.
+Starts the stateless provider functions and browser previews.
 
 .DESCRIPTION
 The API (uvicorn --reload) restarts when files under backend/app change. Vite reloads the page when frontend files
@@ -73,7 +73,7 @@ function Receive-Lines {
 }
 
 try {
-    $apiArguments = @('run', 'uvicorn', 'api.flights:app', '--host', '127.0.0.1', '--port', "$Port", '--reload', '--reload-dir', 'backend/app', '--reload-dir', 'api')
+    $apiArguments = @('run', 'uvicorn', 'backend.app.provider_dev:app', '--host', '127.0.0.1', '--port', "$Port", '--reload', '--reload-dir', 'backend/app', '--reload-dir', 'api')
     # uvicorn refuses an --env-file that does not exist.
     if (Test-Path (Join-Path $root '.env')) { $apiArguments += @('--env-file', '.env') }
     else { Write-Line 'start' 'No .env file: using defaults. To configure, run: Copy-Item .env.example .env' }

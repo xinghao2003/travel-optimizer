@@ -51,8 +51,11 @@ No deployment is authorized as part of this checklist.
   storage tests cover rollback, concurrent revisions, stale workers, cache cleanup,
   backup replacement, and a previously weaker route becoming cheapest after Apply.
   A real SQLite export restored six records and reproduced the 14-route result.
-- Local prototype with browser batching, provider-response caching, one active
-  saved session, and a bounded stateless one-way flight function.
+- Stateless flight functions support one-way queries and persisted, bounded
+  round-trip selection steps. A separate validated Transitous function forwards
+  provider requests without planner state. See [provider boundary](provider-functions.md).
+  The ten-file isolated package passed native primp and ASGI checks on Windows
+  and Linux x86_64/Python 3.13.17. No application was deployed.
 - Native discovery matches 13 Python lifecycle scenarios over 18 rounds and
   79 provider outcomes. It also matches 54 manual flight URLs. Full-interface
   tests cover in-flight Apply, saved-queue reload/continue, and independently
@@ -61,19 +64,21 @@ No deployment is authorized as part of this checklist.
   with unpriced flights excluded, unrelated unknown airport costs no longer
   cause a valid priced flight bundle to be discarded. Covered flights are not
   listed as missing fares. Affected old checkpoints/results restart/recalculate.
-- 173 backend tests, twenty-three public browser checks, and the separate native
-  production-artifact interaction passed. Private migration replay remains
-  optional. Native and earlier prototype production builds have passed.
+- 184 backend tests and all 26 browser checks passed, including the native
+  production-artifact interaction and optional private migration replay. Native
+  and earlier prototype production builds have passed.
 
 The native solver now also runs through the full Planner at `/native.html`.
 That entry uses local places/nearest lookup and browser-owned saved trips, edits,
 calculation, continuous calculation, and backups. Its static production build
 excludes Python and comparison data. Its native discovery coordinator is connected;
-the complete provider-function implementation is still pending. Provider integration
-tests use recorded/mocked responses, rather than hosted-runtime evidence.
+the provider-function implementation is connected. Provider integration tests
+use recorded/mocked responses, with separate isolated Linux native-runtime
+checks rather than evidence from hosted provider access.
 The older live-search prototype still
 uses Python/Pyodide for discovery planning, result normalization, and solving.
-The default `/` entry continues to use the original Python planner API.
+The default development `/` entry continues to use the original Python planner
+API; the native hosting configuration maps `/` to `/native.html`.
 Neither preview is yet a complete native replacement for the application.
 
 ## 1. Establish the permanent reference boundary
@@ -142,8 +147,8 @@ also removes trip-specific airport overlays. Native fetching, job/round coordina
 pagination, publication, and persistence are now connected. Python lifecycle
 replay covers 18 rounds, including in-flight edits, cancellation, cache accounting,
 failed-query retries, deadline expiry and discovery-derived ticket queries.
-Provider-only function completion remains stage 6; live hosted compatibility is
-not established by these recorded/mocked browser checks.
+Provider-only functions are implemented in stage 6; live hosted compatibility
+is not established by these recorded/mocked browser checks.
 
 Bring the complete `tasks_for`, `fetch`, `ingest`, `publish`, and `run` behavior
 into browser-owned services. Preserve optimistic date windows, seed ordering,
@@ -206,7 +211,7 @@ backup restore/download run through the full interface without planner API calls
 Local catalog lookup matches 90 Python searches and nearest-place queries.
 Native live-search coordination is connected and verified against recorded
 outcomes, including an interaction through the full interface. Completion still
-requires the full provider boundary and broader final acceptance below.
+requires broader final acceptance below.
 
 Retain the current React settings, options/chart, itinerary/map, Missing info,
 pricing forms, and report/export features. Replace their planner API calls with
@@ -223,6 +228,13 @@ network assertions permit only static assets, existing map resources, approved
 direct providers, and the thin provider-function endpoint(s).
 
 ## 6. Complete the provider-function boundary
+
+Implemented: [stateless protocol and validation evidence](provider-functions.md).
+The native request budget counts bounded function invocations, including each
+conditional return, instead of Python's potentially multi-request round-trip
+task. This intentional accounting difference is explicit and tested. The
+isolated package works with the locked native dependencies on Linux; Vercel's
+generated bundle and live hosted provider access have not been exercised.
 
 Keep trip state, queues, pricing edits, and optimization out of the backend.
 Extend the one-way flight endpoint to the existing provider capabilities while

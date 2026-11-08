@@ -15,7 +15,7 @@ FLIGHT_LIMIT = threading.BoundedSemaphore(3)
 
 
 @contextmanager
-def flight_session(timeout=None):
+def flight_session(timeout=None, *, deadline=None):
     """Keep the initial query and its conditional returns on one HTTP client."""
     from fast_flights import Query, get_flights
     from fast_flights.fetcher import URL
@@ -25,7 +25,13 @@ def flight_session(timeout=None):
     class Session(FetchIntegration):
         def fetch_html(self, query, /):
             params = query.params() if isinstance(query, Query) else {"q": query}
-            return client.get(URL, params=params).text
+            options = {}
+            if deadline is not None:
+                remaining = deadline - clock.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("Flight function time limit reached.")
+                options["timeout"] = min(timeout, remaining) if timeout is not None else remaining
+            return client.get(URL, params=params, **options).text
 
     # Match the pinned fast-flights 3.1.0 transport settings.
     with Client(impersonate="chrome_145", impersonate_os="macos", referer=True, cookie_store=True, timeout=timeout) as client:
@@ -101,6 +107,54 @@ def complete_round_trip_rows(query, rows, get_flights):
                        "return_errors": errors}
 
 
+def normalize_flight_rows(rows, legs, departure_start, departure_end, airports):
+    """Assign prices only to complete, validated requested journeys."""
+    options = []
+    for row in rows:
+        segments = []
+        for segment in row.flights:
+            origin, dest = airports.get(segment.from_airport.code), airports.get(segment.to_airport.code)
+            if not origin or not dest:
+                segments = []
+                break
+            dep = datetime(*segment.departure.date, *segment.departure.time, tzinfo=ZoneInfo(origin["tz"])).astimezone(timezone.utc)
+            arr = datetime(*segment.arrival.date, *segment.arrival.time, tzinfo=ZoneInfo(dest["tz"])).astimezone(timezone.utc)
+            if arr <= dep or (segments and dep < datetime.fromisoformat(segments[-1]["arrival"])):
+                segments = []
+                break
+            segments.append({"mode": "flight", "from_id": segment.from_airport.code, "to_id": segment.to_airport.code,
+                             "from_name": segment.from_airport.name, "to_name": segment.to_airport.name,
+                             "departure": dep.isoformat(), "arrival": arr.isoformat(),
+                             "from_timezone": origin["tz"], "to_timezone": dest["tz"],
+                             "operator": ", ".join(row.airlines), "service": getattr(segment, "flight_number", None), "source": "Google Flights / fast-flights"})
+        if not segments:
+            continue
+        groups = []
+        cursor = 0
+        for leg in legs:
+            origin_codes = set(leg["from_airports"])
+            dest_codes = set(leg["to_airports"])
+            if cursor >= len(segments) or segments[cursor]["from_id"] not in origin_codes:
+                break
+            first = cursor
+            while cursor < len(segments):
+                cursor += 1
+                if segments[cursor-1]["to_id"] in dest_codes:
+                    break
+            group = segments[first:cursor]
+            if not group or group[-1]["to_id"] not in dest_codes:
+                break
+            local = datetime.fromisoformat(group[0]["departure"]).astimezone(ZoneInfo(leg["timezone"]))
+            if local.date().isoformat() != leg["date"] or not departure_start <= local.time().replace(tzinfo=None) <= departure_end:
+                break
+            groups.append(group)
+        if len(groups) != len(legs) or cursor != len(segments):
+            continue
+        value = float(row.price) if row.price is not None and row.price >= 0 else None
+        options.append({"price": value, "journeys": groups})
+    return options
+
+
 def fetch_flights(legs: list[dict], adults, kind, departure_start, departure_end, *, timeout=None):
     import airportsdata
     query = flight_query(legs, adults, kind, departure_start, departure_end)
@@ -123,48 +177,7 @@ def fetch_flights(legs: list[dict], adults, kind, departure_start, departure_end
                 rows, details = complete_round_trip_rows(query, rows, get_flights)
                 result["diagnostics"].update(details)
                 result["diagnostics"]["conditional_return_rows"] = len(rows)
-        for row in rows:
-            segments = []
-            for segment in row.flights:
-                origin, dest = airports.get(segment.from_airport.code), airports.get(segment.to_airport.code)
-                if not origin or not dest:
-                    segments = []
-                    break
-                dep = datetime(*segment.departure.date, *segment.departure.time, tzinfo=ZoneInfo(origin["tz"])).astimezone(timezone.utc)
-                arr = datetime(*segment.arrival.date, *segment.arrival.time, tzinfo=ZoneInfo(dest["tz"])).astimezone(timezone.utc)
-                if arr <= dep or (segments and dep < datetime.fromisoformat(segments[-1]["arrival"])):
-                    segments = []
-                    break
-                segments.append({"mode": "flight", "from_id": segment.from_airport.code, "to_id": segment.to_airport.code,
-                                 "from_name": segment.from_airport.name, "to_name": segment.to_airport.name,
-                                 "departure": dep.isoformat(), "arrival": arr.isoformat(),
-                                 "from_timezone": origin["tz"], "to_timezone": dest["tz"],
-                                 "operator": ", ".join(row.airlines), "service": getattr(segment, "flight_number", None), "source": "Google Flights / fast-flights"})
-            if not segments:
-                continue
-            groups = []
-            cursor = 0
-            for leg in legs:
-                origin_codes = set(leg["from_airports"])
-                dest_codes = set(leg["to_airports"])
-                if cursor >= len(segments) or segments[cursor]["from_id"] not in origin_codes:
-                    break
-                first = cursor
-                while cursor < len(segments):
-                    cursor += 1
-                    if segments[cursor-1]["to_id"] in dest_codes:
-                        break
-                group = segments[first:cursor]
-                if not group or group[-1]["to_id"] not in dest_codes:
-                    break
-                local = datetime.fromisoformat(group[0]["departure"]).astimezone(ZoneInfo(leg["timezone"]))
-                if local.date().isoformat() != leg["date"] or not departure_start <= local.time().replace(tzinfo=None) <= departure_end:
-                    break
-                groups.append(group)
-            if len(groups) != len(legs) or cursor != len(segments):
-                continue
-            value = float(row.price) if row.price is not None and row.price >= 0 else None
-            result["options"].append({"price": value, "journeys": groups})
+        result["options"] = normalize_flight_rows(rows, legs, departure_start, departure_end, airports)
         if result["options"]:
             result["status"] = "success"
             if result["diagnostics"].get("return_errors"):

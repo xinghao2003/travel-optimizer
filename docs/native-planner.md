@@ -24,11 +24,12 @@ the same round with its original counters and deadline. Expired timed rounds
 save the edits and wait for the user to continue. Rail fallback and transit
 pagination use the existing Python behavior; multi-city quotes remain manual.
 
-The provider-function boundary is still incomplete. The current function only
-accepts one-way flight queries; automatic round-trip retrieval and the Transitous
-function still need implementation and target-runtime validation. Native UI
-integration checks use recorded/mocked responses for those providers. OSRM uses
-direct browser HTTP. This remains a preview until the function stage is complete.
+The [provider functions](provider-functions.md) now support one-way flights,
+bounded round-trip selection steps and Transitous forwarding. Each uncached
+round-trip step counts as one request; remaining choices persist for Continue.
+Multi-city quotes remain manual. OSRM uses direct browser HTTP. The isolated
+provider package passed Linux native-dependency and ASGI checks. Live hosted
+provider access remains unverified, and final application parity is still pending.
 
 ## Run locally
 
@@ -42,7 +43,7 @@ npm.cmd run dev:native -- --port 5175
 
 Open `http://127.0.0.1:5175/native.html`. This entry needs no planner server.
 For local provider functions, use the existing prototype runner or separately
-run `uv run uvicorn api.flights:app --host 127.0.0.1 --port 8010`. Native Vite
+run `uv run uvicorn backend.app.provider_dev:app --host 127.0.0.1 --port 8010`. Native Vite
 forwards only the flight/transit function paths there; `POC_API_URL` can change
 that target. Alternatively, run `start-browser-poc.ps1` and open `/native.html`
 on its printed frontend port.
@@ -70,7 +71,8 @@ npx.cmd vite preview --config vite.native.config.ts --configLoader runner --host
 `frontend/dist-native/native.html` is the current preview entry. The separate
 public directory includes only airport and place data. Python sources/runtime,
 comparison fixtures, private snapshots, and provider caches are excluded.
-The build still needs the complete provider-function boundary before migration
+`vercel.json` also maps `/` to this entry and includes both provider functions.
+Final parity and application acceptance are still required before migration
 is complete.
 No deployment is part of these commands.
 

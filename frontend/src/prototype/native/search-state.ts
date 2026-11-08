@@ -74,6 +74,17 @@ export function recordOutcome(job: SearchRecord, task: ProviderTask, outcome: Pr
   const collected = ingest(task, outcome, spec, job.snapshot, metros, now);
   if (collected.length) job.optimization_pending = true;
   const known = new Set(job.queue.map(t => t.key)), places = placesOf(spec);
+  if (task.kind === "bundle" && task.ticket_kind === "round-trip" && outcome.flight_choices) {
+    const root = task.round_trip_root ?? task.key, children: ProviderTask[] = [];
+    for (const selection of outcome.flight_choices) {
+      const key = stableId("round-trip-return-v1", root, selection);
+      if (known.has(key)) continue;
+      known.add(key);
+      const child: ProviderTask = { ...task, key, round_trip_root: root, round_trip_selection: selection }; delete child.outcome;
+      children.push(child);
+    }
+    job.queue.splice(job.cursor, 0, ...children);
+  }
   if (task.kind === "transit" && ["empty", "success"].includes(outcome.status) && !collected.length) {
     const probe = fallbackTask(task as RailTask, spec, localDate(now, places.get(task.from_id!)!.timezone));
     if (probe && !known.has(probe.key!)) {

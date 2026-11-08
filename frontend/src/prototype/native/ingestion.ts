@@ -12,8 +12,9 @@ import type { Snapshot } from "./preparation";
 import { general, iso, localDate, SECOND, stableId } from "./time";
 
 export type ProviderTask = { kind: "road" | "flight" | "bundle" | "transit"; key: string; from_id?: string; to_id?: string; date?: string; legs?: FlightLeg[];
+  round_trip_selection?: string[][]; round_trip_root?: string;
   ticket_kind?: "round-trip" | "multi-city"; rail_radius?: boolean; rail_reference_date?: string; [key: string]: unknown };
-export type ProviderOutcome = { status: string; roads?: Roads; options?: { price: number | null; journeys: RawSegment[][] }[]; search_url?: string | null;
+export type ProviderOutcome = { status: string; roads?: Roads; options?: { price: number | null; journeys: RawSegment[][] }[]; search_url?: string | null; flight_choices?: string[][][];
   payload?: unknown; retrieved_at?: string | number; [key: string]: unknown };
 const railModes = new Set(["RAIL", "HIGHSPEED_RAIL", "LONG_DISTANCE", "NIGHT_RAIL", "REGIONAL_FAST_RAIL", "REGIONAL_RAIL", "SUBURBAN"]);
 

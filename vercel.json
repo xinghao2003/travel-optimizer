@@ -2,15 +2,20 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
   "installCommand": "npm --prefix frontend ci",
-  "buildCommand": "uv run python tools/prepare_browser_poc.py && npm --prefix frontend run build:poc",
-  "devCommand": "uv run python tools/prepare_browser_poc.py && npm --prefix frontend run dev:poc",
-  "outputDirectory": "frontend/dist-poc",
-  "rewrites": [{ "source": "/", "destination": "/prototype.html" }],
+  "buildCommand": "npm --prefix frontend run build:native",
+  "devCommand": "uv run python tools/prepare_static_planner.py && npm --prefix frontend run dev:native",
+  "outputDirectory": "frontend/dist-native",
+  "rewrites": [{ "source": "/", "destination": "/native.html" }],
   "functions": {
     "api/flights.py": {
       "maxDuration": 60,
-      "includeFiles": "backend/app/{__init__,planner_providers,flight_search,places}.py",
-      "excludeFiles": "{backend/data/**,data/**,frontend/**,backend/tests/**}"
+      "includeFiles": "backend/app/{__init__,planner_providers,flight_search,places,provider_functions,provider_http}.py",
+      "excludeFiles": "{backend/data/**,data/**,frontend/**,backend/tests/**,tools/**,docs/**,.venv/**}"
+    },
+    "api/transit.py": {
+      "maxDuration": 60,
+      "includeFiles": "backend/app/{__init__,provider_http}.py",
+      "excludeFiles": "{backend/data/**,data/**,frontend/**,backend/tests/**,tools/**,docs/**,.venv/**}"
     }
   }
 }

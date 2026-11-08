@@ -39,7 +39,8 @@ export function providerPlan(task: ProviderTask, spec: TripSpec, catalog: Airpor
   if (task.kind === "flight" || task.kind === "bundle") {
     const legs = task.kind === "bundle" ? task.legs! : [makeLeg(places.get(task.from_id!)!, places.get(task.to_id!)!, task.date!, catalog.metros)];
     return { key, url: settings.flights_url, init: { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ legs, adults: spec.adults, kind: task.ticket_kind ?? "one-way", departure_start: spec.departure_start, departure_end: spec.departure_end }) }, ttl: 900 };
+      body: JSON.stringify({ legs, adults: spec.adults, kind: task.ticket_kind ?? "one-way", departure_start: spec.departure_start, departure_end: spec.departure_end,
+        ...(task.round_trip_selection ? { operation: "return", selection: task.round_trip_selection } : {}) }) }, ttl: 900 };
   }
   const origin = places.get(task.from_id!)!, dest = places.get(task.to_id!)!, day = task.rail_reference_date ?? task.date!;
   const start = at(day, spec.departure_start, origin.timezone);
@@ -77,7 +78,10 @@ export class BrowserProviders implements SearchProvider {
   }
   private async retrieve(task: ProviderTask, plan: ProviderPlan): Promise<Retrieved> {
     const response = await fetch(plan.url, { ...plan.init, signal: AbortSignal.timeout(task.kind === "road" ? 30000 : 45000) });
-    if (!response.ok) throw new Error(`${task.kind} returned HTTP ${response.status}.`);
+    if (!response.ok) {
+      const payload = await response.json().catch(() => undefined), detail = payload?.detail;
+      throw new Error(typeof detail === "string" ? `${task.kind}: ${detail}` : `${task.kind} returned HTTP ${response.status}.`);
+    }
     const payload = await response.json();
     let outcome: ProviderOutcome;
     if (task.kind === "road") {
@@ -89,7 +93,12 @@ export class BrowserProviders implements SearchProvider {
       }
       outcome = { status: "success", roads };
     } else if (task.kind === "transit") outcome = { status: payload.itineraries?.length ? "success" : "empty", payload };
-    else { if (typeof payload.status !== "string" || !Array.isArray(payload.options)) throw new Error("Invalid flight-function response."); outcome = payload; }
+    else {
+      if (typeof payload.status !== "string" || !Array.isArray(payload.options)) throw new Error("Invalid flight-function response.");
+      if (payload.flight_choices !== undefined && (payload.protocol_version !== 2 || task.ticket_kind !== "round-trip" || !Array.isArray(payload.flight_choices)
+        || payload.flight_choices.some((choice: unknown) => !Array.isArray(choice) || !choice.length || choice.length > 64 || choice.some(segment => !Array.isArray(segment) || segment.length !== 5 || segment.some(value => typeof value !== "string" || !value.length || value.length > 120))))) throw new Error("Invalid round-trip return choices.");
+      outcome = payload;
+    }
     if (outcome.status !== "failed") {
       outcome.retrieved_at = new Date().toISOString();
       await this.repository.putCache(plan.key, outcome, task.kind === "transit" && outcome.status === "empty" ? 900 : plan.ttl);

@@ -45,23 +45,26 @@ No deployment is authorized as part of this checklist.
 - Native multi-trip repository, atomic edit transforms, isolated provider-cache
   pruning, portable backups, and a read-only SQLite exporter are implemented.
   Native worker calculation now saves/resumes checkpoints through that repository.
-  The full interface and live-search coordinator still need to use these services.
+  The full interface now uses these services in a separate native saved-trip entry;
+  the live-search coordinator still needs integration.
 - Native edits match 95 Python cases, including 37 rejected changes. Real browser
   storage tests cover rollback, concurrent revisions, stale workers, cache cleanup,
   backup replacement, and a previously weaker route becoming cheapest after Apply.
   A real SQLite export restored six records and reproduced the 14-route result.
 - Local prototype with browser batching, provider-response caching, one active
   saved session, and a bounded stateless one-way flight function.
-- 170 backend tests, fifteen browser tests (private migration replay enabled),
-  and the prototype production build passed. The default suite has fourteen
-  public tests and skips the private migration replay.
+- 170 backend tests, seventeen public browser checks, and the separate native
+  production-artifact interaction passed. Private migration replay remains
+  optional. Native and earlier prototype production builds have passed.
 
-The native solver currently runs through the comparison page. The live-search
-prototype still uses Python/Pyodide for discovery planning, result normalization,
-and solving. The full existing `Planner.tsx` still calls the Python planner API.
-Neither page is yet a complete native replacement for the application.
-The new CSV workflows and continuous-search controls are merged into the
-existing interface; their browser service implementations belong to stages 3-5.
+The native solver now also runs through the full Planner at `/native.html`.
+That entry uses local places/nearest lookup and browser-owned saved trips, edits,
+calculation, continuous calculation, and backups. Its static production build
+excludes Python and comparison data. Live provider search is explicitly unavailable
+there until its coordinator is connected. The older live-search prototype still
+uses Python/Pyodide for discovery planning, result normalization, and solving.
+The default `/` entry continues to use the original Python planner API.
+Neither preview is yet a complete native replacement for the application.
 
 ## 1. Establish the permanent reference boundary
 
@@ -175,6 +178,12 @@ the same behavior as the original app, and existing user work can be migrated
 without losing prices, rules, connections, or trip settings.
 
 ## 5. Connect the complete existing interface
+
+Saved-trip integration is implemented at `/native.html`; see
+[local usage and production checks](native-planner.md). Missing info Apply and
+backup restore/download run through the full interface without planner API calls.
+Local catalog lookup matches 90 Python searches and nearest-place queries.
+Live search coordination remains necessary to complete this stage.
 
 Retain the current React settings, options/chart, itinerary/map, Missing info,
 pricing forms, and report/export features. Replace their planner API calls with

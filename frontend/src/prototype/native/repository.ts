@@ -115,6 +115,16 @@ export class PlannerRepository {
       });
     });
   }
+  setLatestJob(id: string, field: "latest_job_id" | "latest_optimization_id", jobId: string): Promise<void> {
+    return this.transaction(["records"], "readwrite", c => {
+      const records = c.tx.objectStore("records");
+      c.read(records.get(["trips", id]), value => {
+        const trip = payload<PlannerTrip>(value);
+        if (!trip) throw new PlannerError("Trip not found.", 404);
+        trip[field] = jobId; records.put(row("trips", id, trip));
+      });
+    });
+  }
   updateSpec(id: string, raw: unknown, revision: number): Promise<PlannerTrip> {
     const spec = parseSpec(raw); requireMinimumStays(spec);
     return this.transaction(["records", "checkpoints"], "readwrite", c => {

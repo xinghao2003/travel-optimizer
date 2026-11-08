@@ -47,7 +47,24 @@ export type OptimizationJob = {
   pause_reason: "checkpoint" | "changes" | "user" | "shutdown" | null; message?: string | null;
 };
 
+export type PlannerTransport = (path: string, method: string, body?: unknown) => Promise<unknown>;
+export type PlannerConfig = { transit_routing_configured: boolean };
+let browserTransport: PlannerTransport | undefined;
+let browserConfig: (() => Promise<PlannerConfig>) | undefined;
+export function installPlannerTransport(transport: PlannerTransport, config: () => Promise<PlannerConfig>) {
+  browserTransport = transport; browserConfig = config;
+}
+export async function plannerConfig(): Promise<PlannerConfig> {
+  if (browserConfig) return browserConfig();
+  const response = await fetch("/api/data", { signal: AbortSignal.timeout(15000) });
+  if (!response.ok) throw new Error("Could not load planner configuration.");
+  return response.json();
+}
 export async function api<T>(path: string, method = "GET", body?: unknown): Promise<T> {
+  if (browserTransport) {
+    try { return await browserTransport(path, method, body) as T; }
+    catch (error) { if (error instanceof Error) Object.assign(error, { path }); throw error; }
+  }
   if (method === "GET" && /^\/trips\/[^/?]+$/.test(path)) path += "?compact=true";
   if (method === "POST" && /^\/trips\/[^/?]+\/optimize$/.test(path)) body = { ...(body as Record<string, unknown> | undefined), compact: true };
   let response: Response, text: string;

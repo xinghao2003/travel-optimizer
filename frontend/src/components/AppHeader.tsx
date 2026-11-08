@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Select, SelectItem } from "./ui/select";
 import { CircleAlert, CircleCheck, Compass, Copy, Download, Ellipsis, LoaderCircle, Plus, RefreshCw } from "lucide-react";
 import { Button } from "./ui/button";
@@ -9,12 +10,13 @@ import type { SavedSummary } from "../lib/planner";
 const statusIcons = { ok: CircleCheck, busy: LoaderCircle, warn: CircleAlert };
 
 /** The sticky app header (C1): brand, Trip select, New trip, save status and the ⋯ menu. */
-export function AppHeader({ trips, currentId, unsaved, status, statusTone, disabled, menuBusy, onOpen, onNew, onCopy, onRecalculate, onExport, canCopy, canRecalculate, canExport }: {
+export function AppHeader({ trips, currentId, unsaved, status, statusTone, disabled, menuBusy, onOpen, onNew, onCopy, onRecalculate, onExport, canCopy, canRecalculate, canExport, extraActions }: {
   trips: SavedSummary[]; currentId: string | null; unsaved: boolean; status: string; statusTone: keyof typeof statusIcons;
   disabled: boolean; onOpen: (id: string) => void; onNew: () => void; onCopy: () => void; onRecalculate: () => void; canCopy: boolean; canRecalculate: boolean;
   /** A menu action runs: the menu button shows the spinner. */
   menuBusy: boolean;
   onExport: () => void; canExport: boolean;
+  extraActions?: ReactNode;
 }) {
   const menu = useDismiss();
   const StatusIcon = statusIcons[statusTone];
@@ -43,6 +45,7 @@ export function AppHeader({ trips, currentId, unsaved, status, statusTone, disab
           <button type="button" className="p-menu-item" disabled={!canExport} onClick={choose(onExport)}><Download size={15} aria-hidden="true" /><span>Export trips<small>Share an itinerary or compare trips as PDF or HTML.</small></span></button>
           <button type="button" className="p-menu-item" disabled={!canCopy} onClick={choose(onCopy)}><Copy size={15} aria-hidden="true" /><span>Copy trip<small>{unsaved ? "Save the trip first." : "Copies settings, airport transfers and airport changes. Prices and search results are not copied."}</small></span></button>
           <button type="button" className="p-menu-item" disabled={!canRecalculate} onClick={choose(onRecalculate)}><RefreshCw size={15} aria-hidden="true" /><span>Recalculate options<small>{unsaved ? "Save the trip first." : "Uses saved data. No new search."}</small></span></button>
+          {extraActions}
           <ThemeChoice />
         </div>
       </details>

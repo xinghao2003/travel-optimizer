@@ -2,7 +2,8 @@
 
 The native services use IndexedDB database `wayfinder-planner`, schema version
 1. The older search prototype keeps its separate `wayfinder-browser-prototype`
-database. The full Planner interface has not yet been switched to these services.
+database. The full Planner interface uses these services through the separate
+[`/native.html` preview](native-planner.md); the original entry remains available.
 
 `PlannerRepository` stores multiple trips, global rules, shared graphs, search
 and calculation records, selected-trip metadata, native checkpoints, and provider
@@ -13,8 +14,8 @@ results commit only if the trip and source graph revisions still match.
 Native edit transforms cover atomic Apply, shared component estimates, reusable
 journey estimates, explicit CSV deletion targets, airport connections/transfers,
 individual/bundle fares, and assumed connections. References from current Python
-include 95 edits and 37 rejected requests. Search/apply coordination and the
-interface adapter remain separate migration work.
+include 95 edits and 37 rejected requests. The interface adapter is connected
+for saved-trip workflows. Live search/apply coordination remains migration work.
 
 `BrowserCalculator` runs the native solver in a Web Worker and persists unfinished
 state through IndexedDB structured cloning. It uses small internal batches while
@@ -53,8 +54,8 @@ uv run python tools/export_planner_backup.py --database backend/data/planner.sql
 
 The output must be a new file; the exporter will not replace its database or an
 existing backup. It uses only Python's standard library and exports trips, rules,
-graphs, searches, and calculation records. Browser import controls will be
-connected with the full interface adapter. JSON backups also move data between
+graphs, searches, and calculation records. The native preview provides download
+and restore controls in More actions. JSON backups also move data between
 local development and hosted browser origins.
 
 ## Verification

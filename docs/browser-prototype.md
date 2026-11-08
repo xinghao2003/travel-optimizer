@@ -6,6 +6,8 @@ remains available through its existing startup script.
 
 A separate [native TypeScript versus Python comparison](native-solver-prototype.md)
 is available at <http://127.0.0.1:5174/solver-comparison.html>.
+The [full Planner native preview](native-planner.md) is at `/native.html`; it
+currently supports saved-trip workflows and does not yet run live discovery.
 
 ## Run locally
 

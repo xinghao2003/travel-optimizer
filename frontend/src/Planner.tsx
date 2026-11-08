@@ -11,7 +11,7 @@ import { StatusStrip } from "./components/StatusStrip";
 import { Tabs, type TabItem } from "./components/Tabs";
 import { TripBar } from "./components/TripBar";
 import { TripSettings } from "./components/TripSettings";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CircleCheck, LoaderCircle } from "lucide-react";
 import type { AppliedSharedFareGroup } from "./components/MissingFaresTable";
 import { groupMissingFares } from "./lib/missingFares";
@@ -20,7 +20,7 @@ import type { JourneyGroupField } from "./lib/planner";
 import { activeFares, airportChangeFieldId, buildAirportConnections, buildTransferEstimates, canonicalFares, canonicalIds, countDrafts, invalidDraftFields, knownComponentIds, savedTransferRows, sameTransferRows, transferFieldId, transferKey, transferRateId, type DraftPrice, type DraftState, type DraftTarget, type PriceValue, type SharedFare } from "./lib/drafts";
 import { useTripDrafts } from "./lib/useTripDrafts";
 import { airportChangeRows, appError, assumedConnections, buildNextSteps, cityGaps, needsInputCount, optionNumber, optionsEmptyState, partySizeNotice, purchaseAmount, routeSignature, searchDetails, searchState, settingsFooter, sortRoutes, splitGroups, staySumWarning, transferDirections, transitSearchModes, unresolvedAccessJourneys, validateDraft, type AppError, type OptionsTarget } from "./lib/present";
-import { api, blankTrip, defaultBatchSize, modes, type AirportTransferMode, type Charge, type Job, type Movement, type Offer, type OptimizationJob, type PricingRule, type Result, type Route, type SavedSummary, type SavedTrip, type TripDraft } from "./lib/planner";
+import { api, blankTrip, defaultBatchSize, modes, plannerConfig, type AirportTransferMode, type Charge, type Job, type Movement, type Offer, type OptimizationJob, type PricingRule, type Result, type Route, type SavedSummary, type SavedTrip, type TripDraft } from "./lib/planner";
 import { useMediaQuery } from "./lib/useMediaQuery";
 import { exportFilename, exportTrip, tripReportHtml, type ExportOption, type ExportScope, type ExportTrip } from "./lib/tripExport";
 import "./planner.css";
@@ -41,7 +41,7 @@ const resultRoutes = (result: Result | null) => [...(result?.routes ?? []), ...(
  */
 const templatesOf = (result: Result | null) => new Map(resultRoutes(result).flatMap(route => route.movements.map(movement => [movement.id, movement.template_id ?? movement.id] as const)));
 
-export default function Planner() {
+export default function Planner({ storageActions, externalRevision = 0 }: { storageActions?: (disabled: boolean) => ReactNode; externalRevision?: number } = {}) {
   const [draft, setDraft] = useState<TripDraft>(blankTrip);
   const [saved, setSaved] = useState<SavedTrip | null>(null);
   const [summaries, setSummaries] = useState<SavedSummary[]>([]);
@@ -197,7 +197,7 @@ export default function Planner() {
   }
   useEffect(() => {
     let active = true;
-    void Promise.all([api<{ trips: SavedSummary[] }>("/trips"), api<{ rules: PricingRule[] }>("/pricing-rules"), fetch("/api/data", { signal: AbortSignal.timeout(15000) }).then(r => r.json())]).then(async ([trips, data, config]) => {
+    void Promise.all([api<{ trips: SavedSummary[] }>("/trips"), api<{ rules: PricingRule[] }>("/pricing-rules"), plannerConfig()]).then(async ([trips, data, config]) => {
       if (!active) return;
       setSummaries(trips.trips); setRules(data.rules); setTransitConfigured(config.transit_routing_configured);
       setInitialLoad(false);
@@ -207,7 +207,7 @@ export default function Planner() {
     return () => { active = false; };
     // Initial restore only; subsequent navigation is explicit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [externalRevision]);
 
   async function saveSpec(): Promise<SavedTrip> {
     if (pendingSave.current) await pendingSave.current;
@@ -370,7 +370,7 @@ export default function Planner() {
       if (savedRef.current?.id === record.id) setSaveStatus("Options updated");
     }, "recalculate");
   }
-  // Check combinations continuously on the server; polling loads each completed batch.
+  // Polling loads each completed batch of continuous calculation.
   function checkMore() {
     const tripId = savedRef.current?.id;
     if (!tripId) return;
@@ -968,7 +968,8 @@ export default function Planner() {
     }}>{workspace ? "Skip to options" : "Skip to trip settings"}</a>
     <AppHeader trips={trips} currentId={saved?.id ?? null} unsaved={!saved} status={status} statusTone={statusTone} disabled={busy} menuBusy={busyAction === "recalculate" || busyAction === "copy"}
       onOpen={id => void act(() => openTrip(id), "open")} onNew={() => void act(newTrip, "new")} onCopy={() => void act(duplicateTrip, "copy")} onRecalculate={recalculate}
-      canCopy={!!saved && !busy} canRecalculate={!!saved && !busy} onExport={() => setExportOpen(true)} canExport={trips.length > 0 && !busy && !loadingTrip} />
+      canCopy={!!saved && !busy} canRecalculate={!!saved && !busy} onExport={() => setExportOpen(true)} canExport={trips.length > 0 && !busy && !loadingTrip}
+      extraActions={storageActions?.(busy || loadingTrip || initialLoad || dirty || draftTotal > 0 || active || !!optimization && ["queued", "running", "stopping"].includes(optimization.status))} />
     <div className="p-container">
     <ErrorBanner error={error} onDismiss={() => setError(null)} onReload={reloadTrip} onRetrySave={() => { setError(null); autosave(); }} onSearchAgain={() => void search()} />
     <main id="main" aria-busy={loadingTrip || undefined}>{loadingTrip ? <p className="p-main-loading" role="status"><LoaderCircle size={18} className="p-spin" aria-hidden="true" />Opening {loadingName || "the trip"}…</p> : <>

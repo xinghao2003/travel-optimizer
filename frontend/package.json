@@ -8,8 +8,10 @@
     "build": "tsc -b && vite build --configLoader runner",
     "preview": "vite preview --host 127.0.0.1",
     "dev:poc": "vite --config vite.poc.config.ts --configLoader runner --host 127.0.0.1",
+    "dev:native": "vite --config vite.native.config.ts --configLoader runner --host 127.0.0.1",
+    "build:native": "uv run --project .. python ../tools/prepare_static_planner.py && tsc -b && vite build --config vite.native.config.ts --configLoader runner",
     "build:poc": "tsc -b && vite build --config vite.poc.config.ts --configLoader runner",
-    "test:poc": "uv run --project .. python ../tools/export_solver_comparison.py && uv run --project .. python ../tools/export_provider_comparison.py && uv run --project .. python ../tools/export_contract_comparison.py && uv run --project .. python ../tools/export_preparation_comparison.py && uv run --project .. python ../tools/export_edit_comparison.py && playwright test --config playwright.poc.config.ts"
+    "test:poc": "uv run --project .. python ../tools/prepare_static_planner.py && uv run --project .. python ../tools/export_place_comparison.py && uv run --project .. python ../tools/export_solver_comparison.py && uv run --project .. python ../tools/export_provider_comparison.py && uv run --project .. python ../tools/export_contract_comparison.py && uv run --project .. python ../tools/export_preparation_comparison.py && uv run --project .. python ../tools/export_edit_comparison.py && playwright test --config playwright.poc.config.ts"
   },
   "dependencies": {
     "@js-temporal/polyfill": "^0.5.1",

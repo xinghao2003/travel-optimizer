@@ -29,10 +29,13 @@ data/geonames/cities500.download
 /frontend/public/browser-python/
 /frontend/public/browser-data/
 /frontend/dist-poc/
+/frontend/public-native/
+/frontend/dist-native/
 /.vercel/
 /frontend/tests/fixtures/native-solver.json
 /frontend/tests/fixtures/native-providers.json
 /frontend/tests/fixtures/native-contracts.json
 /frontend/tests/fixtures/native-preparation.json
 /frontend/tests/fixtures/native-edits.json
+/frontend/tests/fixtures/native-places.json
 .vercel

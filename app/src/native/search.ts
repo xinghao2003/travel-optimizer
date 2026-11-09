@@ -46,8 +46,6 @@ export class BrowserDiscovery {
   private async saved(id: string): Promise<SearchRecord> {
     const job = this.active.get(id)?.job ?? await this.repository.get<SearchRecord>("jobs", id);
     if (!job) throw new PlannerError("Search not found.", 404);
-    // Older Python records predate some optional progress fields.
-    job.outcomes ??= {}; job.bundle_links ??= []; job.manual_quote_queries ??= 0; job.messages ??= [];
     return job;
   }
   async status(id: string): Promise<Job> { return this.public(await this.saved(id)); }

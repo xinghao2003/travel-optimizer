@@ -51,7 +51,7 @@ preserved graph.
 
 ## Verification
 
-The browser tests (`app/tests/native-repository.spec.ts`) exercise real
+The browser tests (`app/tests/repository.spec.ts`) exercise real
 IndexedDB transactions and the real worker: rollback, competing revisions,
 changed-graph result rejection, checkpoint round trips, cache pruning, trip
 copy and delete, backup conflicts, replacement, and restoration into a fresh

@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 
 test("native Planner restores a backup, calculates, edits and reloads without planner HTTP calls", async ({ page }) => {
   const forbidden: string[] = [], errors: string[] = [];
-  page.on("request", request => { if (/\/api\/|pyodide|jsdelivr|browser-python/.test(request.url())) forbidden.push(request.url()); });
+  page.on("request", request => { if (/\/api\/|jsdelivr/.test(request.url())) forbidden.push(request.url()); });
   page.on("pageerror", error => errors.push(error.message));
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Wayfinder Routes", exact: true })).toBeAttached();
@@ -11,7 +11,7 @@ test("native Planner restores a backup, calculates, edits and reloads without pl
   await expect(page.getByRole("button", { name: "Restore browser backup", exact: true })).toBeEnabled();
   await page.getByRole("button", { name: "Restore browser backup", exact: true }).click();
   const fixture = await page.evaluate(async () => {
-    const corpus = await (await fetch("/tests/fixtures/native-preparation.json")).json(), sample = corpus.cases[5];
+    const corpus = await (await fetch("/tests/fixtures/preparation.json")).json(), sample = corpus.cases[5];
     const records = [{ schema_version: 1, collection: "trips", id: sample.trip.id, updated: 1, payload: sample.trip },
       ...sample.rules.map((rule: { id: string }) => ({ schema_version: 1, collection: "rules", id: rule.id, updated: 1, payload: rule }))];
     return { id: sample.trip.id, backup: { format: "wayfinder-browser-backup", schema_version: 1, exported_at: new Date().toISOString(), records },
@@ -56,7 +56,7 @@ test("native service applies prices to the full graph and persists continuous ca
   await page.goto("/native-api-test");
   const summary = await page.evaluate(async () => {
     const { BrowserPlannerApi } = await import("/src/native/api.ts"), { PlannerRepository } = await import("/src/native/repository.ts");
-    const edits = await (await fetch("/tests/fixtures/native-edits.json")).json();
+    const edits = await (await fetch("/tests/fixtures/edits.json")).json();
     const sample = edits.cases.find((item: { operation: string; valid: boolean; input: { request?: { estimates?: { component_ids: string[]; low: number }[] } } }) => item.operation === "apply_missing_info" && item.valid && item.input.request?.estimates?.some(e => e.component_ids.includes("weaker") && e.low === 1));
     const repository = new PlannerRepository("wayfinder-api-" + crypto.randomUUID()), service = new BrowserPlannerApi(repository, async () => edits.catalog);
     await service.ready(); const trip = sample.input.trip;
@@ -86,13 +86,13 @@ test("native service applies prices to the full graph and persists continuous ca
 
 test("production static Planner restores and edits a saved trip without a planner server", async ({ page }) => {
   test.skip(!process.env.STATIC_URL, "Run against the separately built native static artifact.");
-  const corpus = JSON.parse(await readFile("tests/fixtures/native-preparation.json", "utf8")), sample = corpus.cases[5];
+  const corpus = JSON.parse(await readFile("tests/fixtures/preparation.json", "utf8")), sample = corpus.cases[5];
   const backup = { format: "wayfinder-browser-backup", schema_version: 1, exported_at: new Date().toISOString(), records: [
     { schema_version: 1, collection: "trips", id: sample.trip.id, updated: 1, payload: sample.trip },
     ...sample.rules.map((rule: { id: string }) => ({ schema_version: 1, collection: "rules", id: rule.id, updated: 1, payload: rule }))] };
   const forbidden: string[] = [], errors: string[] = [];
   let providerCalls = 0, transitCalls = 0;
-  page.on("request", request => { if (/\/api\/(?:v2|data)|pyodide|jsdelivr|browser-python|\/src\//.test(request.url())) forbidden.push(request.url()); });
+  page.on("request", request => { if (/\/api\/(?:v2|data)|jsdelivr|\/src\//.test(request.url())) forbidden.push(request.url()); });
   await page.route("**/api/flights", route => { providerCalls++; return route.fulfill({ json: { status: "empty", options: [], search_url: "https://www.google.com/travel/flights" } }); });
   await page.route("https://api.transitous.org/api/v6/plan?*", route => {
     transitCalls++; return route.fulfill({ json: { itineraries: [] }, headers: { "Access-Control-Allow-Origin": "*" } });

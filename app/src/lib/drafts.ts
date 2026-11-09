@@ -77,7 +77,7 @@ export function canonicalFares(drafts: Record<string, SharedFare>, templateOf: M
 }
 
 /**
- * The fare components the server accepts (F4): `fare_component_ids` from GET, else the snapshot's journeys and
+ * The fare components the planner accepts (F4): `fare_component_ids` from GET, else the snapshot's journeys and
  * charges plus the components of `routes` (best, weaker and over-budget). PUT /trips has no fare_component_ids.
  */
 export function knownComponentIds(saved: Pick<SavedTrip, "fare_component_ids" | "snapshot"> | null, routes: Pick<Route, "movements" | "extra_charges">[]): Set<string> {
@@ -208,7 +208,7 @@ export function invalidDraftFields(drafts: Pick<DraftState, "transfers" | "airpo
  * blank taxi row) means no estimate. Throws an Error with a message for the first invalid value.
  */
 export function buildTransferEstimates(rows: AirportTransferRow[], saved: AirportTransferEstimate[], drafts: Record<string, TransferRowDraft[]>, adults: number): AirportTransferEstimate[] {
-  // The server accepts only the directions in rows.
+  // The planner accepts only the directions in rows.
   const estimates = saved.filter(e => e.adults !== adults && rows.some(r => r.from_id === e.from_id && r.to_id === e.to_id));
   for (const row of rows) {
     const draft = drafts[transferKey(row.from_id, row.to_id, adults)];

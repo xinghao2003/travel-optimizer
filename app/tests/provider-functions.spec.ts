@@ -12,7 +12,7 @@ test("Transitous defaults to direct browser HTTP with an origin referrer and rep
   const result = await page.evaluate(async () => {
     const { BrowserProviders, providerPlan } = await import("/src/native/providers.ts"), { PlannerRepository } = await import("/src/native/repository.ts");
     const { loadAirportCatalog } = await import("/src/native/catalog.ts");
-    const corpus = await (await fetch("/tests/fixtures/native-preparation.json")).json(), spec = corpus.cases[5].trip.spec;
+    const corpus = await (await fetch("/tests/fixtures/preparation.json")).json(), spec = corpus.cases[5].trip.spec;
     const repository = new PlannerRepository("direct-transit-" + crypto.randomUUID()), providers = new BrowserProviders(repository, loadAirportCatalog);
     const task = { kind: "transit" as const, key: "direct-test", from_id: spec.home.id, to_id: spec.visits[0].place.id, date: spec.start_date };
     const snapshot = { revision: 0, movements: [], offers: [], coverage: {} }, settings = await providers.settings();
@@ -54,7 +54,7 @@ test("bounded round-trip choices persist across reload, Stop, and Continue with 
     const { BrowserDiscovery } = await import("/src/native/search.ts"), { BrowserProviders } = await import("/src/native/providers.ts");
     const { makeLeg } = await import("/src/native/discovery.ts"), { discoveryKey } = await import("/src/native/discovery-key.ts");
     const { stableId } = await import("/src/native/time.ts");
-    const corpus = await (await fetch("/tests/fixtures/native-search.json")).json(), trip = structuredClone(corpus.cases.find((c: { name: string }) => c.name === "bundles-from-complete-histories").initial);
+    const corpus = await (await fetch("/tests/fixtures/search.json")).json(), trip = structuredClone(corpus.cases.find((c: { name: string }) => c.name === "bundles-from-complete-histories").initial);
     trip.snapshot = null; trip.offers = []; trip.airport_transfer_estimates = []; trip.journey_pricing_rules = [];
     trip.spec.modes = ["flight"]; trip.spec.adults = 2; trip.spec.exclude_unpriced_flights = true; trip.spec.departure_start = "00:00:00"; trip.spec.departure_end = "23:59:00";
     const legs = [makeLeg(trip.spec.home, trip.spec.visits[0].place, "2027-02-10", corpus.catalog.metros), makeLeg(trip.spec.visits[0].place, trip.spec.home, "2027-02-12", corpus.catalog.metros)];
@@ -77,7 +77,7 @@ test("bounded round-trip choices persist across reload, Stop, and Continue with 
   const second = await page.evaluate(async () => {
     const { PlannerRepository } = await import("/src/native/repository.ts"), { BrowserCalculator } = await import("/src/native/calculation.ts");
     const { BrowserDiscovery } = await import("/src/native/search.ts"), { BrowserProviders } = await import("/src/native/providers.ts");
-    const corpus = await (await fetch("/tests/fixtures/native-search.json")).json(), repository = new PlannerRepository("bounded-returns"), tripId = localStorage.getItem("bounded-trip")!;
+    const corpus = await (await fetch("/tests/fixtures/search.json")).json(), repository = new PlannerRepository("bounded-returns"), tripId = localStorage.getItem("bounded-trip")!;
     const settings = async () => ({ schema_version: 1 as const, flights_url: "/api/flights", osrm_base_url: "https://example.test", transit_url: "/api/transit", transit_enabled: false });
     const discovery = new BrowserDiscovery(repository, new BrowserCalculator(repository), new BrowserProviders(repository, async () => corpus.catalog, settings), async () => corpus.catalog);
     await discovery.start(tripId, 1, "bounded-flight-job"); await discovery.wait("bounded-flight-job");

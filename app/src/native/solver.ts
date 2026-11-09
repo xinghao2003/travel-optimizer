@@ -333,6 +333,5 @@ function serialize(input: SolverInput, spec: Spec, state: SearchState, places: M
     label_limit: input.label_limit ?? null, snapshot_revision: input.snapshot_revision ?? 0, trip_revision: input.trip_revision ?? 0,
     optimality_scope: "Retrieved schedules, fare offers, and road departures at readiness / connection / return-boundary events" };
   if (input.include_dominated) result.dominated_routes = routes.filter(route => route.budget_status !== "over" && !frontierIds.has(route.id));
-  if (spec.exclude_unpriced_flights) Object.assign(result, { flight_price_revision: 2 });
   return result;
 }

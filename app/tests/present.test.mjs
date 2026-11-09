@@ -363,8 +363,8 @@ test("the status strip shows the first matching state and routes Check more comb
   assert.deepEqual(row(paused), ["paused", "Search paused · 41 searches left.", "Search more:continue"]);
   assert.equal(paused.tip, "The search pauses after each batch of 100 new requests to data providers. Search more runs the next batch. Saved results are reused.");
   assert.deepEqual(row(strip({ job: job("cancelled", { pending: 1 }) })), ["stopped", "Search stopped · 1 search left. Found options are kept.", "Search more:continue"]);
-  assert.deepEqual(row(strip({ job: job("interrupted", { pending: 3 }) })), ["interrupted", "The search stopped because the server stopped · 3 searches left. Found options are kept.", "Search more:continue"]);
-  assert.deepEqual(row(strip({ job: job("interrupted", { failed_queries: 2 }) })), ["interrupted", "The search stopped because the server stopped. Found options are kept.", "Retry failed searches:continue"]);
+  assert.deepEqual(row(strip({ job: job("interrupted", { pending: 3 }) })), ["interrupted", "The search was interrupted · 3 searches left. Found options are kept.", "Search more:continue"]);
+  assert.deepEqual(row(strip({ job: job("interrupted", { failed_queries: 2 }) })), ["interrupted", "The search was interrupted. Found options are kept.", "Retry failed searches:continue"]);
   const messages = ["flight: no rows", "Planner: RuntimeError: provider closed."];
   assert.deepEqual(row(strip({ job: job("failed", { messages }) })), ["failed", "The search failed: RuntimeError: provider closed. Found options are kept.", "Search again:search"]);
   assert.equal(row(strip({ job: job("failed", { messages, pending: 5 }) }))[2], "Search more:continue");

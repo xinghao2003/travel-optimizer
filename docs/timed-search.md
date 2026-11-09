@@ -52,8 +52,7 @@ check uses the changed inputs. The original transport-search queue is retained.
 
 There is no checkpoint-size limit. Batches still bound additional expansions,
 but total memory and disk use can keep growing until stopped or complete.
-The details show saved checkpoint size. A trip paused under the previous size
-limit can continue normally. A complete solve removes its checkpoint.
+The details show saved checkpoint size. A complete solve removes its checkpoint.
 
 The solver shares 16-state turns across starting journeys and departure gateways.
 When **Skip flights without a price** is enabled, flights with no usable
@@ -71,9 +70,6 @@ child's tier is recalculated as its path grows; a later combined ticket can
 cover previously unpriced flights. All tiers retain regular turns and the
 same feasibility and ticket-cover checks. This changes partial-result order
 and adds scheduling overhead; it does not make partial results exhaustive.
-Matching older depth-first checkpoints preserve completed itineraries, explored
-states, and counters while redistributing pending work into the fair schedule.
-Pending legacy paths containing an excluded flight are discarded.
 
 Results report how many completed itineraries were hidden because their flight
 prices were not applicable or complete. An empty Options panel distinguishes

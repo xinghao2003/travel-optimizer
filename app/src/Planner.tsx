@@ -141,7 +141,7 @@ export default function Planner({ storageActions, externalRevision = 0 }: { stor
   async function refreshList() { const data = await api<{ trips: SavedSummary[] }>("/trips"); setSummaries(data.trips); }
   async function openTrip(id: string, { discard = false } = {}) {
     if (pendingSave.current) await pendingSave.current;
-    // Reload trip drops the changes that the server refused.
+    // Reload trip drops the changes that the planner refused.
     if (discard) dirtyRef.current = false;
     else if (dirtyRef.current && draftRef.current.home && draftRef.current.visits.length) await saveSpec();
     const token = ++session.current;
@@ -150,7 +150,6 @@ export default function Planner({ storageActions, externalRevision = 0 }: { stor
     setError(null); setResult(null); setJob(null); setOptimization(null); setSelectedId(null); setComparisonId(null); setPanel("options");
     try {
     const record = await api<SavedTrip>(`/trips/${id}`);
-    if (record.spec.exclude_unpriced_flights && record.result && record.result.flight_price_revision !== 2) record.result.trip_revision = -1;
     if (token !== session.current) return;
     accept(record, true); setSaveStatus("Saved");
     // Settings and saved options are available before status/recalculation finish.
@@ -393,7 +392,7 @@ export default function Planner({ storageActions, externalRevision = 0 }: { stor
       if (savedRef.current?.id === tripId) setOptimization(status);
     }, "stop-optimization");
   }
-  // Error banner › Reload trip after a conflict: opens the trip again from the server and drops unsaved changes.
+  // Error banner › Reload trip after a conflict: opens the trip again from the planner and drops unsaved changes.
   function reloadTrip() {
     const tripId = savedRef.current?.id;
     if (!tripId || (dirtyRef.current && !window.confirm("Reload the trip? Your unsaved changes will be lost."))) return;
@@ -834,7 +833,7 @@ export default function Planner({ storageActions, externalRevision = 0 }: { stor
     setFocusTarget([...invalidFields(drafts).slice(0, 1), "missing-title"]);
   }
   /**
-   * Apply all sendable drafts in one transaction. The server coordinates a running round and returns its state.
+   * Apply all sendable drafts in one transaction. The planner coordinates a running round and returns its state.
    * Drafts for another party size or components outside the saved data stay in this browser.
    * The session token is checked after every request, so a trip opened meanwhile is never changed.
    */

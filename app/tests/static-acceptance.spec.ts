@@ -6,7 +6,7 @@ test("native API preserves global-rule responses, cross-trip revisions, and dele
   await page.goto("/native-operation-contract");
   const result = await page.evaluate(async () => {
     const { BrowserPlannerApi } = await import("/src/native/api.ts"), { PlannerRepository } = await import("/src/native/repository.ts");
-    const corpus = await (await fetch("/tests/fixtures/native-preparation.json")).json(), sample = corpus.cases[5];
+    const corpus = await (await fetch("/tests/fixtures/preparation.json")).json(), sample = corpus.cases[5];
     const repository = new PlannerRepository("wayfinder-contract-" + crypto.randomUUID()), api = new BrowserPlannerApi(repository, async () => corpus.catalog);
     const one = await api.request("/trips", "POST", sample.trip.spec) as { id: string; revision: number };
     const two = await api.request(`/trips/${one.id}/duplicate`, "POST") as { id: string; revision: number };
@@ -53,7 +53,7 @@ test("production artifact contains only the application and public catalogs", as
 
 test("production static root supports multiple trips, weaker options, copies, and portable reports", async ({ page, context }) => {
   test.skip(!process.env.STATIC_URL, "Run against a plain static server serving dist.");
-  const corpus = JSON.parse(await readFile("tests/fixtures/native-preparation.json", "utf8"));
+  const corpus = JSON.parse(await readFile("tests/fixtures/preparation.json", "utf8"));
   const sample = corpus.cases[5], other = structuredClone(sample.trip);
   other.id = "static-acceptance-other"; other.spec.name = "Second saved trip";
   const first = structuredClone(sample.trip); first.spec.name = "Static acceptance trip";
@@ -65,7 +65,7 @@ test("production static root supports multiple trips, weaker options, copies, an
   page.on("pageerror", error => errors.push(error.message));
   await context.route("**/*", route => {
     const url = new URL(route.request().url());
-    if (url.origin === origin && /^(?:\/(?:native\.html)?|\/assets\/[\w.-]+\.(?:js|css)|\/browser-data\/(?:airports|places|config)\.json)$/.test(url.pathname)) return route.continue();
+    if (url.origin === origin && /^(?:\/(?:favicon\.svg)?|\/assets\/[\w.-]+\.(?:js|css)|\/browser-data\/(?:airports|places|config)\.json)$/.test(url.pathname)) return route.continue();
     if (url.href === "https://tiles.openfreemap.org/styles/bright") return route.fulfill({ json: { version: 8, sources: {}, layers: [] } });
     forbidden.push(url.href); return route.abort();
   });

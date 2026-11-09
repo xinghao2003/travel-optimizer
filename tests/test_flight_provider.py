@@ -89,9 +89,6 @@ class FlightStepTests(unittest.TestCase):
         result, seen = self.step([[full]])
         self.assertEqual(result["options"][0]["price"], 150); self.assertEqual(len(seen), 1)
         empty, _ = self.step([[]]); self.assertEqual(empty["status"], "requires_manual_quote")
-        with patch.object(providers, "flight_session") as session:
-            manual = fetch_flight_step([LEG, BACK], 2, "multi-city", time(9), time(17))
-        session.assert_not_called(); self.assertTrue(manual["automatic_query_skipped"])
 
     def test_failed_step_and_provider_admission_timeout_are_retryable(self):
         result, seen = self.step([[self.outbound], TimeoutError("recorded timeout")], operation="return", selection=SELECTION)
@@ -136,7 +133,7 @@ class ProviderHttpTests(unittest.IsolatedAsyncioTestCase):
             with patch.object(flight_api, "fetch_flight_step", return_value={"status": "success", "options": []}) as provider:
                 self.assertEqual((await client.post("/api/flights", json=data)).status_code, 200)
                 self.assertEqual(provider.call_args.kwargs["operation"], "return")
-            for invalid in ({"kind": "one-way"}, {"operation": "search"}, {"selection": []}, {"departure_start": "09:00:00+08:00"}, {"url": "https://example.com"}):
+            for invalid in ({"kind": "one-way"}, {"operation": "search"}, {"selection": []}, {"kind": "multi-city"}, {"departure_start": "09:00:00+08:00"}, {"url": "https://example.com"}):
                 self.assertEqual((await client.post("/api/flights", json={**data, **invalid})).status_code, 422)
             with patch.object(flight_api, "_requests") as limit, patch.object(flight_api, "fetch_flight_step") as provider:
                 limit.acquire.return_value = False

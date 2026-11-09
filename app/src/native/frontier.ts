@@ -1,4 +1,4 @@
-/** Weighted fair exploration, matching Python's SearchFrontier (checkpoint v2).
+/** Weighted fair exploration across price tiers and starting branches.
  * Plain data keeps the active branch and quantum intact through structuredClone.
  */
 import type { Frontier, Label, Spec } from "./types";
@@ -21,7 +21,7 @@ export function enqueue(queue: Frontier, label: Label, rates: Spec["exchange_rat
   const key = JSON.stringify([label.departure_gateway, first ? first.raw.template_id || first.raw.id : null]);
   const tier = queue.buckets[priority];
   if (!tier.has(key)) { tier.set(key, []); queue.turns[priority].push(key); }
-  // The last element is the left of Python's deque.
+  // The last element is popped next (depth first within a branch).
   tier.get(key)!.push(label);
   queue.size++;
 }

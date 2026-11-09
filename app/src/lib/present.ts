@@ -6,10 +6,10 @@ import type { OptimizationJob } from "./planner";
 // tests load this file directly.
 //
 // Trip records come in two shapes. GET /trips/{id} empties snapshot.movements and adds
-// fields that the server computes (readTrip in native/api.ts). PUT /trips/{id} returns the
+// fields that the planner computes (readTrip in native/api.ts). PUT /trips/{id} returns the
 // stored record with snapshot.movements and airport_transfer_rows, but without
 // airport_connections_required, assumed_connections, city_connection_gaps and fare_component_ids.
-// Helpers that read the record use the server field when it is present, otherwise they derive it the same way.
+// Helpers that read the record use the planner field when it is present, otherwise they derive it the same way.
 
 // ---------------------------------------------------------------- display
 
@@ -327,7 +327,7 @@ export function searchState({ invalid, dirty, saved, result, job, minutes, apply
   if (!active && !dirty && optimization?.status === "paused" && optimization.pause_reason === "checkpoint") return state("checking-resource", "warn",
     "Checking paused under the previous checkpoint-size limit. Progress is saved. Continue to resume without that limit.");
   if (!active && !dirty && optimization?.status === "failed") return state("checking-failed", "error", `Checking stopped: ${optimization.message || "Calculation failed"}. Saved progress is kept.`);
-  if (!active && !dirty && optimization?.status === "interrupted") return state("checking-interrupted", "warn", "The server stopped while checking. Saved progress can continue.");
+  if (!active && !dirty && optimization?.status === "interrupted") return state("checking-interrupted", "warn", "Checking was interrupted. Saved progress can continue.");
 
   if (invalid) return { ...state("invalid", "warn", "Fix the marked fields. Options show the last saved trip."), secondary: null };
   if (dirty && result) return { ...state("updating", "busy", "Updating options…"), secondary: null };
@@ -342,7 +342,7 @@ export function searchState({ invalid, dirty, saved, result, job, minutes, apply
   if (status === "running") return state("running", "busy", `Searching · ${whole(job!.processed)} done · ${whole(pending)} left. Options update as results arrive.`, [{ ...stop, tip: "Found options and your prices are kept." }], {
     progress: { value: job!.processed, max: job!.processed + pending, text: `${whole(job!.processed)} of ${whole(job!.processed + pending)} searches`, tip: "The total can grow while the search adds follow-up searches." },
   });
-  // Before the stale row (C3.1 has it after): the server also marks the result of a trip that was
+  // Before the stale row (C3.1 has it after): the planner also marks the result of a trip that was
   // never searched as discovery_required, because no saved search matches the trip yet.
   if (!searched) return state("not-searched", "info", "Not searched yet.", [{ label: "Search transport", run: "search" }]);
   if (stale) return state("stale", "warn", "Your trip changed. Search again to include the changes. Options shown use the earlier search.", [{ label: "Search again", run: "search" }]);
@@ -352,7 +352,7 @@ export function searchState({ invalid, dirty, saved, result, job, minutes, apply
     "Calculation paused at the safety limit. Partial options are shown. Continue to check more combinations.", [timedContinue], { secondary: null });
   if (job?.time_budget_seconds != null && ["paused", "cancelled", "interrupted"].includes(status!) && (pending > 0 || (job.optimization_pending && result?.optimization_complete !== true))) {
     const id = status === "cancelled" ? "stopped" : status!;
-    const text = status === "interrupted" ? "The server stopped. Saved progress can continue."
+    const text = status === "interrupted" ? "The search was interrupted. Saved progress can continue."
       : `${status === "paused" ? "Round paused" : "Search stopped"}${job.optimization_pending ? (result ? ". Showing the last calculated options." : ". The calculation can continue next round.") : ` · ${left}.`}`;
     return state(id, status === "interrupted" ? "warn" : "info", text, [timedContinue], {
       secondary: null, tip: "Continues unfinished calculations and remaining searches. The current operation and saving may finish after the time allowance.",
@@ -362,7 +362,7 @@ export function searchState({ invalid, dirty, saved, result, job, minutes, apply
     tip: `The search pauses after each batch of ${job!.batch_budget ? `${job!.batch_budget} ` : ""}new requests to data providers. Search more runs the next batch. Saved results are reused.`,
   });
   if (status === "cancelled" && pending > 0) return state("stopped", "info", `Search stopped · ${left}. Found options are kept.`, [searchMore]);
-  if (status === "interrupted") return state("interrupted", "warn", `The search stopped because the server stopped${pending > 0 ? ` · ${left}` : ""}. Found options are kept.`, pending > 0 ? [searchMore] : failed > 0 ? [retry] : []);
+  if (status === "interrupted") return state("interrupted", "warn", `The search was interrupted${pending > 0 ? ` · ${left}` : ""}. Found options are kept.`, pending > 0 ? [searchMore] : failed > 0 ? [retry] : []);
   if (status === "failed") {
     const message = [...job!.messages].reverse().find(text => text.startsWith("Planner:"))?.slice("Planner:".length).trim().replace(/\.$/, "");
     return state("failed", "error", `The search failed${message ? `: ${message}` : ""}. Found options are kept.`, [pending > 0 ? searchMore : { label: "Search again", run: "search" }]);
@@ -419,7 +419,7 @@ export function searchDetails({ saved, job, result }: {
 export type AppError = { text: string; action: "retry-save" | "reload" | "search-again" | null };
 /**
  * The error banner for a failed action (C2). Errors from api() carry the HTTP status and the request
- * path; for a conflict (409) on a search, the server's text tells the cases apart. `autosave` marks a
+ * path; for a conflict (409) on a search, the planner's text tells the cases apart. `autosave` marks a
  * failed autosave, which offers Retry save.
  */
 export function appError(error: unknown, autosave = false): AppError {
@@ -855,7 +855,7 @@ export function staySumWarning(draft: Pick<TripDraft, "start_date" | "end_date" 
 
 /**
  * The notice next to Adults (A2 row 12, C4). Your prices and airport transfer prices are saved for the
- * number of adults at that time, and the server uses only those for the trip's number of adults.
+ * number of adults at that time, and the planner uses only those for the trip's number of adults.
  */
 export function partySizeNotice(saved: Pick<SavedTrip, "offers" | "airport_transfer_estimates"> | null, adults: number) {
   const others = [...(saved?.offers ?? []).filter(offer => offer.source === "user"), ...(saved?.airport_transfer_estimates ?? [])]
@@ -949,7 +949,7 @@ const unresolvedAccessText = ": airport access time is unresolved";
 export function unresolvedAccessJourneys<T extends { assumptions: string[] }>(movements: T[]): T[] {
   return movements.filter(movement => movement.assumptions.some(text => text.includes("airport access time is unresolved")));
 }
-// The server writes "{city}: airport access time is unresolved; …".
+// The planner writes "{city}: airport access time is unresolved; …".
 function unresolvedAccessCities(movements: { assumptions: string[] }[]) {
   return [...new Set(movements.flatMap(movement => movement.assumptions.filter(text => text.includes(unresolvedAccessText)).map(text => text.slice(0, text.indexOf(unresolvedAccessText)))))];
 }
@@ -989,7 +989,7 @@ export type TransferDirection = AirportTransferRow & {
 /**
  * One entry per airport transfer row (F2 Airport transfers), with its use in `routes` (best, weaker
  * and over-budget options). Order: missing (most options first), then priced, then unused; ties keep
- * the server's label order.
+ * the planner's label order.
  */
 export function transferDirections(rows: AirportTransferRow[], routes: Route[], adults: number, rates: Record<string, number>): TransferDirection[] {
   const uses = new Map(rows.map(row => [`${row.from_id}>${row.to_id}`, { journeys: new Map<string, TransferJourney>(), used: new Set<string>(), missing: new Set<string>(), rates: new Set<string>(), unpriced: false }]));
@@ -1080,7 +1080,7 @@ export function splitGroups(groups: MissingFareGroup[], rows: AirportTransferRow
 
 /**
  * Combined-ticket searches for this option (E9.5): every leg matches one of its flights by places and
- * by the local date of the flight's first departure, as the server builds them.
+ * by the local date of the flight's first departure, as the planner builds them.
  */
 export function matchingQuoteLinks<L extends { legs: { from_id: string; to_id: string; date: string }[] }>(links: L[], route: Pick<Route, "movements">, zoneOf: (placeId: string) => string): L[] {
   const flights = new Set(route.movements.filter(movement => movement.mode === "flight").map(movement => {

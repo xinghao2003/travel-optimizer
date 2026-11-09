@@ -193,7 +193,7 @@ function TicketItem({ row, draft, adults, busy, placeName, zoneOf, offerFor, dra
 
 /**
  * Add a combined ticket price (E9.5), with the combined-ticket searches that match this option's flights. Its flights
- * are template ids: the server checks a combined ticket against the saved flights. The parent resets it per option.
+ * are template ids: the planner checks a combined ticket against the saved flights. The parent resets it per option.
  */
 function CombinedTicket({ route, adults, placeName, zoneOf, links, onSave }: {
   route: Route; adults: number; placeName: (id: string) => string; zoneOf: (id: string) => string; links: BundleLink[]; onSave: (offer: Offer) => Promise<void>;

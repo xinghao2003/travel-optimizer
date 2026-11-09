@@ -6,7 +6,7 @@ test("native checkpoint survives structured cloning, resumes, and rejects change
   const results = await page.evaluate(async () => {
     const { solveNative } = await import("/src/native/solver.ts");
     const { firstDifference } = await import("/tests/compare.ts");
-    const corpus = await (await fetch("/tests/fixtures/native-solver.json")).json();
+    const corpus = await (await fetch("/tests/fixtures/solver.json")).json();
     const item = corpus.cases.filter((item: { input: { label_limit?: number; expansion_budget?: number }; expected: { expanded_labels: number; optimization_complete: boolean } }) => item.expected.optimization_complete && !item.input.label_limit && item.input.expansion_budget == null)
       .sort((a: { expected: { expanded_labels: number } }, b: { expected: { expanded_labels: number } }) => b.expected.expanded_labels - a.expected.expanded_labels)[0];
     const first = solveNative({ ...item.input, label_limit: Math.max(1, Math.floor(item.expected.expanded_labels / 3)) });

@@ -8,7 +8,7 @@ test("browser repository commits edits atomically, rejects stale workers, and pr
     const { applyMissingInfo, parseApplyChanges } = await import("/src/native/edits.ts");
     const { prepareSolverInput, completeResult } = await import("/src/native/preparation.ts");
     const { solveNative } = await import("/src/native/solver.ts");
-    const corpus = await (await fetch("/tests/fixtures/native-preparation.json")).json();
+    const corpus = await (await fetch("/tests/fixtures/preparation.json")).json();
     const sample = corpus.cases.find((c: { trip: { snapshot: unknown }; expected_result: { routes: unknown[] } }) => c.trip.snapshot && c.expected_result.routes.length);
     const name = "wayfinder-repository-test-" + crypto.randomUUID(), repository = new PlannerRepository(name);
     const trip = structuredClone(sample.trip);
@@ -67,7 +67,7 @@ test("portable backup import is atomic, preserves trip data and rules, and inter
     const { firstDifference } = await import("/tests/compare.ts");
     const { prepareSolverInput, completeResult, tripMetadata } = await import("/src/native/preparation.ts");
     const { solveNative } = await import("/src/native/solver.ts");
-    const corpus = await (await fetch("/tests/fixtures/native-preparation.json")).json();
+    const corpus = await (await fetch("/tests/fixtures/preparation.json")).json();
     const sample = corpus.cases[1], name = "wayfinder-backup-test-" + crypto.randomUUID(), targetName = name + "-target", roundtripName = name + "-roundtrip";
     const source = new PlannerRepository(name), target = new PlannerRepository(targetName);
     await source.put("trips", sample.trip.id, sample.trip);
@@ -118,7 +118,7 @@ test("native worker calculation resumes stored checkpoints, stops cleanly, and r
     const { prepareSolverInput, completeResult } = await import("/src/native/preparation.ts");
     const { solveNative } = await import("/src/native/solver.ts");
     const { firstDifference } = await import("/tests/compare.ts");
-    const corpus = await (await fetch("/tests/fixtures/native-preparation.json")).json(), edits = await (await fetch("/tests/fixtures/native-edits.json")).json();
+    const corpus = await (await fetch("/tests/fixtures/preparation.json")).json(), edits = await (await fetch("/tests/fixtures/edits.json")).json();
     const name = "wayfinder-calculation-test-" + crypto.randomUUID(), sample = corpus.cases[1];
     let repository = new PlannerRepository(name), calculator = new BrowserCalculator(repository);
     await repository.put("trips", sample.trip.id, sample.trip);
@@ -135,7 +135,7 @@ test("native worker calculation resumes stored checkpoints, stops cleanly, and r
     await repository.updateTrip(corrected.input.trip.id, trip => applyMissingInfo(trip, parseApplyChanges(corrected.input.request), edits.catalog));
     const repriced = await calculator.calculate(corrected.input.trip.id, { unlimited: true, expansion_budget: null });
     const weakerBecameBest = repriced.routes.some(r => r.movements[0].id === "weaker" && r.total_cost_myr === 11);
-    const solverCorpus = await (await fetch("/tests/fixtures/native-solver.json")).json();
+    const solverCorpus = await (await fetch("/tests/fixtures/solver.json")).json();
     const fair = solverCorpus.cases.find((c: { input: { movements: { id: string }[]; expansion_budget?: number } }) => c.input.expansion_budget === 100 && c.input.movements.some(m => m.id === "priced-out")).input;
     const movements = [...fair.movements], offers = [...fair.offers];
     for (let copy = 1; copy < 10; copy++) for (const m of fair.movements.filter((m: { id: string }) => m.id.startsWith("train-"))) {
@@ -162,5 +162,5 @@ test("native worker calculation resumes stored checkpoints, stops cleanly, and r
   });
   console.log(JSON.stringify(summary, null, 2));
   expect(summary).toEqual({ paused: true, resumedDifference: null, finishedClearedCheckpoint: true, weakerBecameBest: true, stopPersisted: true, stoppedResumeDifference: null, multiBatchBudget: true });
-  expect(requests.filter(url => /\/api\/|pyodide|jsdelivr/.test(url))).toEqual([]);
+  expect(requests.filter(url => /\/api\/|jsdelivr/.test(url))).toEqual([]);
 });

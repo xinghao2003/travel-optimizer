@@ -49,7 +49,7 @@ def _install_price_tolerant_parser() -> None:
                 return upstream_parse(html)
 
             if not rows:
-                # Empty multi-city responses can omit airline metadata too.
+                # Empty responses can omit airline metadata too.
                 # Upstream indexes that metadata before checking for results.
                 parsed = flight_parser.ResultList()
                 parsed.unpriced_rows = 0
@@ -227,11 +227,6 @@ def fetch_flight_step(legs, adults, kind, departure_start, departure_end, *, ope
     A return step uses the same client for its two requests. Remaining choices
     are plain schedule identifiers owned by the browser, never a server session.
     """
-    if kind == "multi-city":
-        return {"protocol_version": 2, "status": "requires_manual_quote", "options": [], "kind": kind, "automatic_query_skipped": True,
-                "search_url": flight_query(legs, adults, kind, departure_start, departure_end).url(),
-                "diagnostics": {"returned_rows": 0, "requested_journeys": len(legs), "complete_options": 0},
-                "message": "Automatic multi-city search skipped: fast-flights does not support reliable multi-city retrieval. This does not establish that no combined ticket exists. Open the search link and enter a whole-ticket quote manually."}
     import airportsdata
     started = clock.monotonic()
     deadline = started + max_seconds

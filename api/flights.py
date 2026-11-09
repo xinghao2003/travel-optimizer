@@ -34,9 +34,9 @@ SelectionValue = Annotated[str, Field(min_length=1, max_length=120)]
 
 class FlightRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    legs: list[Leg] = Field(min_length=1, max_length=32)
+    legs: list[Leg] = Field(min_length=1, max_length=2)
     adults: int = Field(default=1, ge=1, le=9)
-    kind: Literal["one-way", "round-trip", "multi-city"] = "one-way"
+    kind: Literal["one-way", "round-trip"] = "one-way"
     operation: Literal["search", "return"] = "search"
     selection: list[tuple[SelectionValue, SelectionValue, SelectionValue, SelectionValue, SelectionValue]] | None = Field(default=None, min_length=1, max_length=64)
     departure_start: time = time(0)
@@ -46,10 +46,8 @@ class FlightRequest(BaseModel):
     def complete_request(self):
         if self.departure_start.tzinfo is not None or self.departure_end.tzinfo is not None:
             raise ValueError("Use local origin-clock departure times without a UTC offset.")
-        if len(self.legs) != (1 if self.kind == "one-way" else 2) and self.kind != "multi-city":
+        if len(self.legs) != (1 if self.kind == "one-way" else 2):
             raise ValueError("Use one leg for one-way and two legs for round-trip searches.")
-        if self.kind == "multi-city" and len(self.legs) < 2:
-            raise ValueError("Multi-city quotes need at least two legs.")
         if self.operation == "return" and (self.kind != "round-trip" or not self.selection):
             raise ValueError("A return step needs a round trip and its selected outbound.")
         if self.operation == "search" and self.selection is not None:
@@ -78,7 +76,7 @@ _requests = threading.BoundedSemaphore(3)
 
 @app.get("/api/flights")
 def health():
-    return {"status": "ok", "service": "flight-proxy", "stateless": True, "protocol_version": 2, "operations": ["one-way", "round-trip-steps", "manual-multi-city"]}
+    return {"status": "ok", "service": "flight-proxy", "stateless": True, "protocol_version": 2, "operations": ["one-way", "round-trip-steps"]}
 
 
 @app.post("/api/flights")

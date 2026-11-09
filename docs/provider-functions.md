@@ -73,19 +73,9 @@ Function environment:
 `vercel.json` builds `app/dist` and deploys `api/flights.py` with a 60-second
 limit. Runtime dependencies are pinned through `pyproject.toml` and `uv.lock`.
 
-For an isolated runtime check of the function package:
-
-```powershell
-uv run python tools/prepare_provider_package.py
-uv run python tools/check_provider_runtime.py --package data/diagnostics/provider-package
-```
-
-The packager refuses a nonempty destination and copies the function sources and
-dependency files with SHA-256 provenance. The checker imports those copies,
-runs native `primp` over loopback HTTP, and runs one-way and round-trip steps
-through ASGI with mocked provider responses. No live provider traffic is needed.
-This does not prove Vercel's generated bundle, hosted routing, or live provider
-availability and bot handling from a hosting IP.
+Tests and local runs use mocked or live providers on your machine; they do not prove
+Vercel's generated bundle, hosted routing, or live provider availability and bot
+handling from a hosting IP.
 
 `tests/test_flight_provider.py` covers successful, empty, partial,
 failed, timed-out and busy operations, request validation, CORS, the return-page

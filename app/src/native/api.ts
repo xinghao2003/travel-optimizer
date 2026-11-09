@@ -112,8 +112,7 @@ export class BrowserPlannerApi {
         const trip = await this.repository.requireTrip(job.trip_id);
         if (trip.revision !== job.trip_revision) { job.status = "paused"; job.pause_reason = "changes"; break; }
         if (stopping()) break;
-        if (trip.native_solver_revision === NATIVE_SOLVER_REVISION && trip.result?.optimization_complete && trip.result.trip_revision === trip.revision && trip.result.snapshot_revision === trip.snapshot?.revision
-          && (!trip.spec.exclude_unpriced_flights || trip.result.flight_price_revision === 2)) { job.status = "complete"; break; }
+        if (trip.native_solver_revision === NATIVE_SOLVER_REVISION && trip.result?.optimization_complete && trip.result.trip_revision === trip.revision && trip.result.snapshot_revision === trip.snapshot?.revision) { job.status = "complete"; break; }
         const result = await this.calculator.calculate(job.trip_id, { expand: true, unlimited: true });
         job.batches++; job.expanded_labels = result.expanded_labels;
         const checkpoint = await this.repository.checkpoint(job.trip_id);

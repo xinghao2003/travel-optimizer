@@ -1,4 +1,4 @@
-"""Serve only the native production files, without proxies or planner routes."""
+"""Serve only the production files, without proxies or API routes."""
 import argparse
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -15,9 +15,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--port', type=int, default=5176)
     args = parser.parse_args()
-    directory = Path(__file__).resolve().parents[1] / 'frontend/dist-native'
+    directory = Path(__file__).resolve().parents[1] / 'frontend/dist'
     if not (directory / 'index.html').is_file():
-        parser.error('Build the native production artifact first: npm --prefix frontend run build:native')
+        parser.error('Build the production artifact first: npm --prefix frontend run build')
     with ThreadingHTTPServer(('127.0.0.1', args.port), partial(StaticFiles, directory=directory)) as server:
         print(f'Static Planner: http://127.0.0.1:{server.server_port}/', flush=True)
         try:

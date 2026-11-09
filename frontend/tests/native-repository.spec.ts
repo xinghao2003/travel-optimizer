@@ -1,57 +1,13 @@
 import { expect, test } from "@playwright/test";
-import { readFile } from "node:fs/promises";
-
-test("native trip edits match Python Apply, shared prices, rules, and validation", async ({ page }) => {
-  await page.route("**/edit-comparison-test", route => route.fulfill({ contentType: "text/html", body: "<!doctype html>" }));
-  await page.goto("/edit-comparison-test");
-  const summary = await page.evaluate(async () => {
-    const e = await import("/src/prototype/native/edits.ts");
-    const { firstDifference } = await import("/src/prototype/comparison.ts");
-    const corpus = await (await fetch("/tests/fixtures/native-edits.json")).json();
-    const failures: { name: string; path: string; expected: unknown; actual: unknown }[] = [];
-    for (const item of corpus.cases) {
-      const before = JSON.stringify(item.input);
-      let actual;
-      try {
-        const input = item.input;
-        actual = item.operation === "apply_missing_info" ? e.applyMissingInfo(input.trip, e.parseApplyChanges(input.request), corpus.catalog)
-          : item.operation === "edit_fare" ? e.editFare(input.trip, input.offer_id, input.offer)
-          : item.operation === "add_assumed" ? e.addAssumedMovement(input.trip, input.movement)
-          : item.operation === "remove_assumed" ? e.removeAssumedMovement(input.trip, input.movement_id, input.expected_revision)
-          : item.operation === "remove_journey_rule" ? e.removeJourneyRule(input.trip, input.rule_id, input.expected_revision)
-          : item.operation === "reuse_journey" ? e.reuseJourneyEstimate(input.trip, { ...e.parseSharedFare(input.request), expected_revision: input.request.expected_revision, group_by: input.request.group_by }, corpus.catalog)
-          : item.operation === "save_shared" ? e.saveSharedEstimates(input.trip, input.estimates.map(e.parseSharedFare), input.expected_revision)
-          : item.operation === "connection_payload" ? e.connectionPayload(input.connections)
-          : item.operation === "transfer_payload" ? e.transferPayload(input.trip, input.estimates, corpus.catalog)
-          : item.operation === "shared_fare_offers" ? e.sharedFareOffers(input.trip, input.estimates.map(e.parseSharedFare))
-          : e.reusableJourneyRules(input.trip, input.estimates.map(e.parseSharedFare));
-      } catch (error) {
-        const status = error instanceof e.PlannerError ? error.status : 422;
-        if (item.valid || status !== item.status) failures.push({ name: item.name, path: "rejected", expected: item.valid ? "valid" : item.status, actual: String(error) });
-        if (JSON.stringify(item.input) !== before) failures.push({ name: item.name, path: "mutation", expected: "unchanged input", actual: "changed" });
-        continue;
-      }
-      if (!item.valid) failures.push({ name: item.name, path: "validation", expected: item.status, actual });
-      else {
-        const mismatch = firstDifference(item.expected, actual);
-        if (mismatch) failures.push({ name: item.name, ...mismatch });
-      }
-      if (JSON.stringify(item.input) !== before) failures.push({ name: item.name, path: "mutation", expected: "unchanged input", actual: "changed" });
-    }
-    return { cases: corpus.cases.length, failures };
-  });
-  console.log(JSON.stringify(summary, null, 2));
-  expect(summary.failures).toEqual([]);
-});
 
 test("browser repository commits edits atomically, rejects stale workers, and prunes only provider cache", async ({ page }) => {
   await page.route("**/repository-test", route => route.fulfill({ contentType: "text/html", body: "<!doctype html>" }));
   await page.goto("/repository-test");
   const result = await page.evaluate(async () => {
-    const { PlannerRepository } = await import("/src/prototype/native/repository.ts");
-    const { applyMissingInfo, parseApplyChanges } = await import("/src/prototype/native/edits.ts");
-    const { prepareSolverInput, completeResult } = await import("/src/prototype/native/preparation.ts");
-    const { solveNative } = await import("/src/prototype/native/solver.ts");
+    const { PlannerRepository } = await import("/src/native/repository.ts");
+    const { applyMissingInfo, parseApplyChanges } = await import("/src/native/edits.ts");
+    const { prepareSolverInput, completeResult } = await import("/src/native/preparation.ts");
+    const { solveNative } = await import("/src/native/solver.ts");
     const corpus = await (await fetch("/tests/fixtures/native-preparation.json")).json();
     const sample = corpus.cases.find((c: { trip: { snapshot: unknown }; expected_result: { routes: unknown[] } }) => c.trip.snapshot && c.expected_result.routes.length);
     const name = "wayfinder-repository-test-" + crypto.randomUUID(), repository = new PlannerRepository(name);
@@ -107,10 +63,10 @@ test("portable backup import is atomic, preserves trip data and rules, and inter
   await page.route("**/backup-test", route => route.fulfill({ contentType: "text/html", body: "<!doctype html>" }));
   await page.goto("/backup-test");
   const summary = await page.evaluate(async () => {
-    const { PlannerRepository } = await import("/src/prototype/native/repository.ts");
-    const { firstDifference } = await import("/src/prototype/comparison.ts");
-    const { prepareSolverInput, completeResult, tripMetadata } = await import("/src/prototype/native/preparation.ts");
-    const { solveNative } = await import("/src/prototype/native/solver.ts");
+    const { PlannerRepository } = await import("/src/native/repository.ts");
+    const { firstDifference } = await import("/tests/compare.ts");
+    const { prepareSolverInput, completeResult, tripMetadata } = await import("/src/native/preparation.ts");
+    const { solveNative } = await import("/src/native/solver.ts");
     const corpus = await (await fetch("/tests/fixtures/native-preparation.json")).json();
     const sample = corpus.cases[1], name = "wayfinder-backup-test-" + crypto.randomUUID(), targetName = name + "-target", roundtripName = name + "-roundtrip";
     const source = new PlannerRepository(name), target = new PlannerRepository(targetName);
@@ -150,47 +106,18 @@ test("portable backup import is atomic, preserves trip data and rules, and inter
   expect(summary).toMatchObject({ preserved: true, conflict: true, unchangedOnConflict: true, rejected: true, unchangedOnInvalid: true, replacementRevisionAdvanced: true, roundtrip: true });
 });
 
-test("existing SQLite migration restores records and reproduces the saved Python result", async ({ page }) => {
-  test.skip(!process.env.POC_SQLITE_BACKUP || !process.env.POC_SQLITE_EXPECTED, "Optional private read-only migration replay.");
-  const backup = await readFile(process.env.POC_SQLITE_BACKUP!), reference = await readFile(process.env.POC_SQLITE_EXPECTED!);
-  await page.route("**/legacy-backup.json", route => route.fulfill({ body: backup, contentType: "application/json" }));
-  await page.route("**/legacy-expected.json", route => route.fulfill({ body: reference, contentType: "application/json" }));
-  await page.route("**/legacy-backup-test", route => route.fulfill({ contentType: "text/html", body: "<!doctype html>" }));
-  await page.goto("/legacy-backup-test");
-  const summary = await page.evaluate(async () => {
-    const { PlannerRepository } = await import("/src/prototype/native/repository.ts");
-    const { prepareSolverInput, completeResult, tripMetadata } = await import("/src/prototype/native/preparation.ts");
-    const { solveNative } = await import("/src/prototype/native/solver.ts");
-    const { firstDifference } = await import("/src/prototype/comparison.ts");
-    const source = await (await fetch("/legacy-backup.json")).json(), reference = await (await fetch("/legacy-expected.json")).json();
-    const expected = reference.cases[0], name = "wayfinder-sqlite-test-" + crypto.randomUUID(), repository = new PlannerRepository(name);
-    const count = await repository.importBackup(source);
-    const trip = await repository.requireTrip(expected.trip.id), rules = await repository.list("rules");
-    const prepared = prepareSolverInput(trip, rules as typeof expected.rules, expected.options);
-    const result = completeResult(solveNative(prepared.input).result, prepared.snapshot, trip);
-    const difference = firstDifference(expected.expected_input, prepared.input) ?? firstDifference(expected.expected_result, result)
-      ?? firstDifference(expected.expected_metadata, tripMetadata({ ...trip, snapshot: prepared.snapshot, result }, reference.catalog));
-    await repository.close();
-    await new Promise<void>((resolve, reject) => { const r = indexedDB.deleteDatabase(name); r.onsuccess = () => resolve(); r.onerror = () => reject(r.error); });
-    return { count, expectedCount: source.records.length, routes: result.routes.length, difference };
-  });
-  console.log(JSON.stringify(summary, null, 2));
-  expect(summary.count).toBe(summary.expectedCount);
-  expect(summary.difference).toBeNull();
-});
-
 test("native worker calculation resumes stored checkpoints, stops cleanly, and reprices the complete graph", async ({ page }) => {
   const requests: string[] = [];
   page.on("request", request => requests.push(request.url()));
   await page.route("**/calculation-test", route => route.fulfill({ contentType: "text/html", body: "<!doctype html>" }));
   await page.goto("/calculation-test");
   const summary = await page.evaluate(async () => {
-    const { PlannerRepository } = await import("/src/prototype/native/repository.ts");
-    const { BrowserCalculator } = await import("/src/prototype/native/calculation.ts");
-    const { applyMissingInfo, parseApplyChanges } = await import("/src/prototype/native/edits.ts");
-    const { prepareSolverInput, completeResult } = await import("/src/prototype/native/preparation.ts");
-    const { solveNative } = await import("/src/prototype/native/solver.ts");
-    const { firstDifference } = await import("/src/prototype/comparison.ts");
+    const { PlannerRepository } = await import("/src/native/repository.ts");
+    const { BrowserCalculator } = await import("/src/native/calculation.ts");
+    const { applyMissingInfo, parseApplyChanges } = await import("/src/native/edits.ts");
+    const { prepareSolverInput, completeResult } = await import("/src/native/preparation.ts");
+    const { solveNative } = await import("/src/native/solver.ts");
+    const { firstDifference } = await import("/tests/compare.ts");
     const corpus = await (await fetch("/tests/fixtures/native-preparation.json")).json(), edits = await (await fetch("/tests/fixtures/native-edits.json")).json();
     const name = "wayfinder-calculation-test-" + crypto.randomUUID(), sample = corpus.cases[1];
     let repository = new PlannerRepository(name), calculator = new BrowserCalculator(repository);

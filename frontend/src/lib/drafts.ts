@@ -91,7 +91,7 @@ export function knownComponentIds(saved: Pick<SavedTrip, "fare_component_ids" | 
 }
 
 /**
- * The id of the stored offer behind a purchase. price_path in planner_optimizer.py copies an offer
+ * The id of the stored offer behind a purchase. pricePath in native/pricing.ts copies an offer
  * on template T to each variant V as "{offer id}:{V}", so "user:T:V" was stored as "user:T".
  */
 export function storedOfferId(purchase: Pick<Offer, "id" | "movement_ids">): string {
@@ -128,7 +128,7 @@ const numberText = (text: string) => {
 const isBlankTaxi = (row: TransferRowDraft) => row.mode === "taxi" && !row.low.trim() && !row.high.trim() && !row.duration.trim();
 /**
  * True when the rows are only the default way: no rows, or one fully blank taxi row. The default way is no estimate.
- * The ways the user sets replace the default taxi (planner_discovery.airport_transfer_variants), so a blank taxi
+ * The ways the user sets replace the default taxi (airportTransferVariants in native/preparation.ts), so a blank taxi
  * row beside other ways is an estimate: the taxi stays a way, with the road time and no price.
  */
 const onlyDefaultWay = (rows: TransferRowDraft[]) => !rows.length || (rows.length === 1 && isBlankTaxi(rows[0]));

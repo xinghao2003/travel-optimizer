@@ -1,30 +1,11 @@
 import { expect, test } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 
-test("native place search and nearest results match Python, including Unicode and date-line locations", async ({ page }) => {
-  await page.route("**/native-places-test", route => route.fulfill({ contentType: "text/html", body: "<!doctype html>" }));
-  await page.goto("/native-places-test");
-  const summary = await page.evaluate(async () => {
-    const { loadPlaces } = await import("/src/prototype/native/places.ts"), places = await loadPlaces();
-    const { firstDifference } = await import("/src/prototype/comparison.ts");
-    const corpus = await (await fetch("/tests/fixtures/native-places.json")).json(), failures = [];
-    for (const item of corpus.cases) {
-      const actual = item.operation === "search" ? places.search(item.query, item.limit) : places.nearest(item.latitude, item.longitude, item.limit);
-      const difference = firstDifference(item.expected, actual);
-      if (difference) failures.push({ operation: item.operation, query: item.query, latitude: item.latitude, longitude: item.longitude, ...difference });
-    }
-    let rejected = 0;
-    for (const run of [() => places.search("a"), () => places.search("London", 31), () => places.nearest(91, 0), () => places.nearest(0, NaN)]) try { run(); } catch { rejected++; }
-    return { cases: corpus.cases.length, failures, rejected };
-  });
-  expect(summary.cases).toBeGreaterThan(80); expect(summary.failures).toEqual([]); expect(summary.rejected).toBe(4);
-});
-
 test("native Planner restores a backup, calculates, edits and reloads without planner HTTP calls", async ({ page }) => {
   const forbidden: string[] = [], errors: string[] = [];
   page.on("request", request => { if (/\/api\/|pyodide|jsdelivr|browser-python/.test(request.url())) forbidden.push(request.url()); });
   page.on("pageerror", error => errors.push(error.message));
-  await page.goto("/native.html");
+  await page.goto("/");
   await expect(page.getByRole("heading", { name: "Wayfinder Routes", exact: true })).toBeAttached();
   await page.getByLabel("More actions").click();
   await expect(page.getByRole("button", { name: "Restore browser backup", exact: true })).toBeEnabled();
@@ -41,7 +22,7 @@ test("native Planner restores a backup, calculates, edits and reloads without pl
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.getByLabel("Trip name")).toHaveValue("My trip");
   await expect.poll(() => page.evaluate(async id => {
-    const { PlannerRepository } = await import("/src/prototype/native/repository.ts"), repository = new PlannerRepository();
+    const { PlannerRepository } = await import("/src/native/repository.ts"), repository = new PlannerRepository();
     try { return (await repository.requireTrip(id)).result?.routes.map(route => ({ cost: route.total_cost_myr, ids: route.movements.map(m => m.id) })); }
     finally { await repository.close(); }
   }, fixture.id)).toEqual(fixture.routes);
@@ -57,7 +38,7 @@ test("native Planner restores a backup, calculates, edits and reloads without pl
   await page.getByLabel("Trip name").fill("Native saved trip");
   await page.getByLabel("Trip name").press("Tab");
   await expect.poll(() => page.evaluate(async id => {
-    const { PlannerRepository } = await import("/src/prototype/native/repository.ts"), repository = new PlannerRepository();
+    const { PlannerRepository } = await import("/src/native/repository.ts"), repository = new PlannerRepository();
     try { return (await repository.requireTrip(id)).spec.name; } finally { await repository.close(); }
   }, fixture.id)).toBe("Native saved trip");
   await page.reload();
@@ -74,7 +55,7 @@ test("native service applies prices to the full graph and persists continuous ca
   await page.route("**/native-api-test", route => route.fulfill({ contentType: "text/html", body: "<!doctype html>" }));
   await page.goto("/native-api-test");
   const summary = await page.evaluate(async () => {
-    const { BrowserPlannerApi } = await import("/src/prototype/native/api.ts"), { PlannerRepository } = await import("/src/prototype/native/repository.ts");
+    const { BrowserPlannerApi } = await import("/src/native/api.ts"), { PlannerRepository } = await import("/src/native/repository.ts");
     const edits = await (await fetch("/tests/fixtures/native-edits.json")).json();
     const sample = edits.cases.find((item: { operation: string; valid: boolean; input: { request?: { estimates?: { component_ids: string[]; low: number }[] } } }) => item.operation === "apply_missing_info" && item.valid && item.input.request?.estimates?.some(e => e.component_ids.includes("weaker") && e.low === 1));
     const repository = new PlannerRepository("wayfinder-api-" + crypto.randomUUID()), service = new BrowserPlannerApi(repository, async () => edits.catalog);
@@ -104,7 +85,7 @@ test("native service applies prices to the full graph and persists continuous ca
 });
 
 test("production static Planner restores and edits a saved trip without a planner server", async ({ page }) => {
-  test.skip(!process.env.POC_STATIC_URL, "Run against the separately built native static artifact.");
+  test.skip(!process.env.STATIC_URL, "Run against the separately built native static artifact.");
   const corpus = JSON.parse(await readFile("tests/fixtures/native-preparation.json", "utf8")), sample = corpus.cases[5];
   const backup = { format: "wayfinder-browser-backup", schema_version: 1, exported_at: new Date().toISOString(), records: [
     { schema_version: 1, collection: "trips", id: sample.trip.id, updated: 1, payload: sample.trip },
@@ -122,7 +103,7 @@ test("production static Planner restores and edits a saved trip without a planne
       durations: Array.from({ length: count }, (_, i) => Array.from({ length: count }, (_, j) => i === j ? 0 : 1200)) } });
   });
   page.on("pageerror", error => errors.push(error.message));
-  await page.goto(new URL("/native.html", process.env.POC_STATIC_URL!).href);
+  await page.goto(new URL("/", process.env.STATIC_URL!).href);
   await page.getByLabel("More actions").click();
   await page.getByRole("button", { name: "Restore browser backup", exact: true }).click();
   await page.getByLabel("Backup file").setInputFiles({ name: "saved-trip.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(backup)) });

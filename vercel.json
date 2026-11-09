@@ -2,19 +2,14 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
   "installCommand": "npm --prefix frontend ci",
-  "buildCommand": "npm --prefix frontend run build:native",
-  "devCommand": "uv run python tools/prepare_static_planner.py && npm --prefix frontend run dev:native",
-  "outputDirectory": "frontend/dist-native",
+  "buildCommand": "npm --prefix frontend run build",
+  "devCommand": "npm --prefix frontend run catalogs && npm --prefix frontend run dev",
+  "outputDirectory": "frontend/dist",
   "functions": {
     "api/flights.py": {
       "maxDuration": 60,
-      "includeFiles": "backend/app/{__init__,planner_providers,flight_search,places,provider_functions,provider_http}.py",
-      "excludeFiles": "{backend/data/**,data/**,frontend/**,backend/tests/**,tools/**,docs/**,.venv/**}"
-    },
-    "api/transit.py": {
-      "maxDuration": 60,
-      "includeFiles": "backend/app/{__init__,provider_http}.py",
-      "excludeFiles": "{backend/data/**,data/**,frontend/**,backend/tests/**,tools/**,docs/**,.venv/**}"
+      "includeFiles": "backend/app/{__init__,flight_provider}.py",
+      "excludeFiles": "{data/**,frontend/**,backend/tests/**,tools/**,docs/**,.venv/**}"
     }
   }
 }

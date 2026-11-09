@@ -1,126 +1,94 @@
-# Stateless provider functions
+# Providers and the flight function
 
-The native Planner owns trips, search queues, prices, caches and optimization.
-Only provider HTTP operations run in `api/flights.py` and `api/transit.py`.
-Neither entry imports the planner API, discovery manager or SQLite store.
-OSRM and Transitous use direct browser requests by default; the Transitous
-function is an optional proxy. Multi-city flight quotes remain manual,
-as in the Python provider adapter.
+The browser owns trips, search queues, prices, caches and optimization. It calls
+the providers directly:
+
+- **OSRM** road matrices: `OSRM_BASE_URL`, default `https://router.project-osrm.org`.
+- **Transitous** scheduled transit: `BROWSER_TRANSIT_URL`, default
+  `https://api.transitous.org/api/v6/plan`.
+- **Flights**: `BROWSER_FLIGHTS_URL`, default `/api/flights`, the only backend.
+
+Google Flights has no browser-accessible API, so flight searches run in the
+stateless function `api/flights.py` with `backend/app/flight_provider.py`
+(fast-flights and primp). It keeps no trip data, session or queue. Multi-city
+quotes stay manual: the browser builds the search link and does not call the
+function for them.
 
 ## Flight protocol 2
 
-`POST /api/flights` accepts the existing legs, party size and departure window.
-One-way searches return normalized options in one invocation. Round trips use
-these steps:
+`POST /api/flights` accepts legs, party size and departure window. One-way
+searches return normalized options in one invocation. Round trips use these
+steps:
 
 1. Send `kind: "round-trip"`, with `operation: "search"` (the default).
-   The response preserves outbound schedules with unknown prices and supplies
+   The response keeps outbound schedules with unknown prices and supplies
    `flight_choices`. An indicative first-page amount never becomes a quote.
 2. For each choice, send the same request with `operation: "return"` and
    `selection` set to that choice. The function repeats the initial query and
-   retrieves the selected return page using the same HTTP client. Only complete
+   retrieves the selected return page with the same HTTP client. Only complete
    matching outward/return schedules receive that page's whole-party price.
 
 Choices contain schedule identifiers, not server sessions. The browser saves
-each child task before proceeding. Stop retains the current response and leaves
-remaining choices queued; reload and Continue retain progress. Cached steps do
-not consume the new-request allowance. Missing or changed schedules remain
-visible as manual-quote opportunities; failures can be retried.
+each child task before it continues. Stop keeps the current response and leaves
+remaining choices queued; reload and Continue keep progress. Cached steps do
+not use the new-request allowance. Missing or changed schedules stay visible
+as manual-quote opportunities; failures can be retried.
 
-**Each uncached function invocation consumes one request.** This differs from
-the Python backend's single logical round-trip task, which can retrieve several
-returns internally. A native round trip with two outbound choices can therefore
-consume three requests. Replaying the initial page for each return costs extra
-upstream requests, but avoids server-owned sessions and unbounded invocations.
-Diagnostics distinguish initial and conditional-return HTTP requests.
+**Each uncached function call uses one request.** A round trip with two outbound
+choices therefore uses three requests. Repeating the initial page for each return
+costs extra upstream requests, but avoids server-owned sessions and unbounded
+calls. Diagnostics separate initial and return HTTP requests.
 
 Flight calls have a 35-second network/admission deadline and a 15-second maximum
-per HTTP request. One return invocation performs at most two upstream requests.
-The local per-process admission limit is three flight calls; excess calls return
-429. This is not a global rate limiter across function instances or users.
+per HTTP request. One return call makes at most two upstream requests. The
+per-process admission limit is three flight calls; excess calls return 429.
+This is not a global rate limiter across function instances or users.
+`GET /api/flights` is a health check.
 
-## Direct Transitous requests and optional proxy
+## Transitous
 
-The default native client calls `https://api.transitous.org/api/v6/plan`
-directly. Search planning, response normalization, pagination, rail fallback
-and caching stay in the browser. No transit backend is required. Requests use
-an origin referrer for cross-origin calls, and the application footer includes
-a Contact link to `https://github.com/xinghao2003/travel-optimizer` by default.
-This follows Transitous' [browser identification policy](https://transitous.org/api/).
+Search planning, response normalization, pagination, rail fallback and caching
+run in the browser. Cross-origin requests send an origin referrer, and the
+application footer has a Contact link (`TRANSITOUS_CONTACT_URL`, default
+`https://github.com/xinghao2003/travel-optimizer`). This follows the Transitous
+[browser identification policy](https://transitous.org/api/). Set
+`BROWSER_TRANSIT_ENABLED=false` to disable transit.
 
-Set `BROWSER_TRANSIT_URL=/api/transit` to choose the optional proxy instead.
+## Configuration
 
-`GET /api/transit` accepts validated coordinates, offset-aware time, supported
-transit modes, search window, transfer time, radius and pagination cursor. It
-forwards only to the server-configured Transitous `/v6/plan` endpoint. It does
-not accept arbitrary destination URLs. It returns routing JSON for native
-normalization and browser-owned caching. It has a 35-second overall timeout,
-25-second HTTP timeout and two-call per-process admission limit. Busy, failed
-and timed-out requests return 429, 502 and 504 respectively.
+`tools/prepare_catalogs.py` reads these process environment variables and
+writes them to the public `browser-data/config.json`. It does not load `.env`.
+Export them before building. No secrets belong in this file.
 
-Server environment:
+- `BROWSER_FLIGHTS_URL`, `BROWSER_TRANSIT_URL`, `BROWSER_TRANSIT_ENABLED`,
+  `OSRM_BASE_URL`, `TRANSITOUS_CONTACT_URL`.
 
-- `TRANSITOUS_CONTACT_URL`: defaults to the repository URL above for the optional
-  proxy's User-Agent. An explicitly empty value disables that proxy with 503.
-- `TRANSITOUS_API_BASE_URL`: defaults to `https://api.transitous.org/api`.
-- `BROWSER_ALLOWED_ORIGINS`: comma-separated exact static-site origins for a
-  separately hosted function backend. Same-origin hosting needs no CORS setting.
+Function environment:
 
-Public build environment:
+- `BROWSER_ALLOWED_ORIGINS`: comma-separated exact origins for a static site
+  hosted on another origin. Same-origin hosting needs no CORS setting.
 
-- `BROWSER_FLIGHTS_URL`: defaults to `/api/flights`.
-- `BROWSER_TRANSIT_URL`: defaults to `https://api.transitous.org/api/v6/plan`.
-- `BROWSER_TRANSIT_ENABLED`: defaults to true; set false to disable transit.
-- `TRANSITOUS_CONTACT_URL`: also sets the public footer contact when exported
-  during the build; an unset or blank value uses the repository URL.
-- `OSRM_BASE_URL`: existing direct road-routing endpoint.
+## Hosting and validation
 
-`prepare_static_planner.py` reads process environment variables and generates
-`browser-data/config.json`. It does not load `.env` automatically. Export the
-public build variables before building. The contact URL is deliberately public;
-server-only settings stay in the function environment. No secrets belong in the
-public JSON. The original Python reference stack retains its own contact gate.
+`vercel.json` builds `frontend/dist` and deploys `api/flights.py` with a 60-second
+limit. Runtime dependencies are pinned through `pyproject.toml` and `uv.lock`.
 
-## Local and package validation
-
-`start-browser-poc.ps1` runs `backend.app.provider_dev:app`, which assembles both
-routes, and Vite. Native Vite forwards only `/api/flights` and `/api/transit`.
-The original planner server is unnecessary for the native interface.
-
-`vercel.json` selects `frontend/dist-native` with its `index.html` root entry and
-configures both Python entries with 60-second platform limits. The runtime
-dependencies remain pinned through `pyproject.toml` and `uv.lock`. These files
-prepare the hosting boundary; no deployment was performed.
-
-For an independent runtime check:
+For an isolated runtime check of the function package:
 
 ```powershell
 uv run python tools/prepare_provider_package.py
 uv run python tools/check_provider_runtime.py --package data/diagnostics/provider-package
 ```
 
-The packager refuses a nonempty destination and copies ten explicit provider
-source/dependency files with SHA-256 provenance. The checker imports those
-copies, verifies no planner server/store was imported, exercises native `primp`
-over loopback HTTP, and runs flight and transit requests through ASGI. Provider
-responses are mocked; no live provider traffic is required.
+The packager refuses a nonempty destination and copies the function sources and
+dependency files with SHA-256 provenance. The checker imports those copies,
+runs native `primp` over loopback HTTP, and runs one-way and round-trip steps
+through ASGI with mocked provider responses. No live provider traffic is needed.
+This does not prove Vercel's generated bundle, hosted routing, or live provider
+availability and bot handling from a hosting IP.
 
-The same isolated package passed on Windows and Linux x86_64, Python 3.13.17,
-glibc 2.39, with fast-flights 3.1.0, primp 2.0.1, FastAPI 0.143.3 and Pydantic
-2.14.1. The temporary Linux validation distribution was removed afterward;
-its report remains under ignored `data/diagnostics/linux-provider-check/`.
-This proves the isolated source and native dependencies work in that Linux
-environment. It does not prove Vercel's actual generated bundle, hosted routing,
-or live providers' availability and bot handling from a hosting IP.
-The later default-contact change to the optional transit proxy is covered by
-the ASGI tests; the native dependencies and flight-function source are unchanged.
-
-A subsequent real Chrome check read a cross-origin response directly from the
-Transitous endpoint using the browser referrer. It intentionally omitted route
-parameters and received a readable 400 validation response, without calculating
-a route. This verifies browser/CORS access, not successful timetable retrieval.
-
-Backend tests cover successful, empty, partial, failed, timed-out and busy
-operations, validation, CORS and whole-party pricing. A real-browser test covers
-protocol-2 task insertion, one-request pauses, reload, Stop during a return call,
-continuation without duplicate requests, and native optimization of both fares.
+`backend/tests/test_flight_provider.py` covers successful, empty, partial,
+failed, timed-out and busy operations, request validation, CORS, the return-page
+query encoding and whole-party pricing. Browser tests cover protocol-2 tasks,
+one-request pauses, reload, Stop during a return call, continuation without
+duplicate requests, and optimization of both fares.

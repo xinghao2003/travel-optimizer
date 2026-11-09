@@ -5,7 +5,7 @@ test("native API preserves global-rule responses, cross-trip revisions, and dele
   await page.route("**/native-operation-contract", route => route.fulfill({ contentType: "text/html", body: "<!doctype html>" }));
   await page.goto("/native-operation-contract");
   const result = await page.evaluate(async () => {
-    const { BrowserPlannerApi } = await import("/src/prototype/native/api.ts"), { PlannerRepository } = await import("/src/prototype/native/repository.ts");
+    const { BrowserPlannerApi } = await import("/src/native/api.ts"), { PlannerRepository } = await import("/src/native/repository.ts");
     const corpus = await (await fetch("/tests/fixtures/native-preparation.json")).json(), sample = corpus.cases[5];
     const repository = new PlannerRepository("wayfinder-contract-" + crypto.randomUUID()), api = new BrowserPlannerApi(repository, async () => corpus.catalog);
     const one = await api.request("/trips", "POST", sample.trip.spec) as { id: string; revision: number };
@@ -43,19 +43,16 @@ test("native API preserves global-rule responses, cross-trip revisions, and dele
     deletedRule: { deleted: true }, deletedTrip: { deleted: true }, missingStatus: 404, remainingIsCopy: true, legacyWasStale: true, legacyRecalculated: true });
 });
 
-test("native production artifact contains only the application and public catalogs, with a static root entry", async () => {
-  const files = (await readdir("dist-native", { recursive: true, withFileTypes: true })).filter(entry => entry.isFile())
-    .map(entry => `${entry.parentPath}/${entry.name}`.replaceAll("\\", "/").replace(/^dist-native\//, "")).sort();
+test("production artifact contains only the application and public catalogs", async () => {
+  const files = (await readdir("dist", { recursive: true, withFileTypes: true })).filter(entry => entry.isFile())
+    .map(entry => `${entry.parentPath}/${entry.name}`.replaceAll("\\", "/").replace(/^dist\//, "")).sort();
   expect(files).toContain("index.html");
-  expect(files).toContain("native.html");
-  expect(files.filter(name => !/^(?:index|native)\.html$|^assets\/[\w.-]+\.(?:js|css)$|^browser-data\/(?:airports|places|config)\.json$/.test(name))).toEqual([]);
-  const index = await readFile("dist-native/index.html", "utf8");
-  expect(index).toBe(await readFile("dist-native/native.html", "utf8"));
-  expect(index).toMatch(/type="module"[^>]*src="\/assets\/native-/);
+  expect(files.filter(name => !/^index\.html$|^favicon\.svg$|^assets\/[\w.-]+\.(?:js|css)$|^browser-data\/(?:airports|places|config)\.json$/.test(name))).toEqual([]);
+  expect(await readFile("dist/index.html", "utf8")).toMatch(/type="module"[^>]*src="\/assets\/index-/);
 });
 
 test("production static root supports multiple trips, weaker options, copies, and portable reports", async ({ page, context }) => {
-  test.skip(!process.env.POC_STATIC_URL, "Run against a plain static server serving dist-native.");
+  test.skip(!process.env.STATIC_URL, "Run against a plain static server serving dist.");
   const corpus = JSON.parse(await readFile("tests/fixtures/native-preparation.json", "utf8"));
   const sample = corpus.cases[5], other = structuredClone(sample.trip);
   other.id = "static-acceptance-other"; other.spec.name = "Second saved trip";
@@ -63,7 +60,7 @@ test("production static root supports multiple trips, weaker options, copies, an
   const backup = { format: "wayfinder-browser-backup", schema_version: 1, exported_at: new Date().toISOString(), records: [
     ...[other, first].map(payload => ({ schema_version: 1, collection: "trips", id: payload.id, updated: 1, payload })),
     ...sample.rules.map((payload: { id: string }) => ({ schema_version: 1, collection: "rules", id: payload.id, updated: 1, payload }))] };
-  const forbidden: string[] = [], errors: string[] = [], origin = new URL(process.env.POC_STATIC_URL!).origin;
+  const forbidden: string[] = [], errors: string[] = [], origin = new URL(process.env.STATIC_URL!).origin;
   context.on("page", opened => opened.on("pageerror", error => errors.push(error.message)));
   page.on("pageerror", error => errors.push(error.message));
   await context.route("**/*", route => {

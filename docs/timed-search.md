@@ -8,7 +8,7 @@ remains. It pauses near its deadline otherwise.
 
 In timed mode, the provider-query batch allowance and expanded-state allowance
 do not stop the round. A safety limit of 100,000 additional expanded states per
-calculation applies in both modes (`PLANNER_SOLVE_BATCH`). Reaching it pauses
+calculation applies in both modes. Reaching it pauses
 the search round with partial options and a checkpoint; Continue resumes that work.
 Each continuation can grow the saved checkpoint further. The limit bounds work
 per calculation, not total memory across repeated continuations.
@@ -34,7 +34,7 @@ schedules await calculation.
 ## Continuous checking
 
 **Check more combinations** starts a separate background calculation on saved
-schedules and becomes **Stop checking**. It checks up to `PLANNER_SOLVE_BATCH`
+schedules and becomes **Stop checking**. It checks up to 100,000
 additional states per batch, saves a checkpoint and publishes options, then
 starts the next batch automatically. It does not use the transport-search
 request or minutes allowance, and makes no provider requests. It finishes when
@@ -42,9 +42,8 @@ all combinations have been checked.
 
 Stop requests are cooperative. The current state expansion, result preparation
 or checkpoint saving can finish before the status changes from Stopping to
-stopped. Progress remains available for a later run. Navigation or closing the
-browser does not stop the backend job. Server shutdown stops it; after restart,
-its status is interrupted and it continues only when requested again.
+stopped. Progress remains available for a later run. Closing the page stops the
+calculation; its last saved checkpoint continues only when requested again.
 
 Only one continuous checker runs at a time, and it cannot overlap a transport
 search on the same trip. Applying edits or recalculating pauses the checker
@@ -116,73 +115,12 @@ that could invalidate its checkpoint. After that, discovery can add schedules
 and trigger a new solve. Queries added by final publication run in the same
 timed round if time remains.
 
-Checkpoints are versioned binary records in a separate `optimizer_checkpoints`
-SQLite table, one per trip. Only application-generated local data is decoded;
-no HTTP endpoint accepts checkpoint bytes. Pickle preserves shared references
-between labels and movements. A paused checkpoint survives a server restart.
-Completion or trip deletion removes it. An abrupt termination can lose work
-since the last saved checkpoint; completed round checkpoints remain durable.
-Stop also saves the cooperative solver's unfinished state.
+Checkpoints are stored in the browser database (IndexedDB), one per trip, through
+structured cloning. A paused checkpoint survives a page reload. Completion or trip
+deletion removes it. Closing the page can lose work since the last saved checkpoint.
+Stop also saves the solver's unfinished state. Checkpoints are not part of portable
+backups.
 
-When search-state semantics or the stored layout change, increment
-`CHECKPOINT_VERSION` in `planner_optimizer.py`. Older versions are ignored.
-Do not change its version merely for display or allowance changes.
-
-## API
-
-Start or continue a whole timed round:
-
-```json
-{"minutes": 10}
-```
-
-Send this to `POST /api/v2/trips/{id}/searches` or
-`POST /api/v2/searches/{id}/continue`. An optional `budget` still validates as
-1–500 but does not cap work when `minutes` is supplied. Omitting `minutes`, or
-setting it to null, selects count mode. The API accepts positive finite
-fractional minutes up to 1,440; the UI uses whole minutes.
-
-`POST /api/v2/trips/{id}/optimize` also accepts `minutes` for local calculation
-without provider queries. Its deadline includes waiting for another solve's
-per-trip lock. It returns the result after calculation and checkpoint saving.
-
-Job status includes `time_budget_seconds`, `round_elapsed_seconds`,
-`pause_reason`, `phase`, and `optimization_pending`. A job can be paused with
-zero pending provider queries while local optimization remains unfinished.
-Such a job must offer continuation, including after a server restart or Stop.
-
-## Validation
-
-Regression coverage checks serialized continuation against fresh prefixes and
-complete solves, input changes, server restart, checkpoint cleanup, shared time
-deadlines, ignored count limits, in-flight query completion, no solve launched
-after expiry, pending-optimizer priority, final-publication queries, API
-validation, and Stop with no provider queries left.
-
-An additional 1,000 generated-trip differential run resumed a five-state
-checkpoint after pickling. Every complete response matched an uninterrupted
-solve; 887 cases performed additional expansions after resume. Saved-trip
-benchmarking retained the complete solution hash from the preceding algorithm
-round. Diagnostic inputs and artifacts are under the ignored
-`data/diagnostics/2026-11-07-timed/` directory; no provider load test is needed.
-
-One saved-trip experiment completed six serialized rounds at increasing
-25,000-state allowances with exactly 129,879 total expansions and the same
-complete response as a fresh solve. Partial checkpoints grew from 8.4 to
-44.1 MB; serialization took about 0.11–0.92s and restoration up to 0.83s in
-this sample. The rounds took 7.37s in total including serialization, compared
-with 1.85s for a single uninterrupted solve. This measures durable round
-overhead, not a speedup claim. Very short rounds can spend a substantial share
-of time loading and saving state; a minutes-based allowance amortizes this
-cost. Timings exclude SQLite I/O in this experiment and are not universal.
-
-The frontend presentation tests, TypeScript/production build, and static React
-rendering cover both round controls and status output. Interactive browser
-verification was unavailable because the browser automation host was not
-running in this session.
-
-After the coordinated Apply integration, checks passed 131 backend tests and
-82 frontend tests. The production
-build passed with the existing large-chunk warning. SQLite ResourceWarnings
-remain in passing persistence tests. No new provider calls were used for these
-checks, and interactive browser clicks remain an unverified gate.
+When search-state semantics or the stored layout change, increment the version
+number at the start of the input fingerprint in `frontend/src/native/solver.ts`.
+Older checkpoints then restart from the saved graph. Do not change the version merely for display or allowance changes.

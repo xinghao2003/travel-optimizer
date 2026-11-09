@@ -1,18 +1,8 @@
 # Wayfinder Routes
 
-The [native browser application](docs/native-planner.md) runs the complete Planner
-with browser-owned trips, discovery and optimization, plus a stateless flight
-function. OSRM and Transitous use direct browser requests by default; a transit
-proxy is optional. Build it with `npm.cmd --prefix frontend run build:native`;
-the static site is `frontend/dist-native/`, with `index.html` as its root entry.
-See [migration acceptance and validation](docs/static-migration-acceptance.md).
+A multimodal trip optimizer that compares total party transportation cost with hours spent in required cities, including positioning from home and back.
 
-The original Python application and independent Python/Pyodide solver remain
-available as references. The Windows startup instructions below run that
-original stack. Use the native guide for the static application; the earlier
-limited experiment has [separate instructions](docs/browser-prototype.md).
-
-A local multimodal trip optimizer that compares total party transportation cost with hours spent in required cities, including positioning from home and back.
+The planner runs entirely in the browser: trips, prices and search progress are stored in IndexedDB, and a Web Worker runs the optimizer. The browser calls OSRM and Transitous directly. The only backend is a stateless flight-search function (`api/flights.py`), because Google Flights has no browser API. See [providers and the flight function](docs/provider-functions.md).
 
 ## Trip setup and results
 
@@ -31,7 +21,7 @@ The page has a header (trip select, save status, and the **⋯** menu), the trip
 - Unknown fares stay not priced. Options with a range or a not-priced part show "From RM x" or "RM a – b", and options that may exceed the budget are flagged. Definitely over-budget options stay outside the best options; up to ten examples are in the **Over budget** group for ticket/price refinement.
 - The **Missing info** panel lists what to check, in priority order: airport changes, airport transfers, journey prices, connections between cities, combined tickets to check, group prices you set, and price rules. Repeated journeys with the same endpoints, fare type, mode, currency, and missing-price reason share one row, with distinct affected-itinerary counts. Expand a group to inspect journey dates and services or enter individual prices. A value you enter (here or with **Set price** in the itinerary) is a draft marked **Not applied**; drafts are kept in this browser and survive reloads without recalculating. The **Apply** bar at the bottom shows the drafts of the trip: **Apply** (Ctrl+Enter) saves them all and recalculates once, **Discard** removes them. Each value is a whole-party amount per journey, not a bundled total. Group prices are reusable estimates for their selected matching scope within this trip; later journeys reuse them when they match. Prices of priced journeys remain editable in the itinerary's **Tickets and prices**.
 - An own car must be physically available and recovered to home. Rentals require declared pickup/drop-off locations, daily/driving costs, and one-way charges. Rentals are returned at an allowed location before changing transport. Rental inventory is not live.
-- Trips, price edits, rules, graphs, and search checkpoints persist in SQLite. Price, timing, and driving-price edits recalculate saved data. Changed cities, dates, travelers, or coverage may require another search.
+- Trips, price edits, rules, graphs, and search checkpoints persist in this browser (IndexedDB); see [browser storage](docs/browser-storage.md). Price, timing, and driving-price edits recalculate saved data. Changed cities, dates, travelers, or coverage may require another search.
 
 The **Options** panel shows **Next steps**, the ECharts chart **Price vs. time in cities**, and the list of best options. Selecting an option in the chart or the list opens it in the **Itinerary** panel: the total price, **Compare with** (the additional money per additional hour in cities), a MapLibre map, **Day by day**, and **Tickets and prices**. The price per city hour is a separate descriptive metric. Map connections are schematic, not track or road geometry.
 
@@ -70,9 +60,9 @@ Reference journeys use scheduled times, preserve origin-local departure times an
 
 New discovery queues use rough date windows from the minimum city stays, combining all visit orders and gateway choices. This optimistic filter assumes zero travel time and keeps whole departure-local calendar days; exact schedules, buffers, and commitments are checked by the optimizer. Own-car recovery retains broad windows because it may require additional detours. Existing saved queues keep their original tasks; start a new search to use the narrowed queue. Discovery publishes coverage every four processed queries. Recalculation is batched according to the preceding solve cost, with at most sixteen queries between solves; batch boundaries always flush current results. Unchanged optimization inputs reuse the previous result.
 
-Under **More settings › Search size**, choose **Minutes** to run the whole search and optimizer for up to that duration (ten minutes initially). Timed mode ignores the request and state allowances, but pauses at a safety limit of 100,000 additional expanded states per calculation; Continue resumes saved work. Provider limits and timeouts still apply. The current operation and saving can finish after the deadline. **Continue for … minutes** resumes saved provider and optimizer progress with a new time allowance. It also works when only optimization remains. Paused checkpoints survive a server restart; changed schedules, fares, rules, or trip inputs start a new calculation. See [timed rounds and checkpoints](docs/timed-search.md).
+Under **More settings › Search size**, choose **Minutes** to run the whole search and optimizer for up to that duration (ten minutes initially). Timed mode ignores the request and state allowances, but pauses at a safety limit of 100,000 additional expanded states per calculation; Continue resumes saved work. Provider limits and timeouts still apply. The current operation and saving can finish after the deadline. **Continue for … minutes** resumes saved provider and optimizer progress with a new time allowance. It also works when only optimization remains. Paused checkpoints survive a page reload; changed schedules, fares, rules, or trip inputs start a new calculation. See [timed rounds and checkpoints](docs/timed-search.md).
 
-In request mode, optimization defaults to **25,000 expanded labels**. Hitting the limit is explicitly marked "Not all combinations were checked". **Check more combinations** starts continuous checking on the saved graph and becomes **Stop checking**. It resumes a matching checkpoint in bounded batches, publishes options after each batch, and makes no provider requests. Exploration shares short turns across starting routes, favoring usable prices while giving unpriced paths regular turns so later combined tickets remain eligible. It stops when complete, when requested, or before edits are applied. There is no checkpoint-size limit; large searches can exhaust memory or disk space. Stopping can wait for the current operation and saving. Only one continuous checker runs at a time; it continues across page navigation, while a server restart requires explicit continuation. Matching older depth-first checkpoints retain their completed work and redistribute pending states into the fair schedule. Changed inputs restart from the saved graph, rather than searching only the previous frontier. Accommodation, sightseeing hours, and reliability remain later phases.
+In request mode, optimization defaults to **25,000 expanded labels**. Hitting the limit is explicitly marked "Not all combinations were checked". **Check more combinations** starts continuous checking on the saved graph and becomes **Stop checking**. It resumes a matching checkpoint in bounded batches, publishes options after each batch, and makes no provider requests. Exploration shares short turns across starting routes, favoring usable prices while giving unpriced paths regular turns so later combined tickets remain eligible. It stops when complete, when requested, or before edits are applied. There is no checkpoint-size limit; large searches can exhaust memory or disk space. Stopping can wait for the current operation and saving. Only one continuous checker runs at a time; closing the page stops it, and it continues only when requested again. Matching older depth-first checkpoints retain their completed work and redistribute pending states into the fair schedule. Changed inputs restart from the saved graph, rather than searching only the previous frontier. Accommodation, sightseeing hours, and reliability remain later phases.
 
 While a search runs, Missing info remains editable. **Apply and continue**
 pauses safely, saves all Apply-bar drafts together, and recalculates from the
@@ -83,103 +73,63 @@ saved and the round waits for explicit continuation. See
 
 ## Run on Windows
 
-Use uv and Node.js 20.19+ or 22.12+. The root `pyproject.toml` declares Python 3.13 and the backend dependencies; `uv.lock` records the resolved versions.
+Use uv and Node.js 20.19+ or 22.12+. The root `pyproject.toml` declares Python 3.13 and the flight function's dependencies; `uv.lock` records the resolved versions.
 
 ```powershell
 uv python install 3.13
 uv sync
 npm --prefix frontend install
-Copy-Item .env.example .env
 ```
 
-Optional city catalog for places without airports:
+Optional: for towns without an airport, download the GeoNames city list before building the catalogs. Without it, airport cities and custom coordinates remain available.
 
 ```powershell
 New-Item -ItemType Directory -Force data\geonames
 Invoke-WebRequest https://download.geonames.org/export/dump/cities500.zip -OutFile data\geonames\cities500.zip
 ```
 
-The existing local archive is reused. Without it, airport-backed cities and custom coordinate entries remain available. First lookup builds a city index. A replaced archive or airport-data package rebuilds that index after server restart; saved trips use a separate database.
-
-Build and serve with one process:
-
-```powershell
-npm --prefix frontend run build
-uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --app-dir backend --env-file .env
-```
-
-Open <http://127.0.0.1:8000>. Health: `/api/health`; API documentation: `/docs`.
-
-For development, start the API and the frontend, both with hot reload, in one console, then open <http://127.0.0.1:5173>. Ctrl+C stops both. Use `-Port` and `-WebPort` for other ports. A port in use is replaced by the next free one, and the console shows the address to open. When `TRANSITOUS_CONTACT_URL` is set in neither the environment nor `.env`, the script uses the git remote URL, without credentials. It also sets `PLANNER_DEBUG=1` unless the environment or `.env` sets it.
+Start the flight function and the Vite dev server, both with hot reload, in one console, then open <http://127.0.0.1:5173>. Ctrl+C stops both. Use `-Port` and `-WebPort` for other ports.
 
 ```powershell
 .\start-dev.ps1
 ```
 
-For development with backend hot reload only, stop the existing backend and run:
+The script first runs `tools/prepare_catalogs.py`, which writes the place and airport catalogs and the public provider configuration to `frontend/public/browser-data/`. Run `npm --prefix frontend run catalogs` again after you change the GeoNames file or the build settings.
+
+## Build and deploy
 
 ```powershell
-.\dev-backend.ps1
-```
-
-This watches Python files under `backend/app` and restarts the API after edits. Database and cache writes do not trigger reloads. Use `./dev-backend.ps1 -Port 8001` for another port. Changes to `.env` require a manual restart. A reload interrupts active discovery jobs; saved data remains available and interrupted jobs can be continued.
-
-For frontend development, keep the API on port 8000 and run `npm --prefix frontend run dev` in another terminal, then open port 5173. Vite uses `--configLoader runner` on Windows. If a restricted environment prevents its dependency optimizer reading parent directories, use the built app command above.
-
-## Configuration and saved work
-
-See `.env.example`. Set `TRANSITOUS_CONTACT_URL` after coordinating routing use with Transitous. Keep source attribution. The public service has regional feed gaps and its own [API usage policy](https://transitous.org/api/); an empty result does not prove that transportation is unavailable.
-
-| Setting | Default |
-| --- | --- |
-| `PLANNER_DB_PATH` | `backend/data/planner.sqlite3` |
-| `PLANNER_PLACES_PATH` | `backend/data/places.sqlite3` |
-| `PLANNER_LABEL_BATCH` | `25000` |
-| `PLANNER_DEBUG` | `0` (set to `1` for diagnostics) |
-| `OSRM_BASE_URL` | `https://router.project-osrm.org` |
-| `TRANSITOUS_ROUTE_TTL_SECONDS` | `21600` |
-| `TRANSITOUS_EMPTY_ROUTE_TTL_SECONDS` | `900` |
-
-The planner database uses WAL and schema versioning. Stop the server before copying a backup, or include its active `-wal`/`-shm` files. The city index is disposable; the planner database contains user work. Both are ignored by Git. Existing Transitous caching remains in the platform application-cache directory.
-
-Default assumptions: 90 minutes before flights, 30 after flights, 15 before transit, 10 after transit, and a 30-minute minimum connection. Airport access uses OSRM when available. Otherwise the editable fallback is 45 minutes per side with an unknown fare. Clear the fallback to require resolved access time. An unavailable intercity road never becomes an automatic straight-line driving connection.
-
-Flight responses cache for 15 minutes and road matrices for seven days. Transitous uses its configured TTLs. Reopening a trip does not refresh its provider quotes; expired quotes are shown as stale estimates.
-
-For slow or unresponsive searches, set `PLANNER_DEBUG=1` in `.env` and restart the backend. Stage timings, provider query outcomes, graph persistence, bundle queue generation, and optimizer progress (every five seconds during label expansion) appear in the terminal and rotating `backend/data/planner-debug.log` files. If the API event loop cannot advance for 30 seconds, a separate watchdog writes all Python thread stacks to `backend/data/planner-stacks.log`, repeating every 30 seconds until it recovers. These diagnostics distinguish network waits, optimization, serialization, and event loop blocking. Set `PLANNER_DEBUG=0` and restart to disable them.
-
-## API and verification
-
-The optimizer can return through previously visited destinations after completing all required visits, for example KUL → Seoul → Busan → Seoul → KUL. Each destination can appear once on the return path; first visits must meet their minimum stays and commitments, while return visits can be short connections. Destination time on return visits counts toward stay hours. Independent one-way fares and validated, non-overlapping round-trip bundles are compared. Gateway-to-destination round-trip queries are seeded independently of completed one-way itineraries, using optimistic date windows and the total minimum stay; exact returned schedules must still pass the optimizer's full constraints. Multi-city retrieval remains limited by fast-flights; diagnostics distinguish no returned rows from incomplete journeys and do not interpret either as proof that no bundle exists. Existing trips need a new search to cover the expanded return dates and independent round-trip queries; cached provider responses remain reusable.
-
-The `/api/v2` API provides city lookup; trip CRUD with `expected_revision`; discovery start/status/continue/cancel; optimization; fare editing; assumed connections; and reusable pricing rules. Main actions:
-
-- `POST /trips/{id}/searches` with `{ "budget": 100 }`.
-- `GET /searches/{id}`, `POST /searches/{id}/continue`, `POST /searches/{id}/cancel`.
-- `POST /trips/{id}/optimize`; `{ "expand": true }` increases the solver allowance.
-- `PUT/DELETE /trips/{id}/fares/{offer_id}`, `POST /trips/{id}/movements`.
-- `GET /pricing-rules`, `PUT/DELETE /pricing-rules/{id}`.
-
-Trip reads omit the large movement graph unless `?include_graph=true` is supplied. Results identify trip/snapshot revisions and discovery/optimization completion. The frontend rejects stale results. `/api/routes` remains a compatibility adapter for single-origin requests with assigned dates, using the new schedule-aware engine.
-
-Pricing indexes valid fares once per solver run and looks up two-journey tickets by journey pair. It reuses ticket-cover results across phase changes and indexes missing-fare comparison thresholds. Debug `dp.search.done` logs report price calculations and reuses. Unchanged discovery inputs reuse prior results; quote expiry refreshes stale warnings without rerunning optimization. Fare, schedule, rule, constraint, and solver-allowance changes still require recalculation.
-
-Multi-city ticket opportunities are registered directly in the manual-quote list with search links. They never enter the provider queue or increment processed, pending, provider-request, or cache-hit counts, and they do not trigger extra publications. A separate manual-quote counter shows the number of unique opportunities. Resuming an older job moves its unprocessed multi-city tasks out of the queue while preserving historical counters. One-way and round-trip retrieval still use fast-flights. Ticket candidates are deduplicated by city pairs and departure dates before constructing provider queries. Coverage is published every four provider-query tasks; when a solve takes at least one second, changed provider data is batched until other discovery work has had as much time as that solve, or sixteen queries have been processed, whichever comes first. Pausing/completing discovery and manual trip/rule changes force an up-to-date solve. Overlapping optimization requests can reuse a matching completed snapshot.
-
-Saved itinerary results share repeated movement, purchase, and extra-charge objects in a versioned, lossless representation. Normal API reads retain the expanded format; `GET /trips/{id}?compact=true` and `POST /trips/{id}/optimize` with `{ "compact": true }` opt into the shared representation. The frontend expands references locally. Trip response reads and JSON encoding run in a worker thread, with direct JSON responses avoiding a redundant recursive conversion. Existing saved trips are readable without migration; their next normal save adopts the compact storage format.
-
-```powershell
-$env:PYTHONPATH = "backend"
-uv run python -m unittest discover -s backend/tests -v
 npm --prefix frontend run build
 ```
 
-If uv's global cache is inaccessible, set `$env:UV_CACHE_DIR = ".uv-cache"` in PowerShell before running uv commands. Deterministic tests cover exhaustive small-graph comparison, mixed modes, bundle discounts and overlap, fare uncertainty, traveler/vehicle units, timing/DST, positioning, car recovery, rental fees, caching, budgets, cancellation, revision conflicts, and restart persistence. Browser interactions and live provider checks are separate validations.
+The static site is `frontend/dist/`. `vercel.json` builds it and deploys `api/flights.py`. To preview the build without any API proxy, run `uv run python tools/serve_static_planner.py` and open <http://127.0.0.1:5176/>. Opening and editing saved trips needs no backend; flight searches need the flight function.
 
-Sources: [fast-flights](https://github.com/AWeirdDev/flights), [Transitous](https://transitous.org/sources/), [OSRM](https://project-osrm.org/), GeoNames (CC BY 4.0), airportsdata (MIT), and MapLibre/OpenFreeMap with OpenStreetMap attribution.
+## Configuration
+
+See `.env.example`. The catalog build writes `BROWSER_FLIGHTS_URL`, `BROWSER_TRANSIT_URL`, `BROWSER_TRANSIT_ENABLED`, `OSRM_BASE_URL` and `TRANSITOUS_CONTACT_URL` into the public `browser-data/config.json`; export them before building. `BROWSER_ALLOWED_ORIGINS` enables CORS on the flight function for a static site on another origin. Keep source attribution. Transitous has regional feed gaps and its own [API usage policy](https://transitous.org/api/); an empty result does not prove that transportation is unavailable.
+
+Default assumptions: 90 minutes before flights, 30 after flights, 15 before transit, 10 after transit, and a 30-minute minimum connection. Airport access uses OSRM when available. Otherwise the editable fallback is 45 minutes per side with an unknown fare. Clear the fallback to require resolved access time. An unavailable intercity road never becomes an automatic straight-line driving connection.
+
+Flight responses cache for 15 minutes, road matrices for seven days, and transit routes for six hours (15 minutes when empty). Reopening a trip does not refresh its provider quotes; expired quotes are shown as stale estimates.
+
+## Search details
+
+The optimizer can return through previously visited destinations after completing all required visits, for example KUL → Seoul → Busan → Seoul → KUL. Each destination can appear once on the return path; first visits must meet their minimum stays and commitments, while return visits can be short connections. Destination time on return visits counts toward stay hours. Independent one-way fares and validated, non-overlapping round-trip bundles are compared. Gateway-to-destination round-trip queries are seeded independently of completed one-way itineraries, using optimistic date windows and the total minimum stay; exact returned schedules must still pass the optimizer's full constraints. Multi-city retrieval remains limited by fast-flights; diagnostics distinguish no returned rows from incomplete journeys and do not interpret either as proof that no bundle exists. Existing trips need a new search to cover the expanded return dates and independent round-trip queries; cached provider responses remain reusable.
+
+Round trips use two kinds of flight-function calls: one search returns the outbound choices, and one call per choice retrieves its conditional return fares. Only pairs that pass endpoint, date, time, and chronological validation receive the return page's whole-ticket fare; indicative first-page fares are never assigned to complete trips. Each uncached call counts as one request, and remaining choices persist across Stop, reload, and Continue. Multi-city retrieval remains manual.
+
+Multi-city ticket opportunities are registered directly in the manual-quote list with search links. They never enter the provider queue or increment processed, pending, provider-request, or cache-hit counts, and they do not trigger extra publications. A separate manual-quote counter shows the number of unique opportunities. Resuming an older job moves its unprocessed multi-city tasks out of the queue while preserving historical counters. Ticket candidates are deduplicated by city pairs and departure dates before constructing provider queries. Coverage is published every four provider-query tasks; when a solve takes at least one second, changed provider data is batched until other discovery work has had as much time as that solve, or sixteen queries have been processed, whichever comes first. Pausing/completing discovery and manual trip/rule changes force an up-to-date solve. Overlapping optimization requests can reuse a matching completed snapshot.
 
 Airport–city transfers can be entered before a search in **Missing info › Airport transfers**. It lists configured airports in both directions and adds airports encountered in retrieved journeys. Add taxi, car, rail, subway, tram, bus, or coach ways with a travel time and optional whole-party price/range; they are drafts until **Apply**. Applied ways apply to current and future matching journeys in that trip and party size; individual component fare overrides take priority. Alternatives change door-to-door timing while retaining the underlying flight ticket and bundle coverage. They are user assumptions, without timetable or operating-hour verification. An unedited taxi retains the existing road/fallback timing; airport-to-airport connections remain separate.
 
-Round-trip discovery selects each returned outbound journey and fetches its conditional return choices. Only pairs passing endpoint, date, time, and chronological validation receive the return page's whole-ticket fare; indicative first-page fares are never assigned to complete trips. Return follow-up failures remain diagnostic/manual-quote results. Each round-trip query reuses one HTTP client for its serial requests and limits follow-up work to 25 seconds. Diagnostics record initial/return request counts and elapsed times, outbound choices checked, and errors. Start a new search for existing trips to retrieve these complete quotes; older round-trip cache entries are bypassed. Multi-city retrieval remains manual.
+## Tests
 
-For provider-free solver profiling of a saved trip, use `uv run python tools/benchmark_optimizer.py --database backend/data/planner.sqlite3`. It reads the trip without saving changes and reports full-result hashes, wall/CPU time, and peak process memory. Set `PYTHONHASHSEED=0` before starting comparison processes. See [the optimization experiment record](docs/performance-2026-11-07.md) for results and reproduction details.
+```powershell
+uv run python -m unittest discover -s backend/tests -v
+npm --prefix frontend test
+npm --prefix frontend run build
+```
+
+Browser tests use Playwright with Chrome. Start the dev server (`npm --prefix frontend run dev`), then run `npm --prefix frontend run test:browser`. To include the production-artifact tests, serve the build with `tools/serve_static_planner.py` and set `$env:STATIC_URL = 'http://127.0.0.1:5176'` first. If uv's global cache is inaccessible, set `$env:UV_CACHE_DIR = ".uv-cache"`.
+
+Sources: [fast-flights](https://github.com/AWeirdDev/flights), [Transitous](https://transitous.org/sources/), [OSRM](https://project-osrm.org/), GeoNames (CC BY 4.0), airportsdata (MIT), and MapLibre/OpenFreeMap with OpenStreetMap attribution.

@@ -1,14 +1,14 @@
 <#
 .SYNOPSIS
-Starts the API and the Vite dev server with hot reload in one console.
+Builds the browser catalogs, then starts the flight function and the Vite dev server in one console.
 
 .DESCRIPTION
-The API (uvicorn --reload) restarts when files under backend/app change. Vite reloads the page when frontend files
-change and forwards /api to the API. A port in use is replaced by the next free port. Output of each process has an
+The flight function (uvicorn --reload) restarts when files under api or backend/app change. Vite reloads the page
+when frontend files change and forwards /api/flights to the function. A port in use is replaced by the next free port. Output of each process has an
 [api] or [web] prefix. Ctrl+C stops both.
 #>
 param(
-    [ValidateRange(1, 65535)][int]$Port = 8000,
+    [ValidateRange(1, 65535)][int]$Port = 8010,
     [ValidateRange(1, 65535)][int]$WebPort = 5173
 )
 $ErrorActionPreference = 'Stop'
@@ -32,28 +32,8 @@ function Get-FreePort([int]$Wanted, [string]$Tag, [int[]]$Taken = @()) {
     }
     throw "Ports $Wanted to $($Wanted + 20) are all in use"
 }
-# Transit search needs a contact URL. Without one in the environment or .env, use the git remote, as a web
-# address and without credentials: git@github.com:me/repo.git -> https://github.com/me/repo.
-$envFile = Join-Path $root '.env'
-# True when the environment or a non-blank line of .env sets $Name; uvicorn does not let .env override the environment.
-function Test-Setting([string]$Name) {
-    [Environment]::GetEnvironmentVariable($Name) -or ((Test-Path $envFile) -and (Select-String -Path $envFile -Pattern "^\s*$Name\s*=\s*\S" -Quiet))
-}
-if (-not (Test-Setting 'PLANNER_DEBUG')) {
-    # Debug logs of the planner in the [api] output and backend/data/planner-debug.log. PLANNER_DEBUG=0 turns them off.
-    $env:PLANNER_DEBUG = '1'
-    Write-Line 'start' 'PLANNER_DEBUG=1 (debug logs). Set PLANNER_DEBUG=0 in .env to turn them off.'
-}
-if (-not (Test-Setting 'TRANSITOUS_CONTACT_URL')) {
-    $remote = git -C $root remote get-url origin 2>$null
-    if ($LASTEXITCODE -eq 0 -and $remote) {
-        $contact = $remote.Trim() -replace '^git@([^:]+):', 'https://$1/' -replace '^ssh://(?:[^@/]+@)?([^/:]+)(?::\d+)?/', 'https://$1/' -replace '^(https?://)[^@/]+@', '$1' -replace '\.git$', ''
-        $env:TRANSITOUS_CONTACT_URL = $contact
-        Write-Line 'start' "TRANSITOUS_CONTACT_URL is not set; using the git remote $contact"
-    } else {
-        Write-Line 'start' 'TRANSITOUS_CONTACT_URL is not set and there is no git remote: transit search is off'
-    }
-}
+& $uv run python tools/prepare_catalogs.py
+if ($LASTEXITCODE -ne 0) { throw 'Could not prepare the browser catalogs and provider configuration.' }
 
 $Port = Get-FreePort $Port 'api'
 $WebPort = Get-FreePort $WebPort 'web' @($Port)
@@ -69,7 +49,7 @@ function Start-Managed([string]$Tag, [string]$FileName, [string[]]$Arguments, [s
     $info.CreateNoWindow = $true
     $info.Environment['PYTHONUNBUFFERED'] = '1'
     $info.Environment['PYTHONIOENCODING'] = 'utf-8'
-    $info.Environment['PLANNER_API_URL'] = $apiUrl  # Vite forwards /api here (vite.config.ts).
+    $info.Environment['FLIGHTS_API_URL'] = $apiUrl  # Vite forwards /api/flights here (vite.config.ts).
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $info
     [void]$process.Start()
@@ -91,7 +71,7 @@ function Receive-Lines {
 }
 
 try {
-    $apiArguments = @('run', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', "$Port", '--app-dir', 'backend', '--reload', '--reload-dir', 'backend/app')
+    $apiArguments = @('run', 'uvicorn', 'api.flights:app', '--host', '127.0.0.1', '--port', "$Port", '--reload', '--reload-dir', 'backend/app', '--reload-dir', 'api')
     # uvicorn refuses an --env-file that does not exist.
     if (Test-Path (Join-Path $root '.env')) { $apiArguments += @('--env-file', '.env') }
     else { Write-Line 'start' 'No .env file: using defaults. To configure, run: Copy-Item .env.example .env' }
@@ -100,15 +80,15 @@ try {
     $deadline = (Get-Date).AddSeconds(60)
     $healthy = $false
     while (-not $healthy -and (Get-Date) -lt $deadline -and -not $processes.api.HasExited) {
-        try { $healthy = (Invoke-WebRequest "$apiUrl/api/health" -UseBasicParsing -TimeoutSec 2).StatusCode -eq 200 } catch {}
+        try { $healthy = (Invoke-WebRequest "$apiUrl/api/flights" -UseBasicParsing -TimeoutSec 2).StatusCode -eq 200 } catch {}
         [void](Receive-Lines)
         if (-not $healthy) { Start-Sleep -Milliseconds 500 }
     }
-    if (-not $healthy) { throw "The API did not start at $apiUrl" }
-    Write-Line 'start' "API ready at $apiUrl"
+    if (-not $healthy) { throw "The flight function did not start at $apiUrl" }
+    Write-Line 'start' "Flight function ready at $apiUrl"
 
     Start-Managed 'web' 'cmd.exe' @('/d', '/c', "npm run dev -- --port $WebPort --strictPort") (Join-Path $root 'frontend')
-    Write-Line 'start' "Open http://127.0.0.1:$WebPort. Press Ctrl+C to stop."
+    Write-Line 'start' "Open http://127.0.0.1:$WebPort/. Press Ctrl+C to stop."
 
     $reported = @{}
     while ($true) {

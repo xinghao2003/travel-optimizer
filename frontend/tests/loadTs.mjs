@@ -9,7 +9,9 @@ const urls = new Map();
 function dataUrl(file) {
   if (!urls.has(file.href)) {
     const js = ts.transpileModule(readFileSync(file, "utf8"), options).outputText
-      .replace(/from "(\.{1,2}\/[^"]+)"/g, (_, path) => `from "${dataUrl(new URL(`${path}.ts`, file))}"`);
+      .replace(/from "(\.{1,2}\/[^"]+)"/g, (_, path) => `from "${dataUrl(new URL(`${path}.ts`, file))}"`)
+      // Data URLs cannot resolve package names either; point them at node_modules.
+      .replace(/from "([@\w][^":]*)"/g, (_, name) => `from "${import.meta.resolve(name)}"`);
     urls.set(file.href, "data:text/javascript;base64," + Buffer.from(js).toString("base64"));
   }
   return urls.get(file.href);

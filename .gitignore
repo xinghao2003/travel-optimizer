@@ -5,19 +5,10 @@
 !.env.example
 frontend/node_modules/
 frontend/dist/
-frontend/node_modules/.tmp/
 frontend/.npm-cache/
 .pip-cache/
-backend/data/planner.sqlite3*
-backend/data/places.sqlite3*
-backend/data/planner-debug.log*
-backend/data/planner-stacks.log
 __pycache__/
 *.py[cod]
-backend/data/road_distance_cache.json
-backend/data/road_distance_cache.tmp
-backend/data/city_coordinate_cache.json
-backend/data/city_coordinate_cache.tmp
 data/geonames/cities500.zip
 data/geonames/cities500.download
 
@@ -25,18 +16,6 @@ data/geonames/cities500.download
 /.playwright-mcp/
 /data/diagnostics/
 
-# Isolated browser prototype build output and local Vercel settings
-/frontend/public/browser-python/
+# Generated catalogs and local Vercel settings
 /frontend/public/browser-data/
-/frontend/dist-poc/
-/frontend/public-native/
-/frontend/dist-native/
 /.vercel/
-/frontend/tests/fixtures/native-solver.json
-/frontend/tests/fixtures/native-providers.json
-/frontend/tests/fixtures/native-contracts.json
-/frontend/tests/fixtures/native-preparation.json
-/frontend/tests/fixtures/native-edits.json
-/frontend/tests/fixtures/native-places.json
-/frontend/tests/fixtures/native-search.json
-.vercel

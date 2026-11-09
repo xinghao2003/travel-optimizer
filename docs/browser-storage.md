@@ -1,9 +1,10 @@
-# Native browser storage and migration
+# Browser storage
 
-The native services use IndexedDB database `wayfinder-planner`, schema version
-1. The older search prototype keeps its separate `wayfinder-browser-prototype`
-database. The full Planner interface uses these services through the separate
-[`/native.html` preview](native-planner.md); the original entry remains available.
+The planner stores all data in the IndexedDB database `wayfinder-planner`,
+schema version 1. One writable Planner tab owns the database through Web Locks.
+A second tab asks you to close the first and reload; it cannot interrupt active
+work. Different origins keep separate databases; use a JSON backup to move data
+between them.
 
 `PlannerRepository` stores multiple trips, global rules, shared graphs, search
 and calculation records, selected-trip metadata, native checkpoints, and provider
@@ -11,78 +12,47 @@ responses. A trip update and checkpoint invalidation commit in one transaction.
 Failed validation and revision conflicts leave both unchanged. Calculation
 results commit only if the trip and source graph revisions still match.
 
-Native edit transforms cover atomic Apply, shared component estimates, reusable
-journey estimates, explicit CSV deletion targets, airport connections/transfers,
-individual/bundle fares, and assumed connections. References from current Python
-include 95 edits and 37 rejected requests. The interface adapter is connected
-for saved-trip workflows and live search/apply coordination.
+Edit transforms (`frontend/src/native/edits.ts`) cover atomic Apply, shared
+component estimates, reusable journey estimates, explicit CSV deletion targets,
+airport connections and transfers, individual and bundle fares, and assumed
+connections.
 
-`BrowserCalculator` runs the native solver in a Web Worker and persists unfinished
+`BrowserCalculator` runs the solver in a Web Worker and persists unfinished
 state through IndexedDB structured cloning. It uses small internal batches while
 preserving the caller's cumulative label allowance and per-call expansion budget.
 Stop finishes the current batch, saves its frontier, and stops. Resume restores
 the saved state; changed inputs restart safely. Completed work removes its
-checkpoint. Tests also verify that changing a previously weaker route's fare can
-make it the cheapest option, using all collected schedules.
-Checkpoint version 4 stores internal cents and epoch microseconds as BigInt
-through structured cloning. Older numeric checkpoints restart from the preserved graph. Public results
-and portable backups keep their existing JSON money fields; checkpoint size
-reporting converts BigInt to decimal strings without changing persisted state.
-Trip records also retain a native solver revision with calculated results.
-Older completed caches are marked stale on read and cannot bypass continuous
-calculation merely because their trip and snapshot revisions match.
+checkpoint. Checkpoints store internal cents and epoch microseconds as BigInt.
+Public results and portable backups keep JSON money fields. Trip records keep a
+solver revision with calculated results; results from an older revision are
+marked stale on read and recalculated from the saved graph.
 
 Provider TTL controls cache freshness. Expired entries are deleted when the
 repository opens, after cache writes, and through explicit batch cleanup. These
 operations access only the provider-cache store. They do not remove trip graphs,
 user prices, saved results, or calculation checkpoints. Expired quotes already
-inside a trip remain available with the existing stale-quote indication.
+inside a trip remain available with the stale-quote indication.
 
 ## Portable backups
 
+Use **More actions → Download browser backup** and **Restore browser backup**.
 `exportBackup()` produces a version-1 `wayfinder-browser-backup` JSON document
 with stored records. `importBackup()` validates every record before committing
-the batch. It normalizes legacy model defaults and expands compact Python
-results. Existing IDs cause a conflict unless replacement is explicit. Replacing
-a trip advances its revision so an older edit or worker cannot overwrite it;
-extra global rules also make affected cached results stale.
+the batch. Existing IDs cause a conflict unless replacement is selected.
+Replacing a trip advances its revision so an older edit or worker cannot
+overwrite it; extra global rules also make affected cached results stale.
+Import and backup actions are disabled while settings or Missing info have
+pending edits, or while the open trip is working.
 
-Imported active jobs become interrupted and retain their queues and collected
-data. No provider search starts automatically. Provider caches and Python/native
-optimizer checkpoints are excluded from portable backups. Calculations restart
-from the preserved graph; native checkpoints continue to survive ordinary
-reloads in the same browser database.
-
-To export existing SQLite data without modifying the database:
-
-```powershell
-uv run python tools/export_planner_backup.py --database backend/data/planner.sqlite3 --output data/diagnostics/planner-backup.json
-```
-
-The output must be a new file; the exporter will not replace its database or an
-existing backup. It uses only Python's standard library and exports trips, rules,
-graphs, searches, and calculation records. The native preview provides download
-and restore controls in More actions. JSON backups also move data between
-local development and hosted browser origins.
+Imported active jobs become interrupted and keep their queues and collected
+data. No provider search starts automatically. Provider caches and optimizer
+checkpoints are not included in backups; calculations restart from the
+preserved graph.
 
 ## Verification
 
-The browser tests exercise actual IndexedDB transactions and the real native
-worker: rollback, competing revisions, changed-graph result rejection, checkpoint
-round trips, cache pruning, trip copy/delete, backup conflicts, replacement, and
-restoration into a fresh database. A separate private read-only SQLite export
-restored all six records and reproduced the saved trip's 14 routes and editing
-metadata against Python.
-
-To repeat that private migration check after generating its Python preparation
-reference:
-
-```powershell
-$env:POC_SQLITE_BACKUP = (Resolve-Path data/diagnostics/planner-backup.json).Path
-$env:POC_SQLITE_EXPECTED = (Resolve-Path data/diagnostics/native-comparison/saved-preparation.json).Path
-cd frontend
-npx.cmd playwright test --config playwright.poc.config.ts native-repository.spec.ts
-```
-
-All private inputs remain under ignored diagnostics. The default browser suite
-skips the private SQLite check unless both paths are supplied.
+The browser tests (`frontend/tests/native-repository.spec.ts`) exercise real
+IndexedDB transactions and the real worker: rollback, competing revisions,
+changed-graph result rejection, checkpoint round trips, cache pruning, trip
+copy and delete, backup conflicts, replacement, and restoration into a fresh
+database.

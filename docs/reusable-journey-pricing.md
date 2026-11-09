@@ -38,9 +38,9 @@ needs to be entered again. Conversion is explicit; display regrouping alone
 does not convert older prices.
 
 The existing Apply transaction accepts an optional `scope` on each shared fare.
-The server validates it against the supplied journeys and stores it as a
+The planner validates it against the supplied journeys and stores it as a
 trip-local `journey_pricing_rules` entry. Recalculation passes these rules into
-the existing fallback-pricing path. No SQLite schema migration is needed.
+the existing fallback-pricing path.
 Removing an estimate uses the same pause/edit/resume coordination as Apply.
 Paused timed rounds still need continuation to update their options; saved
 estimates are not presented as fresh missing-price inputs while waiting.

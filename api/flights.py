@@ -1,5 +1,6 @@
 """Stateless flight function. No trip database, background job, or optimizer."""
 from datetime import date, time
+import os
 from pathlib import Path
 import sys
 import threading
@@ -8,11 +9,11 @@ from typing import Annotated, Literal
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
 
-from app.provider_functions import fetch_flight_step
-from app.provider_http import provider_app
+from app.flight_provider import fetch_flight_step
 
 
 class Leg(BaseModel):
@@ -66,7 +67,11 @@ class FlightRequest(BaseModel):
         return self
 
 
-app = provider_app("Wayfinder flight search function")
+app = FastAPI(title="Wayfinder flight search function")
+# CORS only for a separately hosted static frontend (exact origins).
+_origins = [value.strip() for value in os.environ.get("BROWSER_ALLOWED_ORIGINS", "").split(",") if value.strip()]
+if _origins:
+    app.add_middleware(CORSMiddleware, allow_origins=_origins, allow_methods=["GET", "POST"], allow_headers=["Content-Type"])
 _requests = threading.BoundedSemaphore(3)
 
 

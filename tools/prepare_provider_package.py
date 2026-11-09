@@ -6,8 +6,7 @@ from pathlib import Path
 import shutil
 
 ROOT = Path(__file__).resolve().parents[1]
-FILES = ["api/flights.py", "api/transit.py", "backend/app/__init__.py", "backend/app/planner_providers.py",
-         "backend/app/flight_search.py", "backend/app/places.py", "backend/app/provider_functions.py", "backend/app/provider_http.py", "pyproject.toml", "uv.lock"]
+FILES = ["api/flights.py", "backend/app/__init__.py", "backend/app/flight_provider.py", "pyproject.toml", "uv.lock"]
 
 
 def main():

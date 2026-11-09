@@ -1,5 +1,3 @@
-import { expandSharedResult } from "./sharedResults";
-
 export type Mode = "flight" | "rail" | "bus" | "coach" | "subway" | "tram" | "car" | "taxi";
 export type AirportTransferMode = Exclude<Mode, "flight">;
 export type AirportConnection = { from_airport: string; to_airport: string; mode: AirportTransferMode; duration_minutes: number; fare_amount: number | null; currency: string };
@@ -39,7 +37,7 @@ export type Result = { flight_price_revision?: number; routes: Route[]; dominate
 export type SavedTrip = { journey_pricing_rules?: PricingRule[]; assumed_connections?: Movement[]; city_connection_gaps?: { from_id: string; to_id: string }[]; airport_transfer_estimates?: AirportTransferEstimate[]; airport_transfer_rows?: AirportTransferRow[]; fare_component_ids?: string[]; id: string; revision: number; spec: TripSpec; offers: Offer[]; airport_connections?: AirportConnection[]; airport_connections_required?: AirportConnectionRequirement[]; latest_job_id: string | null; latest_optimization_id?: string | null; result?: Result; snapshot: { revision: number; movements: Movement[]; offers: Offer[]; coverage: Coverage } | null };
 export type Job = { id: string; trip_id: string; status: "queued" | "running" | "paused" | "cancelled" | "complete" | "interrupted" | "failed" | "superseded"; processed: number; pending: number; requests: number; cache_hits: number; manual_quote_queries?: number; failed_queries: number; messages: string[]; bundle_links: Coverage["bundle_links"]; batch_budget?: number; batch_requests?: number; outcomes?: Record<string, number>; graph_revision?: number; time_budget_seconds?: number | null; round_elapsed_seconds?: number; pause_reason?: "time" | "requests" | "changes" | "applying" | "calculation" | null; optimization_pending?: boolean; phase?: "discovery" | "optimization" | "applying"; updating_options?: boolean };
 export type SavedSummary = { id: string; name: string; revision: number; start_date: string; end_date: string };
-/** An error thrown by api(). `status` is absent when the server could not be reached. */
+/** An error thrown by api(). `status` is set for HTTP-style rejections such as a 409 revision conflict. */
 export type ApiError = Error & { status?: number; path: string };
 export type OptimizationJob = {
   id: string; trip_id: string; trip_revision: number; status: "queued" | "running" | "stopping" | "paused" | "cancelled" | "complete" | "interrupted" | "failed";
@@ -55,36 +53,13 @@ export function installPlannerTransport(transport: PlannerTransport, config: () 
   browserTransport = transport; browserConfig = config;
 }
 export async function plannerConfig(): Promise<PlannerConfig> {
-  if (browserConfig) return browserConfig();
-  const response = await fetch("/api/data", { signal: AbortSignal.timeout(15000) });
-  if (!response.ok) throw new Error("Could not load planner configuration.");
-  return response.json();
+  if (!browserConfig) throw new Error("The planner service is not installed.");
+  return browserConfig();
 }
 export async function api<T>(path: string, method = "GET", body?: unknown): Promise<T> {
-  if (browserTransport) {
-    try { return await browserTransport(path, method, body) as T; }
-    catch (error) { if (error instanceof Error) Object.assign(error, { path }); throw error; }
-  }
-  if (method === "GET" && /^\/trips\/[^/?]+$/.test(path)) path += "?compact=true";
-  if (method === "POST" && /^\/trips\/[^/?]+\/optimize$/.test(path)) body = { ...(body as Record<string, unknown> | undefined), compact: true };
-  let response: Response, text: string;
-  try {
-    response = await fetch(`/api/v2${path}`, { method, signal: method === "GET" ? AbortSignal.timeout(15000) : undefined, headers: body === undefined ? undefined : { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
-    text = await response.text();
-  } catch (err) {
-    if (err instanceof Error && err.name === "TimeoutError") throw Object.assign(new Error("The planner took too long to respond. Try opening the trip again."), { path });
-    // fetch and the body read reject with a TypeError when the server is down or the connection drops.
-    throw err instanceof TypeError ? Object.assign(new Error("Can't reach the planner server. Check that it is running, then try again."), { path }) : err;
-  }
-  let payload;
-  try { payload = JSON.parse(text); } catch { /* A proxy or server error page is not JSON. */ }
-  if (!response.ok || payload === undefined) {
-    const detail = Array.isArray(payload?.detail) ? payload.detail.map((d: { msg: string }) => d.msg).join(" · ") : payload?.detail;
-    throw Object.assign(new Error(detail || `Request failed (${response.status})`), { status: response.status, path });
-  }
-  if (payload.result?._shared_route_data) payload.result = expandSharedResult(payload.result);
-  if (payload.trip?.result?._shared_route_data) payload.trip.result = expandSharedResult(payload.trip.result);
-  return (payload._shared_route_data ? expandSharedResult(payload) : payload) as T;
+  if (!browserTransport) throw Object.assign(new Error("The planner service is not installed."), { path });
+  try { return await browserTransport(path, method, body) as T; }
+  catch (error) { if (error instanceof Error) Object.assign(error, { path }); throw error; }
 }
 export function localInputToISO(value: string, zone: string) {
   const desired = new Date(`${value}:00Z`).getTime();

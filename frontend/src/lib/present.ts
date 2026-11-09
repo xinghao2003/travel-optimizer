@@ -6,7 +6,7 @@ import type { OptimizationJob } from "./planner";
 // tests load this file directly.
 //
 // Trip records come in two shapes. GET /trips/{id} empties snapshot.movements and adds
-// fields that the server computes (read_trip in planner_api.py). PUT /trips/{id} returns the
+// fields that the server computes (readTrip in native/api.ts). PUT /trips/{id} returns the
 // stored record with snapshot.movements and airport_transfer_rows, but without
 // airport_connections_required, assumed_connections, city_connection_gaps and fare_component_ids.
 // Helpers that read the record use the server field when it is present, otherwise they derive it the same way.
@@ -171,7 +171,7 @@ export function routeChain(route: Pick<Route, "movements" | "stays">) {
 
 const passiveModes = new Set(["transfer", "walk", "foot", "wait"]);
 // The first scheduled service in a journey. A trip transfer estimate relabels the airport access
-// segment with its mode ("taxi"), so skip it the way the optimizer does (planner_optimizer.py).
+// segment with its mode ("taxi"), so skip it the way the optimizer does (native/pricing.ts).
 function firstServiceDeparture(movement: Movement) {
   return movement.segments.find(segment => !passiveModes.has(segment.mode) && !(segment.source ?? "").startsWith("User-estimated airport") && segment.departure)?.departure ?? movement.departure;
 }
@@ -894,7 +894,7 @@ export type AirportChangeRow = {
   mode: AirportTransferMode | ""; duration_minutes: number | null; fare_amount: number | null; currency: string;
 };
 
-// The same list as required_airport_connections in planner_discovery.py, without its sort.
+// The same list as requiredAirportConnections in native/preparation.ts, without its sort.
 function requiredAirportConnections(movements: Movement[]): AirportConnectionRequirement[] {
   const pairs = new Map<string, AirportConnectionRequirement>();
   for (const movement of movements) {

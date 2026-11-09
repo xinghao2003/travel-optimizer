@@ -10,7 +10,7 @@ export const sameJourneyScope = (a: JourneyPriceScope, b: JourneyPriceScope) => 
   a.group_by.length === b.group_by.length && a.group_by.every(field => b.group_by.includes(field) && a.values[field] === b.values[field]);
 export const ridingSegments = (movement: Pick<Movement, "segments"> & Partial<Pick<Movement, "mode">>) => movement.segments.filter(segment => !["walk", "foot", "wait", "transfer"].includes(segment.mode.toLowerCase()) && (movement.mode !== "flight" || segment.mode.toLowerCase() === "flight"));
 
-/** Keep this representation aligned with planner_models.journey_price_scope. Missing identifiers stay journey-specific. */
+/** Missing identifiers stay journey-specific. */
 export function journeyPriceScope(movement: Movement, adults: number, fields: JourneyGroupField[]): JourneyPriceScope {
   const rides = ridingSegments(movement), unknown = `unknown:${movement.template_id || movement.id}`;
   const station = (segment: Segment, end: "from" | "to") => segment[`${end}_id`] || unknown;

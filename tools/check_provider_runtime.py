@@ -25,7 +25,7 @@ def main():
         assert hashlib.sha256((root / row["path"]).read_bytes()).hexdigest() == row["sha256"], row["path"]
     sys.path.insert(0, str(root))
     from api.flights import app as flight_app
-    from app import flight_provider
+    import _flight_provider as flight_provider
     import httpx
     import primp
     assert Path(flight_provider.__file__).resolve().is_relative_to(root)

@@ -2,7 +2,7 @@
 
 Places are IATA airport cities from airportsdata, plus every GeoNames town with 500 or more
 people when data/geonames/cities500.zip is present. The output is written to
-frontend/public/browser-data/ and contains no trip data.
+app/public/browser-data/ and contains no trip data.
 """
 import json
 import os
@@ -15,11 +15,11 @@ import airportsdata
 
 ROOT = Path(__file__).resolve().parents[1]
 GEONAMES = ROOT / "data/geonames/cities500.zip"
-OUTPUT = ROOT / "frontend/public/browser-data"
+OUTPUT = ROOT / "app/public/browser-data"
 
 
 def normalized(value):
-    # Keep in step with PlaceCatalog.normalize in frontend/src/native/places.ts.
+    # Keep in step with PlaceCatalog.normalize in app/src/native/places.ts.
     return "".join(c for c in unicodedata.normalize("NFKD", value.lower()) if not unicodedata.category(c).startswith("M"))
 
 

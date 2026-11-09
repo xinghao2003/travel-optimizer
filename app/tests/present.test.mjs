@@ -401,7 +401,7 @@ test("status strip details list the counters, the data version and each provider
       "Data version 2 · 1,234 complete itineraries checked · 1 combination explored",
       "Scope: best among the schedules and prices collected, not every ticket on sale.",
     ],
-    messages: ["No rows for KUL → PUS.", "Batch limit reached.", "Transit search is not set up on this server."],
+    messages: ["No rows for KUL → PUS.", "Batch limit reached.", "Transit search is turned off in this build."],
   });
   // The batch line needs both fields; zero counts and a missing job leave their lines out.
   const batch = searchDetails({ saved, job: { ...job, batch_requests: 40, batch_budget: 100, outcomes: {}, manual_quote_queries: 0 }, result: null });
@@ -411,7 +411,7 @@ test("status strip details list the counters, the data version and each provider
   assert.deepEqual(searchDetails({ saved: { snapshot: null }, job: null, result }), { lines: [], messages: [] });
   // Without a result (while openTrip recalculates a stale one), the messages come from the snapshot coverage.
   assert.deepEqual(searchDetails({ saved: { snapshot: { coverage: { messages: ["m"], source_gaps: ["Transitous disabled"] } } }, job: null, result: null }),
-    { lines: [], messages: ["m", "Transit search is not set up on this server."] });
+    { lines: [], messages: ["m", "Transit search is turned off in this build."] });
   // Counts use thousands separators, like the rest of the strip.
   assert.equal(searchDetails({ saved, job: { ...job, processed: 1234, outcomes: {}, manual_quote_queries: 0 }, result: null }).lines[0], "Searches: 1,234 done · 41 left · 11 failed");
 });
@@ -756,7 +756,7 @@ test("next steps and the needs-input count follow the counting rules", () => {
     ["2 journeys can't be used: the airport transfer time is unknown in Busan, Seoul.", "airport-fallback"],
     ["No option has a complete price yet: 1 flight price is missing.", "prices"],
     ["Options that need a flight without a price are hidden.", "show-unpriced-flights"],
-    ["Trains, buses, coaches, subways and trams were not searched: transit search is not set up on this server.", null],
+    ["Trains, buses, coaches, subways and trams were not searched: transit search is turned off in this build.", null],
   ]);
   // 2 airport changes + 1 journey group + 2 cities with an unresolved access time.
   assert.equal(needsInputCount(blocked), 5);

@@ -15,9 +15,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--port', type=int, default=5176)
     args = parser.parse_args()
-    directory = Path(__file__).resolve().parents[1] / 'frontend/dist'
+    directory = Path(__file__).resolve().parents[1] / 'app/dist'
     if not (directory / 'index.html').is_file():
-        parser.error('Build the production artifact first: npm --prefix frontend run build')
+        parser.error('Build the production artifact first: npm --prefix app run build')
     with ThreadingHTTPServer(('127.0.0.1', args.port), partial(StaticFiles, directory=directory)) as server:
         print(f'Static Planner: http://127.0.0.1:{server.server_port}/', flush=True)
         try:

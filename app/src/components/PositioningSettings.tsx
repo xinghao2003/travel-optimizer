@@ -29,7 +29,7 @@ function EndpointList({ draft, edit, direction }: { draft: TripDraft; edit: (val
   const others = list.filter(place => place.id !== home?.id);
   const used = others.length + (homeChecked ? 1 : 0);
   const full = used >= 3;
-  // Home only is stored as [] (the backend reads it as home).
+  // Home only is stored as [] (the planner reads it as home).
   const set = (places: Place[]) => edit({ ...draft, [key]: places.some(place => place.id !== home?.id) ? places : [] });
   const homeHint = homeChecked && !others.length ? `Add another ${word} city first.` : "";
   return <fieldset className="p-endpoints">

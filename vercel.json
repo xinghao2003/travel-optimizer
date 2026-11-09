@@ -1,15 +1,15 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
-  "installCommand": "npm --prefix frontend ci",
-  "buildCommand": "npm --prefix frontend run build",
-  "devCommand": "npm --prefix frontend run catalogs && npm --prefix frontend run dev",
-  "outputDirectory": "frontend/dist",
+  "installCommand": "npm --prefix app ci",
+  "buildCommand": "npm --prefix app run build",
+  "devCommand": "npm --prefix app run catalogs && npm --prefix app run dev",
+  "outputDirectory": "app/dist",
   "functions": {
     "api/flights.py": {
       "maxDuration": 60,
-      "includeFiles": "backend/app/{__init__,flight_provider}.py",
-      "excludeFiles": "{data/**,frontend/**,backend/tests/**,tools/**,docs/**,.venv/**}"
+      "includeFiles": "api/_flight_provider.py",
+      "excludeFiles": "{data/**,app/**,tests/**,tools/**,docs/**,.venv/**}"
     }
   }
 }

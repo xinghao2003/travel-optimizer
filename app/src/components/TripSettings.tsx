@@ -187,8 +187,8 @@ export function TripSettings({ draft, edit, places, errors, transitConfigured, s
       </fieldset>
 
       {!transitConfigured && draft.modes.some(mode => transitSearchModes.includes(mode)) && <div className="p-notice p-setting-wide">
-        <p>Trains, buses, coaches, subways and trams are not searched: transit search is not set up on this server.</p>
-        <InfoTip topic="transit search" align="end">To turn it on, set TRANSITOUS_CONTACT_URL in .env after you agree the routing use with Transitous. Then restart the server.</InfoTip>
+        <p>Trains, buses, coaches, subways and trams are not searched: transit search is turned off in this build.</p>
+        <InfoTip topic="transit search" align="end">To turn it on, build the catalogs with BROWSER_TRANSIT_ENABLED=true (the default), then reload the page.</InfoTip>
       </div>}
     </div>
 

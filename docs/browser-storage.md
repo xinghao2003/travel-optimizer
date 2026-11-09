@@ -12,7 +12,7 @@ responses. A trip update and checkpoint invalidation commit in one transaction.
 Failed validation and revision conflicts leave both unchanged. Calculation
 results commit only if the trip and source graph revisions still match.
 
-Edit transforms (`frontend/src/native/edits.ts`) cover atomic Apply, shared
+Edit transforms (`app/src/native/edits.ts`) cover atomic Apply, shared
 component estimates, reusable journey estimates, explicit CSV deletion targets,
 airport connections and transfers, individual and bundle fares, and assumed
 connections.
@@ -51,7 +51,7 @@ preserved graph.
 
 ## Verification
 
-The browser tests (`frontend/tests/native-repository.spec.ts`) exercise real
+The browser tests (`app/tests/native-repository.spec.ts`) exercise real
 IndexedDB transactions and the real worker: rollback, competing revisions,
 changed-graph result rejection, checkpoint round trips, cache pruning, trip
 copy and delete, backup conflicts, replacement, and restoration into a fresh

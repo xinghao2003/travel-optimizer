@@ -100,7 +100,7 @@ export function priceText(route: Pick<Route, "total_cost_myr" | "cost_low_myr" |
 }
 
 const isEstimate = (offer: Pick<Offer, "estimated" | "source" | "currency">) => offer.estimated || offer.source === "rule" || offer.currency !== "MYR";
-/** Whether the price uses estimates: your prices, rules, older quotes or a converted currency (the backend rule). */
+/** Whether the price uses estimates: your prices, rules, older quotes or a converted currency. */
 export function priceEstimated(route: Pick<Route, "purchases">) {
   return route.purchases.some(isEstimate);
 }
@@ -411,7 +411,7 @@ export function searchDetails({ saved, job, result }: {
   );
   if (result?.excluded_unpriced_flight_count) lines.push(`Skipped ${plural(result.excluded_unpriced_flight_count, "flight choice")} without an applicable standalone or combined-ticket price.`);
   const coverage = result?.coverage ?? saved?.snapshot?.coverage;
-  const gaps = (coverage?.source_gaps ?? []).map(gap => gap === "Transitous disabled" ? "Transit search is not set up on this server." : gap);
+  const gaps = (coverage?.source_gaps ?? []).map(gap => gap === "Transitous disabled" ? "Transit search is turned off in this build." : gap);
   return { lines, messages: [...new Set([...(job?.messages ?? []), ...(coverage?.messages ?? []), ...gaps])] };
 }
 
@@ -1121,7 +1121,7 @@ export type NextStep = { id: string; tone: "warn" | "info"; text: string; action
 export function buildNextSteps(state: RefinementState & {
   searched: boolean; budget: number | null; rates: Record<string, number>;
   excludeUnpricedFlights: boolean;
-  /** Transit search is not set up on the server and a transit mode is on. */
+  /** Transit search is turned off in this build and a transit mode is on. */
   transitOff: boolean;
 }): NextStep[] {
   const steps: NextStep[] = [];
@@ -1166,7 +1166,7 @@ export function buildNextSteps(state: RefinementState & {
   const currencies = [...new Set([...state.groups.transfers, ...state.groups.journeys].filter(group => group.reason === "exchange_rate").map(group => group.currency))];
   if (currencies.length) steps.push({ id: "exchange-rates", tone: "warn", text: `Prices in ${joinAnd(currencies)} need ${currencies.length === 1 ? "an exchange rate" : "exchange rates"}.`, action: { label: "Add rate", target: "exchange-rate" } });
   if (state.searched && state.excludeUnpricedFlights) steps.push({ id: "unpriced-flights", tone: "info", text: "Options that need a flight without a price are hidden.", action: { label: "Show them", target: "show-unpriced-flights" } });
-  if (state.searched && state.transitOff) steps.push({ id: "transit", tone: "info", text: "Trains, buses, coaches, subways and trams were not searched: transit search is not set up on this server.", action: null });
+  if (state.searched && state.transitOff) steps.push({ id: "transit", tone: "info", text: "Trains, buses, coaches, subways and trams were not searched: transit search is turned off in this build.", action: null });
   return steps;
 }
 

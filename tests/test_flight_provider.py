@@ -10,10 +10,10 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from api import flights as flight_api
-from app import flight_provider as providers
-from app.flight_provider import fetch_flight_step
+import _flight_provider as providers  # api/flights.py puts api/ on sys.path
+from _flight_provider import fetch_flight_step
 
 
 @dataclass

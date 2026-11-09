@@ -9,8 +9,8 @@ the providers directly:
 - **Flights**: `BROWSER_FLIGHTS_URL`, default `/api/flights`, the only backend.
 
 Google Flights has no browser-accessible API, so flight searches run in the
-stateless function `api/flights.py` with `backend/app/flight_provider.py`
-(fast-flights and primp). It keeps no trip data, session or queue. Multi-city
+stateless function `api/flights.py` with `api/_flight_provider.py`
+(fast-flights and primp). Vercel does not deploy `_` files as functions. It keeps no trip data, session or queue. Multi-city
 quotes stay manual: the browser builds the search link and does not call the
 function for them.
 
@@ -57,7 +57,7 @@ application footer has a Contact link (`TRANSITOUS_CONTACT_URL`, default
 ## Configuration
 
 `tools/prepare_catalogs.py` reads these process environment variables and
-writes them to the public `browser-data/config.json`. It does not load `.env`.
+writes them to the public `browser-data/config.json`. It does not read a `.env` file.
 Export them before building. No secrets belong in this file.
 
 - `BROWSER_FLIGHTS_URL`, `BROWSER_TRANSIT_URL`, `BROWSER_TRANSIT_ENABLED`,
@@ -70,7 +70,7 @@ Function environment:
 
 ## Hosting and validation
 
-`vercel.json` builds `frontend/dist` and deploys `api/flights.py` with a 60-second
+`vercel.json` builds `app/dist` and deploys `api/flights.py` with a 60-second
 limit. Runtime dependencies are pinned through `pyproject.toml` and `uv.lock`.
 
 For an isolated runtime check of the function package:
@@ -87,7 +87,7 @@ through ASGI with mocked provider responses. No live provider traffic is needed.
 This does not prove Vercel's generated bundle, hosted routing, or live provider
 availability and bot handling from a hosting IP.
 
-`backend/tests/test_flight_provider.py` covers successful, empty, partial,
+`tests/test_flight_provider.py` covers successful, empty, partial,
 failed, timed-out and busy operations, request validation, CORS, the return-page
 query encoding and whole-party pricing. Browser tests cover protocol-2 tasks,
 one-request pauses, reload, Stop during a return call, continuation without

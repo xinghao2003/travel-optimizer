@@ -16,7 +16,7 @@ export type SearchRecord = Omit<Job, "processed" | "pending" | "failed_queries" 
   batch_budget: number; batch_requests: number; outcomes: Record<string, number>; manual_quote_queries: number;
   transit_configured: boolean; created: number; round_started_at: number;
 };
-export const TRANSIT_DISABLED = "Transitous is disabled until its contact URL is configured and routing use coordinated. No transit requests were sent.";
+export const TRANSIT_DISABLED = "Transit search is turned off in this build. No transit requests were sent.";
 export const TRANSIT_MODES: Record<string, string> = { rail: "HIGHSPEED_RAIL,LONG_DISTANCE,NIGHT_RAIL,REGIONAL_RAIL,SUBURBAN", bus: "BUS", coach: "COACH", subway: "SUBWAY", tram: "TRAM" };
 
 function varint(number: number): number[] {
@@ -26,7 +26,7 @@ function varint(number: number): number[] {
 const bytesField = (field: number, value: number[]) => [...varint(field * 8 + 2), ...varint(value.length), ...value];
 const stringField = (field: number, value: string) => bytesField(field, [...new TextEncoder().encode(value)]);
 const integerField = (field: number, value: number) => [...varint(field * 8), ...varint(value)];
-/** The pinned fast-flights query fields used by flight_query in backend/app/flight_provider.py. */
+/** The pinned fast-flights query fields used by flight_query in api/_flight_provider.py. */
 export function flightSearchUrl(legs: FlightLeg[], spec: TripSpec, kind: "one-way" | "round-trip" | "multi-city"): string {
   const data = legs.flatMap(leg => bytesField(3, [...stringField(2, leg.date), ...integerField(8, Number(spec.departure_start.slice(0, 2))),
     ...integerField(9, Number(spec.departure_end.slice(0, 2))), ...bytesField(13, stringField(2, leg.from_code!)), ...bytesField(14, stringField(2, leg.to_code!))]));

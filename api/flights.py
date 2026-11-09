@@ -6,14 +6,15 @@ import sys
 import threading
 from typing import Annotated, Literal
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
+# Vercel skips "_" files as functions; import the sibling module the same way locally and when deployed.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
 
-from app.flight_provider import fetch_flight_step
+from _flight_provider import fetch_flight_step
 
 
 class Leg(BaseModel):

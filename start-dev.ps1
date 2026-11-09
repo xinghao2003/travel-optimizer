@@ -3,8 +3,8 @@
 Builds the browser catalogs, then starts the flight function and the Vite dev server in one console.
 
 .DESCRIPTION
-The flight function (uvicorn --reload) restarts when files under api or backend/app change. Vite reloads the page
-when frontend files change and forwards /api/flights to the function. A port in use is replaced by the next free port. Output of each process has an
+The flight function (uvicorn --reload) restarts when files under api change. Vite reloads the page
+when app files change and forwards /api/flights to the function. A port in use is replaced by the next free port. Output of each process has an
 [api] or [web] prefix. Ctrl+C stops both.
 #>
 param(
@@ -15,7 +15,7 @@ $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $uv = (Get-Command uv -ErrorAction SilentlyContinue).Source
 if (-not $uv) { throw 'uv is not installed. See README.md, Run on Windows.' }
-if (-not (Test-Path (Join-Path $root 'frontend/node_modules'))) { throw 'Frontend packages are missing. Run: npm --prefix frontend install' }
+if (-not (Test-Path (Join-Path $root 'app/node_modules'))) { throw 'Frontend packages are missing. Run: npm --prefix app install' }
 
 $colors = @{ api = 'Cyan'; web = 'Green'; start = 'Gray' }
 function Write-Line([string]$Tag, [string]$Text) {
@@ -49,7 +49,7 @@ function Start-Managed([string]$Tag, [string]$FileName, [string[]]$Arguments, [s
     $info.CreateNoWindow = $true
     $info.Environment['PYTHONUNBUFFERED'] = '1'
     $info.Environment['PYTHONIOENCODING'] = 'utf-8'
-    $info.Environment['FLIGHTS_API_URL'] = $apiUrl  # Vite forwards /api/flights here (vite.config.ts).
+    $info.Environment['FLIGHTS_API_URL'] = $apiUrl  # Vite forwards /api/flights here (app/vite.config.ts).
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $info
     [void]$process.Start()
@@ -71,10 +71,7 @@ function Receive-Lines {
 }
 
 try {
-    $apiArguments = @('run', 'uvicorn', 'api.flights:app', '--host', '127.0.0.1', '--port', "$Port", '--reload', '--reload-dir', 'backend/app', '--reload-dir', 'api')
-    # uvicorn refuses an --env-file that does not exist.
-    if (Test-Path (Join-Path $root '.env')) { $apiArguments += @('--env-file', '.env') }
-    else { Write-Line 'start' 'No .env file: using defaults. To configure, run: Copy-Item .env.example .env' }
+    $apiArguments = @('run', 'uvicorn', 'api.flights:app', '--host', '127.0.0.1', '--port', "$Port", '--reload', '--reload-dir', 'api')
     Start-Managed 'api' $uv $apiArguments $root
 
     $deadline = (Get-Date).AddSeconds(60)
@@ -87,7 +84,7 @@ try {
     if (-not $healthy) { throw "The flight function did not start at $apiUrl" }
     Write-Line 'start' "Flight function ready at $apiUrl"
 
-    Start-Managed 'web' 'cmd.exe' @('/d', '/c', "npm run dev -- --port $WebPort --strictPort") (Join-Path $root 'frontend')
+    Start-Managed 'web' 'cmd.exe' @('/d', '/c', "npm run dev -- --port $WebPort --strictPort") (Join-Path $root 'app')
     Write-Line 'start' "Open http://127.0.0.1:$WebPort/. Press Ctrl+C to stop."
 
     $reported = @{}

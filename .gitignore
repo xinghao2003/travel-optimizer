@@ -2,10 +2,9 @@
 .uv-cache/
 .env
 .env.*
-!.env.example
-frontend/node_modules/
-frontend/dist/
-frontend/.npm-cache/
+app/node_modules/
+app/dist/
+app/.npm-cache/
 .pip-cache/
 __pycache__/
 *.py[cod]
@@ -17,5 +16,5 @@ data/geonames/cities500.download
 /data/diagnostics/
 
 # Generated catalogs and local Vercel settings
-/frontend/public/browser-data/
+/app/public/browser-data/
 /.vercel/

@@ -122,5 +122,5 @@ Stop also saves the solver's unfinished state. Checkpoints are not part of porta
 backups.
 
 When search-state semantics or the stored layout change, increment the version
-number at the start of the input fingerprint in `frontend/src/native/solver.ts`.
+number at the start of the input fingerprint in `app/src/native/solver.ts`.
 Older checkpoints then restart from the saved graph. Do not change the version merely for display or allowance changes.

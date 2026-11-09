@@ -2,7 +2,14 @@
 
 A multimodal trip optimizer that compares total party transportation cost with hours spent in required cities, including positioning from home and back.
 
-The planner runs entirely in the browser: trips, prices and search progress are stored in IndexedDB, and a Web Worker runs the optimizer. The browser calls OSRM and Transitous directly. The only backend is a stateless flight-search function (`api/flights.py`), because Google Flights has no browser API. See [providers and the flight function](docs/provider-functions.md).
+The planner runs entirely in the browser: trips, prices and search progress are stored in IndexedDB, and a Web Worker runs the optimizer. The browser calls OSRM and Transitous directly. The only backend is a stateless flight-search function in `api/`, because Google Flights has no browser API. See [providers and the flight function](docs/provider-functions.md).
+
+| Folder | Contents |
+| --- | --- |
+| `app/` | The static planner: React interface, IndexedDB storage, solver worker, browser tests |
+| `api/` | The flight-search function: `flights.py` (the endpoint) and `_flight_provider.py` |
+| `tests/` | Flight function tests |
+| `tools/` | Catalog build, local static server, function package check |
 
 ## Trip setup and results
 
@@ -78,7 +85,7 @@ Use uv and Node.js 20.19+ or 22.12+. The root `pyproject.toml` declares Python 3
 ```powershell
 uv python install 3.13
 uv sync
-npm --prefix frontend install
+npm --prefix app install
 ```
 
 Optional: for towns without an airport, download the GeoNames city list before building the catalogs. Without it, airport cities and custom coordinates remain available.
@@ -94,19 +101,19 @@ Start the flight function and the Vite dev server, both with hot reload, in one 
 .\start-dev.ps1
 ```
 
-The script first runs `tools/prepare_catalogs.py`, which writes the place and airport catalogs and the public provider configuration to `frontend/public/browser-data/`. Run `npm --prefix frontend run catalogs` again after you change the GeoNames file or the build settings.
+The script first runs `tools/prepare_catalogs.py`, which writes the place and airport catalogs and the public provider configuration to `app/public/browser-data/`. Run `npm --prefix app run catalogs` again after you change the GeoNames file or the build settings.
 
 ## Build and deploy
 
 ```powershell
-npm --prefix frontend run build
+npm --prefix app run build
 ```
 
-The static site is `frontend/dist/`. `vercel.json` builds it and deploys `api/flights.py`. To preview the build without any API proxy, run `uv run python tools/serve_static_planner.py` and open <http://127.0.0.1:5176/>. Opening and editing saved trips needs no backend; flight searches need the flight function.
+The static site is `app/dist/`. `vercel.json` builds it and deploys `api/flights.py`. To preview the build without any API proxy, run `uv run python tools/serve_static_planner.py` and open <http://127.0.0.1:5176/>. Opening and editing saved trips needs no backend; flight searches need the flight function.
 
 ## Configuration
 
-See `.env.example`. The catalog build writes `BROWSER_FLIGHTS_URL`, `BROWSER_TRANSIT_URL`, `BROWSER_TRANSIT_ENABLED`, `OSRM_BASE_URL` and `TRANSITOUS_CONTACT_URL` into the public `browser-data/config.json`; export them before building. `BROWSER_ALLOWED_ORIGINS` enables CORS on the flight function for a static site on another origin. Keep source attribution. Transitous has regional feed gaps and its own [API usage policy](https://transitous.org/api/); an empty result does not prove that transportation is unavailable.
+The catalog build writes `BROWSER_FLIGHTS_URL`, `BROWSER_TRANSIT_URL`, `BROWSER_TRANSIT_ENABLED`, `OSRM_BASE_URL` and `TRANSITOUS_CONTACT_URL` into the public `browser-data/config.json`; set them as environment variables before building (it does not read a `.env` file). `BROWSER_ALLOWED_ORIGINS` enables CORS on the flight function for a static site on another origin. Keep source attribution. Transitous has regional feed gaps and its own [API usage policy](https://transitous.org/api/); an empty result does not prove that transportation is unavailable.
 
 Default assumptions: 90 minutes before flights, 30 after flights, 15 before transit, 10 after transit, and a 30-minute minimum connection. Airport access uses OSRM when available. Otherwise the editable fallback is 45 minutes per side with an unknown fare. Clear the fallback to require resolved access time. An unavailable intercity road never becomes an automatic straight-line driving connection.
 
@@ -125,11 +132,11 @@ Airport–city transfers can be entered before a search in **Missing info › Ai
 ## Tests
 
 ```powershell
-uv run python -m unittest discover -s backend/tests -v
-npm --prefix frontend test
-npm --prefix frontend run build
+uv run python -m unittest discover -s tests -v
+npm --prefix app test
+npm --prefix app run build
 ```
 
-Browser tests use Playwright with Chrome. Start the dev server (`npm --prefix frontend run dev`), then run `npm --prefix frontend run test:browser`. To include the production-artifact tests, serve the build with `tools/serve_static_planner.py` and set `$env:STATIC_URL = 'http://127.0.0.1:5176'` first. If uv's global cache is inaccessible, set `$env:UV_CACHE_DIR = ".uv-cache"`.
+Browser tests use Playwright with Chrome. Start the dev server (`npm --prefix app run dev`), then run `npm --prefix app run test:browser`. To include the production-artifact tests, serve the build with `tools/serve_static_planner.py` and set `$env:STATIC_URL = 'http://127.0.0.1:5176'` first. If uv's global cache is inaccessible, set `$env:UV_CACHE_DIR = ".uv-cache"`.
 
 Sources: [fast-flights](https://github.com/AWeirdDev/flights), [Transitous](https://transitous.org/sources/), [OSRM](https://project-osrm.org/), GeoNames (CC BY 4.0), airportsdata (MIT), and MapLibre/OpenFreeMap with OpenStreetMap attribution.

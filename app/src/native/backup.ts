@@ -1,9 +1,11 @@
 import type { Result, Route } from "../lib/planner";
 import { parseConnection, parseInteger, parseMovement, parseOffer, parseRule, parseSpec, parseTransfer } from "./contracts";
 import type { PlannerTrip, Snapshot } from "./preparation";
-import type { Collection, StoredRecord } from "./repository";
+import type { Collection, DebugEvent, StoredRecord } from "./repository";
 
-export type PlannerBackup = { format: "wayfinder-browser-backup"; schema_version: 1; exported_at: string; records: StoredRecord[] };
+/** `debug` is present only in debug bundles. Restore ignores it. */
+export type PlannerBackup = { format: "wayfinder-browser-backup"; schema_version: 1; exported_at: string; records: StoredRecord[];
+  debug?: Record<string, unknown> & { events: DebugEvent[] } };
 type Value = Record<string, unknown>;
 function record(raw: unknown): Value {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("A backup record must be an object.");

@@ -74,6 +74,7 @@ export class BrowserDiscovery {
         job.queue.push(...tasksFor(spec, catalog.metros, true).filter(t => t.kind === "transit" && !known.has(t.key)));
       }
     } else {
+      await this.repository.clearEvents(tripId); // The log covers the latest search of each trip.
       const snapshot = await this.repository.get<Snapshot>("graphs", key) ?? trip.snapshot ?? { revision: 0, movements: [], offers: [], roads: {}, coverage: {} };
       const retained = snapshot.movements.filter(m => m.source !== RAIL_FALLBACK_SOURCE);
       if (retained.length !== snapshot.movements.length) { snapshot.movements = retained; snapshot.revision++; }
@@ -90,6 +91,8 @@ export class BrowserDiscovery {
     else job.messages = job.messages.filter(m => m !== TRANSIT_DISABLED);
     this.cancelled.delete(job.id);
     await this.repository.put("jobs", job.id, job);
+    await this.repository.logEvent(tripId, { type: "search", job_id: job.id, status: "started", resumed: !!jobId, request_budget: minutes === null ? budget : null,
+      minutes, queued: job.queue.length - job.cursor, graph_revision: job.snapshot.revision });
     await this.repository.setLatestJob(tripId, "latest_job_id", job.id);
     this.launch(job, spec); return this.public(job);
   }
@@ -209,9 +212,14 @@ export class BrowserDiscovery {
         if (this.expired(job)) break;
         const task = job.queue[job.cursor]; publishedFinal = false; job.phase = "discovery";
         let outcome: ProviderOutcome, usedRequest: boolean;
+        const began = this.clock.monotonic(), now = this.clock.wall() * 1000;
         try { ({ outcome, usedRequest } = await this.provider.fetch(task, spec, job.snapshot)); }
         catch (error) { outcome = { status: "failed", message: String(error).slice(0, 190) }; usedRequest = true; }
-        recordOutcome(job, task, outcome, usedRequest, spec, (await this.airports()).metros, this.clock.wall() * 1000);
+        const before = job.snapshot.movements.length;
+        recordOutcome(job, task, outcome, usedRequest, spec, (await this.airports()).metros, now);
+        // The raw outcome lets scripts/replay.mjs repeat ingestion for this request.
+        await this.repository.logEvent(job.trip_id, { type: "provider", job_id: job.id, cursor: job.cursor - 1, task, status: outcome.status,
+          used_request: usedRequest, duration_ms: Math.round(this.clock.monotonic() - began), now, new_movements: job.snapshot.movements.length - before, outcome });
         if (this.cancelled.has(job.id)) job.status = "cancelled";
         await this.repository.put("jobs", job.id, job);
         if (job.cursor % 4 === 0 || task.kind === "road") { await this.publish(active, spec); await this.repository.put("jobs", job.id, job); }
@@ -229,6 +237,8 @@ export class BrowserDiscovery {
     } finally {
       if (this.deadlines.has(job.id)) job.round_elapsed_seconds = this.public(job).round_elapsed_seconds;
       await this.repository.put("jobs", job.id, job);
+      await this.repository.logEvent(job.trip_id, { type: "search", job_id: job.id, status: job.status, pause_reason: job.pause_reason ?? null,
+        processed: job.cursor, pending: job.queue.length - job.cursor, requests: job.requests, cache_hits: job.cache_hits, messages: job.messages.slice(-12) }).catch(() => {});
       this.deadlines.delete(job.id);
       if (this.active.get(job.id) === active) this.active.delete(job.id);
       this.published.delete(job.id); this.cadence.delete(job.id);

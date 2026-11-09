@@ -1,3 +1,5 @@
+import { spawnSync } from "node:child_process";
+import { writeFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 
 test("browser repository commits edits atomically, rejects stale workers, and prunes only provider cache", async ({ page }) => {
@@ -163,4 +165,42 @@ test("native worker calculation resumes stored checkpoints, stops cleanly, and r
   console.log(JSON.stringify(summary, null, 2));
   expect(summary).toEqual({ paused: true, resumedDifference: null, finishedClearedCheckpoint: true, weakerBecameBest: true, stopPersisted: true, stoppedResumeDifference: null, multiBatchBudget: true });
   expect(requests.filter(url => /\/api\/|jsdelivr/.test(url))).toEqual([]);
+});
+
+test("debug bundles add the event log, restore as backups, and replay in Node", async ({ page }, testInfo) => {
+  await page.route("**/debug-bundle-test", route => route.fulfill({ contentType: "text/html", body: "<!doctype html>" }));
+  await page.goto("/debug-bundle-test");
+  const summary = await page.evaluate(async () => {
+    const { PlannerRepository } = await import("/src/native/repository.ts");
+    const { BrowserCalculator } = await import("/src/native/calculation.ts");
+    const corpus = await (await fetch("/tests/fixtures/preparation.json")).json(), sample = corpus.cases[1];
+    const name = "wayfinder-debug-test-" + crypto.randomUUID(), repository = new PlannerRepository(name), calculator = new BrowserCalculator(repository);
+    await repository.put("trips", sample.trip.id, sample.trip);
+    await repository.put("trips", "other", { ...sample.trip, id: "other" });
+    for (const rule of sample.rules) await repository.put("rules", rule.id, rule);
+    await repository.put("meta", "selected-trip", sample.trip.id);
+    const partial = await calculator.calculate(sample.trip.id, { ...sample.options, unlimited: true, expansion_budget: 5 });
+    await repository.logEvent("other", { type: "search", status: "started" });
+    const plain = await repository.exportBackup(), bundle = JSON.parse(JSON.stringify(await repository.exportBackup({ app_commit: "test" })));
+    const restored = new PlannerRepository(name + "-restored"), restoredCount = await restored.importBackup(bundle);
+    await repository.clearEvents(sample.trip.id);
+    const afterClear = (await repository.exportBackup({})).debug!.events.map(e => e.trip_id);
+    await repository.deleteTrip("other");
+    const afterDelete = (await repository.exportBackup({})).debug!.events.length;
+    await repository.close(); await restored.close();
+    await Promise.all([name, name + "-restored"].map(db => new Promise<void>((resolve, reject) => { const r = indexedDB.deleteDatabase(db); r.onsuccess = () => resolve(); r.onerror = () => reject(r.error); })));
+    const calculation = bundle.debug.events.find((e: { type: string }) => e.type === "calculation");
+    return { bundle, partialIncomplete: !partial.optimization_complete, plainHasNoEvents: !plain.debug && !plain.records.some(r => r.collection === "events"),
+      eventTypes: bundle.debug.events.map((e: { type: string }) => e.type).sort(), calculationLogged: calculation.now === sample.options.now && calculation.expanded_labels === 5 && calculation.batches === 1 && calculation.saved,
+      restoredAll: restoredCount === bundle.records.length, afterClear, afterDelete };
+  });
+  const { bundle, ...checks } = summary;
+  expect(checks).toEqual({ partialIncomplete: true, plainHasNoEvents: true, eventTypes: ["calculation", "search"], calculationLogged: true, restoredAll: true, afterClear: ["other"], afterDelete: 0 });
+  const file = testInfo.outputPath("debug-bundle.json");
+  await writeFile(file, JSON.stringify(bundle));
+  const replay = spawnSync(process.execPath, ["scripts/replay.mjs", file], { encoding: "utf8" });
+  expect(replay.stdout).toContain("The replay matches the saved options.");
+  expect(replay.status).toBe(0);
+  const events = spawnSync(process.execPath, ["scripts/replay.mjs", file, "--events"], { encoding: "utf8" });
+  expect(events.stdout).toMatch(/calculation\s+partial\s+5 labels/);
 });

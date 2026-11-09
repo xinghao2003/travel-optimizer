@@ -13,12 +13,17 @@ import { shareableSnapshot } from "./preparation";
 
 export const DATABASE_VERSION = 1;
 export const CHECKPOINT_VERSION = 4;
-export type Collection = "trips" | "rules" | "graphs" | "jobs" | "optimizations" | "meta";
+export type Collection = "trips" | "rules" | "graphs" | "jobs" | "optimizations" | "meta" | "events";
+/** A search or calculation log entry. Only debug bundles export them. */
+export type DebugEventInput = { type: "search" | "provider" | "calculation"; [key: string]: unknown };
+export type DebugEvent = DebugEventInput & { trip_id: string; at: string };
 export type StoredRecord<T = unknown> = { schema_version: 1; collection: Collection; id: string; updated: number; payload: T };
 type Checkpoint = { trip_id: string; version: number; state: SearchState };
 type CacheEntry = { key: string; expires: number; payload: unknown };
 type Transaction<T> = { tx: IDBTransaction; result(value: T): void; read<U>(request: IDBRequest<U>, consume: (value: U) => void): void };
 const range = (collection: Collection) => IDBKeyRange.bound([collection], [collection, []]);
+// Event IDs start with "<trip ID>:", and ";" is the next character after ":".
+const tripEvents = (tripId: string) => IDBKeyRange.bound(["events", tripId + ":"], ["events", tripId + ";"], false, true);
 const row = (collection: Collection, id: string, payload: unknown): StoredRecord => ({ schema_version: 1, collection, id, updated: Date.now(), payload });
 function payload<T>(value: StoredRecord<T> | undefined): T | undefined {
   if (value && value.schema_version !== 1) throw new Error("Unsupported saved browser record version.");
@@ -27,6 +32,7 @@ function payload<T>(value: StoredRecord<T> | undefined): T | undefined {
 
 export class PlannerRepository {
   private opening?: Promise<IDBDatabase>;
+  private eventSequence = 0;
   constructor(readonly name = "wayfinder-planner") {}
 
   private open(): Promise<IDBDatabase> {
@@ -159,7 +165,7 @@ export class PlannerRepository {
           c.read(records.get(["meta", "selected-trip"]), selected => {
             for (const item of related) records.delete([item.collection, item.id]);
             if (payload<string>(selected) === id) records.put(row("meta", "selected-trip", null));
-            records.delete(["trips", id]); c.tx.objectStore("checkpoints").delete(id);
+            records.delete(["trips", id]); records.delete(tripEvents(id)); c.tx.objectStore("checkpoints").delete(id);
           });
         }));
       });
@@ -256,9 +262,21 @@ export class PlannerRepository {
       });
     });
   }
-  exportBackup(): Promise<PlannerBackup> {
-    return this.transaction(["records"], "readonly", c => c.read(c.tx.objectStore("records").getAll(), records => {
-      c.result({ format: "wayfinder-browser-backup", schema_version: 1, exported_at: new Date().toISOString(), records });
+  /** Events sort by time within a trip because their IDs hold a zero-padded timestamp. */
+  logEvent(tripId: string, event: DebugEventInput): Promise<DebugEvent> {
+    const now = Date.now(), id = `${tripId}:${String(now).padStart(15, "0")}:${String(++this.eventSequence).padStart(9, "0")}`;
+    return this.put("events", id, { ...event, trip_id: tripId, at: new Date(now).toISOString() });
+  }
+  clearEvents(tripId: string): Promise<void> {
+    return this.transaction(["records"], "readwrite", c => { c.tx.objectStore("records").delete(tripEvents(tripId)); });
+  }
+  /** With `debug`, the backup also holds the event log and the given environment details. */
+  exportBackup(debug?: Record<string, unknown>): Promise<PlannerBackup> {
+    return this.transaction(["records"], "readonly", c => c.read(c.tx.objectStore("records").getAll(), all => {
+      const records = (all as StoredRecord[]).filter(r => r.collection !== "events");
+      const events = (all as StoredRecord<DebugEvent>[]).filter(r => r.collection === "events").map(r => r.payload);
+      c.result({ format: "wayfinder-browser-backup", schema_version: 1, exported_at: new Date().toISOString(), records,
+        ...(debug ? { debug: { ...debug, database_version: DATABASE_VERSION, checkpoint_version: CHECKPOINT_VERSION, solver_revision: NATIVE_SOLVER_REVISION, events } } : {}) });
     }));
   }
   importBackup(raw: unknown, overwrite = false): Promise<number> {

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import ReactDOM from "react-dom/client";
-import { DatabaseBackup, Download, X } from "lucide-react";
+import { Bug, DatabaseBackup, Download, X } from "lucide-react";
 import Planner from "./Planner";
 import { ThemeProvider } from "./components/theme-provider";
 import { Button } from "./components/ui/button";
@@ -46,13 +46,14 @@ function BackupDialog({ onClose, onImported }: { onClose(): void; onImported(): 
 }
 function NativePlanner() {
   const [revision, setRevision] = useState(0), [importing, setImporting] = useState(false), [error, setError] = useState("");
-  async function downloadBackup() {
+  async function downloadBackup(debug = false) {
     try {
       await service.ready();
       await service.repository.put("meta", "selected-trip", localStorage.getItem("wayfinder:last-trip"));
-      const backup = await service.repository.exportBackup();
+      const backup = await service.repository.exportBackup(debug ? { app_commit: __APP_COMMIT__, user_agent: navigator.userAgent,
+        provider_settings: await service.providers.settings().catch(error => String(error)) } : undefined);
       const url = URL.createObjectURL(new Blob([JSON.stringify(backup)], { type: "application/json" })), anchor = document.createElement("a");
-      anchor.href = url; anchor.download = `wayfinder-backup-${new Date().toISOString().slice(0, 10)}.json`; anchor.click();
+      anchor.href = url; anchor.download = `wayfinder-${debug ? "debug" : "backup"}-${new Date().toISOString().slice(0, 10)}.json`; anchor.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
   }
@@ -60,6 +61,7 @@ function NativePlanner() {
     {error && <p role="alert">{error}<Button onClick={() => setError("")}>Dismiss</Button></p>}
     <Planner externalRevision={revision} storageActions={disabled => <>
       <button className="p-menu-item" type="button" disabled={disabled} onClick={() => void downloadBackup()}><Download size={15} aria-hidden="true" /><span>Download browser backup<small>Save trips, prices and transport data as JSON.</small></span></button>
+      <button className="p-menu-item" type="button" disabled={disabled} onClick={() => void downloadBackup(true)}><Bug size={15} aria-hidden="true" /><span>Download debug bundle<small>Backup plus the search log and provider responses, for troubleshooting.</small></span></button>
       <button className="p-menu-item" type="button" disabled={disabled} onClick={() => setImporting(true)}><DatabaseBackup size={15} aria-hidden="true" /><span>Restore browser backup</span></button>
     </>} />
     {importing && <BackupDialog onClose={() => setImporting(false)} onImported={() => setRevision(value => value + 1)} />}

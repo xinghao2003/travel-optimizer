@@ -49,10 +49,60 @@ data. No provider search starts automatically. Provider caches and optimizer
 checkpoints are not included in backups; calculations restart from the
 preserved graph.
 
+## Debug bundles and replay
+
+The planner keeps an event log for each trip in the `events` collection:
+
+- `search`: each round start and end, with status, pause reason, request and
+  cache counts, and recent messages.
+- `provider`: each provider task with its status, duration, cache or request,
+  clock, number of new journeys, and the complete provider outcome (raw
+  Transitous payload, flight-function options, or road matrix).
+- `calculation`: each calculation run with its clock, label limit, input size,
+  batches, solve and wall time, expanded/pruned/remaining labels, option counts,
+  and errors.
+
+A new search of a trip clears that trip's log, so the log covers the latest
+search and the calculations after it. Deleting a trip deletes its log. Raw
+transit responses can be large: expect several megabytes for a search of 100
+requests.
+
+**More actions → Download debug bundle** downloads a normal backup with an
+extra `debug` object: the event log, the deployed commit (`VERCEL_GIT_COMMIT_SHA`,
+or `local`), solver, checkpoint and database versions, the browser user agent,
+and the provider settings. Regular backups leave out the log. A debug bundle
+restores like a backup; restore ignores `debug`.
+
+`app/scripts/replay.mjs` runs the current solver on a backup or debug bundle in
+Node and compares the result with the saved result:
+
+```
+cd app
+node scripts/replay.mjs wayfinder-debug.json --list           # trips in the file
+node scripts/replay.mjs wayfinder-debug.json --trip <id>      # replay and compare
+node scripts/replay.mjs wayfinder-debug.json --label-limit none   # calculate to completion
+node scripts/replay.mjs wayfinder-debug.json --events         # search and calculation log
+node scripts/replay.mjs wayfinder-debug.json --event 12       # repeat ingestion of one response
+```
+
+By default, the replay expands the same number of labels as the saved result
+(or all labels if the saved result was complete). It uses the clock of the last
+logged calculation, else the export time, so quote freshness matches. Exit code
+1 means the options differ. `--out` writes the result and `--case` writes a
+solver fixture case for `tests/fixtures/solver.json`. `--event` shows the
+journeys and fares a logged response produces, and whether each one is in the
+saved graph and in a saved option.
+
+Bundles do not include provider caches or checkpoints. The solver is
+deterministic, so a replay with the same label limit rebuilds the checkpoint
+state. Ingestion needs the generated airport catalog for metro airports; without
+`app/public/browser-data/airports.json`, flight legs use only the cities'
+own airports.
+
 ## Verification
 
 The browser tests (`app/tests/repository.spec.ts`) exercise real
 IndexedDB transactions and the real worker: rollback, competing revisions,
 changed-graph result rejection, checkpoint round trips, cache pruning, trip
-copy and delete, backup conflicts, replacement, and restoration into a fresh
-database.
+copy and delete, backup conflicts, replacement, restoration into a fresh
+database, and debug bundle export, restore and replay.

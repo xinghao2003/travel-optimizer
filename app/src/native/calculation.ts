@@ -3,6 +3,7 @@ import type { PricingRule, Result } from "../lib/planner";
 import { completeResult, prepareSolverInput } from "./preparation";
 import type { PreparationOptions } from "./preparation";
 import { PlannerRepository } from "./repository";
+import type { DebugEventInput } from "./repository";
 import type { SearchState, SolverInput, SolverResult } from "./types";
 import type { BundleCandidate } from "./search-state";
 import { PlannerError } from "./edits";
@@ -10,7 +11,7 @@ import { PlannerError } from "./edits";
 export type CalculationOptions = PreparationOptions & { minutes?: number | null; deadline?: number };
 export type CalculationResult = Result & { bundle_candidates: BundleCandidate[] };
 type Active = { stop(): void; includeDominated: boolean; promise: Promise<CalculationResult> };
-type Reply = { result: SolverResult; checkpoint: SearchState };
+type Reply = { result: SolverResult; checkpoint: SearchState; solve_ms: number; validation_ms: number };
 class WorkerSolver {
   private worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
   private sequence = 0;
@@ -64,10 +65,16 @@ export class BrowserCalculator {
     if (options.minutes != null && (!Number.isFinite(options.minutes) || options.minutes <= 0 || options.minutes > 1440)) throw new PlannerError("Choose a calculation round longer than 0 and no more than 1440 minutes.");
     const deadline = options.deadline ?? (options.minutes == null ? Infinity : performance.now() + options.minutes * 60_000);
     const [trip, rules, checkpoint] = await Promise.all([this.repository.requireTrip(id), this.repository.list<PricingRule>("rules"), this.repository.checkpoint(id)]);
-    const prepared = prepareSolverInput(trip, rules, options), input = prepared.input;
+    // A fixed clock lets scripts/replay.mjs reproduce the quote freshness of this calculation.
+    const now = options.now ?? Date.now() * 1000, began = performance.now();
+    const prepared = prepareSolverInput(trip, rules, { ...options, now }), input = prepared.input;
     let sourceRevision = trip.snapshot?.revision ?? 0, first = true, roundStart = 0, expanded = 0;
     const budget = input.expansion_budget ?? Infinity;
     const solver = new WorkerSolver();
+    const log: DebugEventInput = { type: "calculation", now, trip_revision: trip.revision, snapshot_revision: prepared.snapshot.revision,
+      label_limit: input.label_limit ?? null, expansion_budget: input.expansion_budget ?? null, include_dominated: input.include_dominated ?? false,
+      minutes: options.minutes ?? null, expand: options.expand ?? false, movements: input.movements.length, offers: input.offers.length, rules: input.rules.length,
+      resumed_from: null, batches: 0, solve_ms: 0, validation_ms: 0 };
     try {
       for (;;) {
         // Small batches let Stop finish and persist a real frontier without
@@ -75,19 +82,28 @@ export class BrowserCalculator {
         const remaining = budget - expanded;
         const reply = await solver.solve({ ...input, expansion_budget: Math.max(0, Math.min(2000, remaining)) }, Math.max(0, (deadline - performance.now()) / 1000), first ? checkpoint : undefined);
         const state = reply.checkpoint;
-        if (first) { roundStart = checkpoint?.signature === state.signature ? checkpoint.expanded : 0; first = false; }
+        if (first) { roundStart = checkpoint?.signature === state.signature ? checkpoint.expanded : 0; first = false; log.resumed_from = roundStart || null; }
+        (log.batches as number)++; (log.solve_ms as number) += reply.solve_ms; (log.validation_ms as number) += reply.validation_ms;
         expanded = state.expanded - roundStart;
         if (input.expansion_budget == null) delete reply.result.safety_limit_reached;
         else reply.result.safety_limit_reached = reply.result.remaining_labels > 0 && expanded >= input.expansion_budget;
         const result = completeResult(reply.result, prepared.snapshot, trip) as CalculationResult;
         const { bundle_candidates: _candidates, ...persisted } = result;
         const saved = await this.repository.saveCalculation(id, trip.revision, sourceRevision, prepared.snapshot, persisted, state);
+        Object.assign(log, { saved, expanded_labels: result.expanded_labels, pruned_labels: result.pruned_labels, remaining_labels: result.remaining_labels,
+          optimization_complete: result.optimization_complete, safety_limit_reached: result.safety_limit_reached ?? false, routes: result.routes.length,
+          dominated_routes: result.dominated_routes?.length ?? null, refinement_routes: result.refinement_routes?.length ?? 0, feasible: result.feasible_count, stopped: stopped() });
         if (!saved) return result; // Its revision keeps the caller from accepting stale results.
         if (trip.snapshot) sourceRevision = prepared.snapshot.revision;
         this.updated(id, result);
         if (stopped() || result.optimization_complete || input.label_limit != null && state.expanded >= input.label_limit
             || expanded >= budget || performance.now() >= deadline) return result;
       }
-    } finally { solver.close(); }
+    } catch (error) { log.error = String(error); throw error; }
+    finally {
+      solver.close();
+      log.wall_ms = Math.round(performance.now() - began); log.solve_ms = Math.round(log.solve_ms as number); log.validation_ms = Math.round(log.validation_ms as number);
+      await this.repository.logEvent(id, log).catch(() => {});
+    }
   }
 }

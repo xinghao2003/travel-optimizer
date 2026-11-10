@@ -179,6 +179,23 @@ def visit_return_orders(order):
             yield (*order, *suffix)
 
 
+def trip_orders(spec):
+    """Visit orders, with revisits on the way back for trips that return home."""
+    if spec.one_way == "from_home":
+        return spec.visit_orders()
+    return [path for first in spec.visit_orders() for path in visit_return_orders(first)]
+
+
+def trip_head(spec, departure):
+    """The places before the first visit: home and the start city, or none for a trip that starts there."""
+    return [] if spec.one_way == "to_home" else [spec.home.id, departure.id]
+
+
+def trip_tail(spec, arrival):
+    """The places after the last visit: the end city and home, or none for a trip that ends there."""
+    return [] if spec.one_way == "from_home" else [arrival.id, spec.home.id]
+
+
 def rough_date_windows(spec):
     """Optimistic pair windows using only minimum stays, with zero travel time.
 
@@ -191,10 +208,10 @@ def rough_date_windows(spec):
         return {pair: (start, end) for pair in itertools.permutations(spec.places(), 2)}
     stays = {v.place.id: v.min_stay_hours for v in spec.visits}
     windows = {}
-    for order in (path for first in spec.visit_orders() for path in visit_return_orders(first)):
+    for order in trip_orders(spec):
         for departure in spec.departures:
             for arrival in spec.arrivals:
-                path = [spec.home.id, departure.id, *(id for id in order if id != departure.id), arrival.id, spec.home.id]
+                path = [*trip_head(spec, departure), *(id for id in order if id != departure.id), *trip_tail(spec, arrival)]
                 path = [id for i, id in enumerate(path) if i == 0 or id != path[i-1]]
                 unspent = set(stays)
                 elapsed = 0
@@ -242,16 +259,18 @@ def tasks_for(spec):
     # Prioritize complete seeds, rather than spending the first batch on just
     # the outbound directions. Remaining calendar dates follow deterministically.
     dates = seed_dates(spec)
-    for order in (path for first in spec.visit_orders() for path in visit_return_orders(first)):
+    for order in trip_orders(spec):
         for departure in spec.departures:
             for arrival in spec.arrivals:
-                path = [spec.home.id, departure.id, *order, arrival.id, spec.home.id]
+                path = [*trip_head(spec, departure), *order, *trip_tail(spec, arrival)]
                 path = [v for i, v in enumerate(path) if i == 0 or v != path[i-1]]
+                # Leg i leaves the i-th place of a round trip; a trip from the first city skips the leg from home.
+                shift = 1 if spec.one_way == "to_home" else -(departure.id != spec.home.id)
                 for i, (a, b) in enumerate(zip(path, path[1:])):
-                    day = dates[min(len(dates)-1, max(0, i-(departure.id != spec.home.id)))]
-                    if i == 0:
+                    day = dates[min(len(dates)-1, max(0, i+shift))]
+                    if i == 0 and spec.one_way != "to_home":
                         day = spec.start_date
-                    if i == len(path)-2:
+                    if i == len(path)-2 and spec.one_way != "from_home":
                         day = spec.end_date
                     if "flight" in spec.modes:
                         task(a, b, day, "flight")
@@ -276,7 +295,8 @@ def tasks_for(spec):
             flight_days.setdefault((item["from_id"], item["to_id"]), []).append(date.fromisoformat(item["date"]))
     minimum = timedelta(hours=sum(v.min_stay_hours for v in spec.visits))
     bundles = []
-    for gateway in spec.departures:
+    # A one-way trip never both leaves and comes back to a gateway, so round trips cannot apply.
+    for gateway in [] if spec.one_way else spec.departures:
         if gateway.id not in {p.id for p in spec.arrivals}:
             continue
         earliest = start

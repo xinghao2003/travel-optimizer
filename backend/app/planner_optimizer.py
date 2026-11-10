@@ -451,6 +451,7 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
              finish_at_home: bool = True, include_dominated: bool = False, *,
              checkpoint: SearchCheckpoint | None = None, deadline: float | None = None,
              expansion_budget: int | None = None) -> dict:
+    finish_at_home = finish_at_home and spec.one_way != "from_home"
     started = clock.monotonic()
     next_progress = started + 5
     logger.debug("planner dp.start movements=%d offers=%d limit=%s", len(movements), len(offers), label_limit)
@@ -506,10 +507,16 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
             events[id].update(values)
     bundle_ids = {id for o in offers if o.validated and len(o.movement_ids) > 1 for id in o.movement_ids}
     queue = SearchFrontier(spec.exchange_rates)
-    for gateway in spec.departures:
-        mask = (1 << required[gateway.id][0]) if gateway.id in required and gateway.id == spec.home.id else 0
-        queue.appendleft(Label(spec.home.id, 0, mask, start, [], [], own_location=spec.home.id,
-                               departure_gateway=gateway.id))
+    if spec.one_way == "to_home":
+        # Already in the first city visited at the start; its stay counts from then.
+        for id in [v.place.id for v in spec.visits][:1 if spec.ordered_visits else None]:
+            queue.appendleft(Label(id, 1, 1 << required[id][0], start, [], [], reward=True,
+                                   own_location=spec.home.id, departure_gateway=id))
+    else:
+        for gateway in spec.departures:
+            mask = (1 << required[gateway.id][0]) if gateway.id in required and gateway.id == spec.home.id else 0
+            queue.appendleft(Label(spec.home.id, 0, mask, start, [], [], own_location=spec.home.id,
+                                   departure_gateway=gateway.id))
     labels = defaultdict(list)
     completed = []
     expanded = 0
@@ -715,7 +722,7 @@ def optimize(spec: TripSpec, movements: list[Movement], offers: list[FareOffer],
 
     def expand(current, target, movement, dep, arr, home_date):
         """Add the label that takes this journey, which departs at `dep` when the label is ready."""
-        if not current.path and spec.date_mode == "fixed" and home_date != spec.start_date:
+        if not current.path and spec.date_mode == "fixed" and home_date != spec.start_date and spec.one_way != "to_home":
             return
         if current.rental_pickup is not None and movement.vehicle_kind != "rental":
             current = rental_close(current, dep)

@@ -126,6 +126,8 @@ class TripSpec(Contract):
     visits: list[Visit] = Field(min_length=1, max_length=4)
     # Visit the cities in the order of `visits`; otherwise the search picks the order.
     ordered_visits: bool = False
+    # from_home ends in the last city visited; to_home starts in the first city visited.
+    one_way: Literal["from_home", "to_home"] | None = None
     start_date: date
     end_date: date
     date_mode: Literal["fixed", "flexible"] = "fixed"
@@ -160,6 +162,15 @@ class TripSpec(Contract):
             raise ValueError("Required destinations must be unique and different from home.")
         self.departures = self.departures or [self.home]
         self.arrivals = self.arrivals or [self.home]
+        if self.one_way:
+            # The direction without travel to or from home has no gateways, journeys or home time.
+            unused = "return" if self.one_way == "from_home" else "outbound"
+            if unused == "return":
+                self.arrivals, self.home_arrival_latest = [self.home], None
+            else:
+                self.departures, self.home_departure_earliest = [self.home], None
+            self.positioning_policies = [p for p in self.positioning_policies if p.direction != unused]
+            self.positioning_services = [s for s in self.positioning_services if s.direction != unused]
         for group in (self.departures, self.arrivals):
             if len({p.id for p in group}) != len(group):
                 raise ValueError("Candidate endpoints must be unique.")
@@ -202,6 +213,8 @@ class TripSpec(Contract):
         # One order searches fewer city pairs and dates than every order.
         if self.ordered_visits and len(self.visits) > 1:
             parts = (*parts, "ordered-visits-v1")
+        if self.one_way:
+            parts = (*parts, "one-way-v1", self.one_way)
         if self.home_departure_earliest is None and self.home_arrival_latest is None and not self.positioning_policies:
             return stable_id(*parts)
         return stable_id(*parts, self.home_departure_earliest, self.home_arrival_latest, self.positioning_policies)

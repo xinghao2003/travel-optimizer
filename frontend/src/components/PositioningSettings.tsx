@@ -153,21 +153,23 @@ function GatewayPositioning({ draft, gateway, direction, edit }: {
 export function PositioningSettings({ draft, edit, homeTimesError }: { draft: TripDraft; edit: (value: TripDraft) => void; homeTimesError?: string }) {
   const home = draft.home;
   const start = tripDay(draft.start_date), end = tripDay(draft.end_date);
+  // A one-way trip has no travel from or to home on one side.
+  const used: Direction[] = draft.one_way === "from_home" ? ["outbound"] : draft.one_way === "to_home" ? ["return"] : ["outbound", "return"];
   return <>
     <div className="p-group-columns">
-      <EndpointList draft={draft} edit={edit} direction="outbound" />
-      <EndpointList draft={draft} edit={edit} direction="return" />
+      {used.includes("outbound") && <EndpointList draft={draft} edit={edit} direction="outbound" />}
+      {used.includes("return") && <EndpointList draft={draft} edit={edit} direction="return" />}
     </div>
     <div className="p-subhead"><h3>Home times{home ? ` (${home.timezone})` : ""}</h3><InfoTip topic="home times">Blank means any time on that day. Also applies with flexible dates.</InfoTip></div>
     <div className="p-group-fields">
-      <Field label={<>Leave home after{start && <span className="sr-only"> on {start}</span>}</>} unit={start ? `on ${start}` : undefined}>
+      {used.includes("outbound") && <Field label={<>Leave home after{start && <span className="sr-only"> on {start}</span>}</>} unit={start ? `on ${start}` : undefined}>
         <TemporalInput type="time" value={draft.home_departure_earliest ?? ""} onValueChange={value => edit({ ...draft, home_departure_earliest: value || null })} />
-      </Field>
-      <Field label={<>Be home by{end && <span className="sr-only"> on {end}</span>}</>} unit={end ? `on ${end}` : undefined} error={homeTimesError}>
+      </Field>}
+      {used.includes("return") && <Field label={<>Be home by{end && <span className="sr-only"> on {end}</span>}</>} unit={end ? `on ${end}` : undefined} error={homeTimesError}>
         <TemporalInput type="time" value={draft.home_arrival_latest ?? ""} onValueChange={value => edit({ ...draft, home_arrival_latest: value || null })} />
-      </Field>
+      </Field>}
     </div>
-    {home && (["outbound", "return"] as const).flatMap(direction => (direction === "outbound" ? draft.departures : draft.arrivals)
+    {home && used.flatMap(direction => (direction === "outbound" ? draft.departures : draft.arrivals)
       .filter(gateway => gateway.id !== home.id)
       .map(gateway => <GatewayPositioning key={`${home.id}:${direction}:${gateway.id}`} draft={draft} gateway={gateway} direction={direction} edit={edit} />))}
   </>;

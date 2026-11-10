@@ -133,6 +133,40 @@ class DiscoveryDateTests(unittest.TestCase):
         spec = trip(cars={"own_enabled": True})
         self.assertEqual(rough_date_windows(spec), {pair: bounds(spec) for pair in itertools.permutations(spec.places(), 2)})
 
+    def test_one_way_trip_does_not_search_back_home_or_round_trips(self):
+        home = HOME.model_copy(update={"flight_code": "PEN", "airport_codes": ["PEN"]})
+        seoul = A.model_copy(update={"flight_code": "SEL", "airport_codes": ["ICN"]})
+        busan = B.model_copy(update={"flight_code": "PUS", "airport_codes": ["PUS"]})
+        end = place("end").model_copy(update={"flight_code": "KUL", "airport_codes": ["KUL"]})
+        spec = TripSpec(home=home, arrivals=[end], one_way="from_home", home_arrival_latest=time(12),
+                        visits=[Visit(place=seoul, min_stay_hours=12), Visit(place=busan, min_stay_hours=12)],
+                        start_date=date(2027, 2, 10), end_date=date(2027, 2, 14), modes=["flight"])
+        self.assertEqual([p.id for p in spec.arrivals], [home.id])
+        self.assertIsNone(spec.home_arrival_latest)
+        with patch("app.planner_discovery.iata_metros", return_value={}):
+            queue = tasks_for(spec)
+        pairs = {(t["from_id"], t["to_id"]) for t in queue if t["kind"] == "flight"}
+        self.assertEqual(pairs, {(home.id, seoul.id), (home.id, busan.id), (seoul.id, busan.id), (busan.id, seoul.id)})
+        self.assertFalse([t for t in queue if t["kind"] == "bundle"])
+        self.assertNotEqual(spec.discovery_key(), spec.model_copy(update={"one_way": None}).discovery_key())
+
+    def test_one_way_to_home_does_not_search_from_home(self):
+        home = HOME.model_copy(update={"flight_code": "PEN", "airport_codes": ["PEN"]})
+        seoul = A.model_copy(update={"flight_code": "SEL", "airport_codes": ["ICN"]})
+        busan = B.model_copy(update={"flight_code": "PUS", "airport_codes": ["PUS"]})
+        start = place("start").model_copy(update={"flight_code": "KUL", "airport_codes": ["KUL"]})
+        spec = TripSpec(home=home, departures=[start], one_way="to_home", home_departure_earliest=time(12),
+                        visits=[Visit(place=seoul, min_stay_hours=12), Visit(place=busan, min_stay_hours=12)],
+                        start_date=date(2027, 2, 10), end_date=date(2027, 2, 14), modes=["flight"])
+        self.assertEqual([p.id for p in spec.departures], [home.id])
+        self.assertIsNone(spec.home_departure_earliest)
+        with patch("app.planner_discovery.iata_metros", return_value={}):
+            queue = tasks_for(spec)
+        pairs = {(t["from_id"], t["to_id"]) for t in queue if t["kind"] == "flight"}
+        self.assertEqual(pairs, {(seoul.id, home.id), (busan.id, home.id), (seoul.id, busan.id), (busan.id, seoul.id)})
+        self.assertFalse([t for t in queue if t["kind"] == "bundle"])
+        self.assertNotEqual(spec.discovery_key(), spec.model_copy(update={"one_way": "from_home"}).discovery_key())
+
 
 class OptimizerTests(unittest.TestCase):
     def test_unreachable_connections_are_pruned_before_pricing(self):
@@ -183,6 +217,26 @@ class OptimizerTests(unittest.TestCase):
                  movement("drive-home", parking, HOME, dt(12, 13), dt(12, 14), "car", vehicle_kind="own")]
         result = optimize(spec, moves, [fare(m.id, 10) for m in moves], [])
         self.assertEqual([m["id"] for m in result["routes"][0]["movements"]], [m.id for m in moves])
+
+    def test_one_way_trip_ends_in_the_last_city(self):
+        spec = trip(visits=[Visit(place=A, min_stay_hours=5), Visit(place=B, min_stay_hours=5)], one_way="from_home", ordered_visits=True)
+        moves = [movement("out", HOME, A, dt(10), dt(10, 10)), movement("ab", A, B, dt(11), dt(11, 10)),
+                 movement("back", B, HOME, dt(12), dt(12, 10))]
+        result = optimize(spec, moves, [fare(m.id, 10) for m in moves], [])
+        [route] = result["routes"]
+        self.assertEqual([m["id"] for m in route["movements"]], ["out", "ab"])
+        self.assertEqual(route["stays"][-1]["place_id"], B.id)
+        self.assertEqual(route["stays"][-1]["departure"], bounds(spec)[1].isoformat())
+
+    def test_one_way_to_home_starts_in_the_first_city(self):
+        spec = trip(visits=[Visit(place=A, min_stay_hours=5), Visit(place=B, min_stay_hours=5)], one_way="to_home", ordered_visits=True)
+        moves = [movement("out", HOME, A, dt(10), dt(10, 10)), movement("ab", A, B, dt(11), dt(11, 10)),
+                 movement("back", B, HOME, dt(12), dt(12, 10))]
+        result = optimize(spec, moves, [fare(m.id, 10) for m in moves], [])
+        [route] = result["routes"]
+        self.assertEqual([m["id"] for m in route["movements"]], ["ab", "back"])
+        self.assertEqual(route["stays"][0]["place_id"], A.id)
+        self.assertEqual(route["stays"][0]["arrival"], bounds(spec)[0].isoformat())
 
     def test_open_ended_itinerary_stays_keep_json_timestamps(self):
         spec = trip()

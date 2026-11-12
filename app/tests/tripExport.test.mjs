@@ -22,7 +22,7 @@ test("unpriced, ranged and foreign-currency fares are never shown as complete to
   route.total_cost_myr = null; route.cost_high_myr = null; route.cost_low_myr = 500;
   route.purchases[1].low = null; route.purchases[1].high = null; route.purchases[1].source = "unknown";
   let html = tripReportHtml([exportTrip(record)], generated);
-  assert.match(html, /From RM\s*500/);
+  assert.match(html, /RM\s*500 \+ unknown/);
   assert.match(html, /1 not priced: 1 flight/);
   assert.match(html, /The total is incomplete/);
   route.cost_high_myr = 1500;
@@ -34,10 +34,10 @@ test("unpriced, ranged and foreign-currency fares are never shown as complete to
 
 test("selected-option labels and categories survive export without renumbering", () => {
   const record = sampleTrip(), route = record.result.routes[0];
-  const trip = exportTrip(record, [{ label: "Option 37", route, category: "Weaker" }]);
+  const trip = exportTrip(record, [{ label: "Option 37", route, category: "More" }]);
   const html = tripReportHtml([trip], generated);
   assert.match(html, /Option 37/);
-  assert.match(html, /Weaker/);
+  assert.match(html, /More/);
   assert.equal((html.match(/class="itinerary"/g) ?? []).length, 1);
 });
 
@@ -47,7 +47,7 @@ test("all-trip reports include every result group and trips with no results", ()
   record.result.refinement_routes = [{ ...record.result.routes[0], id: "over" }];
   const empty = sampleTrip(); empty.spec.name = "Next holiday"; delete empty.result;
   const trip = exportTrip(record);
-  assert.deepEqual(trip.options.map(option => option.category), ["Best", "Weaker", "Over budget"]);
+  assert.deepEqual(trip.options.map(option => option.category), ["Best", "More", "Over budget"]);
   const html = tripReportHtml([trip, exportTrip(empty)], generated);
   assert.match(html, /Trip comparison/);
   assert.match(html, /Next holiday/);

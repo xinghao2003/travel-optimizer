@@ -235,8 +235,8 @@ test("money, durations and dates", () => {
 
 test("price text, estimates and price per city hour for exact, range and unbounded totals", () => {
   const one = exact("one", 5395, 218.25, { cost_per_stay_hour_myr: 24.72 }), two = range("two", 6187, 6227, 221.1333), three = partial("three", 2480, 218.25);
-  assert.deepEqual([one, two, three, exact("x", 5395.5, 200)].map(route => plain(priceText(route))), ["RM 5,395", "RM 6,187 – 6,227", "From RM 2,480", "RM 5,395.50"]);
-  assert.deepEqual([one, two, three, exact("y", 100, 0)].map(route => plain(perCityHourText(route))), ["RM 24.72 per city hour", "RM 28.0 – 28.2 per city hour", null, null]);
+  assert.deepEqual([one, two, three, exact("x", 5395.5, 200)].map(route => plain(priceText(route))), ["RM 5,395", "RM 6,187 – 6,227", "RM 2,480 + unknown", "RM 5,395.50"]);
+  assert.deepEqual([one, two, three, exact("y", 100, 0)].map(route => plain(perCityHourText(route))), ["RM 24.72 per hour in cities", "RM 28.0 – 28.2 per hour in cities", null, null]);
   assert.equal(priceEstimated({ purchases: [fare("f1", 900), noFare("f2")] }), false);
   assert.equal(priceEstimated({ purchases: [fare("f1", 900), fare("c1", 130, 130, { source: "rule" })] }), true);
   assert.equal(priceEstimated({ purchases: [fare("f1", 9000, 9000, { currency: "JPY" })] }), true);
@@ -281,7 +281,7 @@ test("option rows show only the exceptions as chips", () => {
   const unbounded = partial("p", 7000, 220);
   unbounded.movements = [flightTo("f1", "KUL", "PUS", { schedule_estimated: true })];
   unbounded.purchases = [noFare("f1"), noFare("f1:access", "Airport access")];
-  assert.deepEqual(chips(unbounded, { weaker: true, compared: true }), ["warn:2 not priced", "warn:Estimated timetable", "plain:Weaker", "plain:Compared"]);
+  assert.deepEqual(chips(unbounded, { weaker: true, compared: true }), ["warn:2 not priced", "warn:Estimated timetable", "plain:More", "plain:Compared"]);
   // Over-budget rows carry their own chip, not "May exceed budget".
   assert.deepEqual(chips(exact("o", 7000, 220), { overBudget: true }), ["warn:Over budget"]);
   assert.equal(hoursText(218.25), "218.3");

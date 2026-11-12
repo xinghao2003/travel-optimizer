@@ -48,7 +48,7 @@ export function tooltipLines(routes: Route[], numbers: Map<string, number>, rate
   const travel = same(route => `${hoursText(route.travel_hours)} h travel`);
   const lines = [
     title,
-    same(route => priceKind(route) === "lower" ? `${priceText(route)} (at least)` : priceText(route)),
+    same(route => priceText(route)),
     `${hoursText(routes[0].stay_hours)} h in cities${travel ? ` · ${travel}` : ""}`,
     same(route => unpricedSummary(route, rates).chip || (perCityHourText(route) ?? "")),
     same(route => priceEstimated(route) ? "Includes estimates" : ""),

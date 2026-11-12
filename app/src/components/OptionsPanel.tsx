@@ -43,7 +43,7 @@ function OptionRow({ route, number, name = "Option", selected, chips, placeName,
       {(perHour || chips.length > 0 || selected || comparison) && <span className="p-option-line p-option-meta">
         {perHour && <span className="p-option-per-hour">{perHour}</span>}
         {chips.map(chip => <span className="p-chip" data-tone={chip.tone} key={chip.text}>{chip.tone === "warn" && <CircleAlert size={12} aria-hidden="true" />}{chip.text}</span>)}
-        {selected ? <span className="p-option-comparison">Comparison baseline</span> : comparison && <span className="p-option-comparison p-option-comparison-details">
+        {!selected && comparison && <span className="p-option-comparison p-option-comparison-details">
           {comparison.value.summary}{comparison.value.rate && <> · {comparison.value.rate}</>}
         </span>}
       </span>}
@@ -141,7 +141,7 @@ export function OptionsPanel({ result, displayRoutes, numbers, refinement, selec
       </details> : chart}
 
       <div className="p-options-toolbar">
-        <p className="p-options-count">{best} best option{best === 1 ? "" : "s"}{weaker.size > 0 && ` · ${weaker.size} weaker`}</p>
+        <p className="p-options-count">{best} best option{best === 1 ? "" : "s"}{weaker.size > 0 && ` · ${weaker.size} more`}</p>
         <div className="p-options-sort">
           <label htmlFor={sortId}>Sort</label>
           <Select id={sortId} value={ranking} onValueChange={value => onRanking(value)}>
@@ -149,13 +149,13 @@ export function OptionsPanel({ result, displayRoutes, numbers, refinement, selec
             <SelectItem value="stay">Most time in cities</SelectItem>
             <SelectItem value="balanced">Best balance</SelectItem>
           </Select>
-          <InfoTip topic="sorting" align="end">Lowest price uses the highest possible price. Best balance uses weighted distance to the cheapest price and most city time, scaled using priced best options. Options without an upper price come last. Showing weaker options and changing chart axes do not change that scale. Sorting does not change which options are best.</InfoTip>
+          <InfoTip topic="sorting" align="end">Lowest price uses the highest possible price. Best balance uses weighted distance to the cheapest price and most city time, scaled using priced best options. Options without an upper price come last. Showing more options and changing chart axes do not change that scale. Sorting does not change which options are best.</InfoTip>
         </div>
         <div className="p-check-row">
-          <label className="p-check"><input type="checkbox" checked={showDominated} disabled={busy} onChange={event => onToggleDominated(event.target.checked)} />Show weaker options</label>
-          <InfoTip topic="weaker options" align="end">Other complete itineraries from this search. Another option costs the same or less, even at its highest price, and gives at least as much time in cities. Loading them recalculates saved data; no new search. Some were removed earlier in the search.</InfoTip>
+          <label className="p-check"><input type="checkbox" checked={showDominated} disabled={busy} onChange={event => onToggleDominated(event.target.checked)} />Show more options</label>
+          <InfoTip topic="more options" align="end">Other complete itineraries from this search. Each one has a best option that costs the same or less, even at its highest price, and gives at least as much time in cities. Loading them recalculates saved data; no new search. Some were removed earlier in the search.</InfoTip>
         </div>
-        <span className="p-hint" role="status">{loadingWeaker && "Loading weaker options…"}</span>
+        <span className="p-hint" role="status">{loadingWeaker && "Loading more options…"}</span>
         {ranking === "balanced" && <div className="p-balance-preference">
           <label htmlFor={balanceId}>Balance preference <span>{100 - timePreference}% price · {timePreference}% city time</span></label>
           <div><span>Lower price</span><input id={balanceId} type="range" min={0} max={100} step={5} value={timePreference}

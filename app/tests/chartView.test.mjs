@@ -56,13 +56,13 @@ test("stacks join options of one class at one rounded position, first option in 
 });
 test("tooltip lines per option and per stack",()=>{
  const numbers=new Map([["d",4],["e",5],["f",6],["g",7]]);
- assert.deepEqual(tooltipLines([demo[3]],numbers,{}).map(plain),["Option 04","From RM 5,400 (at least)","221.1 h in cities · 29.7 h travel","6 not priced"]);
- assert.deepEqual(tooltipLines(demo.slice(4,7),numbers,{}).map(plain),["Options 05, 06, 07","From RM 5,630 (at least)","220.2 h in cities · 30.0 h travel","8 not priced"]);
+ assert.deepEqual(tooltipLines([demo[3]],numbers,{}).map(plain),["Option 04","RM 5,400 + unknown","221.1 h in cities · 29.7 h travel","6 not priced"]);
+ assert.deepEqual(tooltipLines(demo.slice(4,7),numbers,{}).map(plain),["Options 05, 06, 07","RM 5,630 + unknown","220.2 h in cities · 30.0 h travel","8 not priced"]);
  // A line that differs inside a stack is left out.
  const mixed=[partial("e",5630,220.2167,8),partial("f",5630,220.2167,7,{travel_hours:28})];
- assert.deepEqual(tooltipLines(mixed,numbers,{}).map(plain),["Options 05, 06","From RM 5,630 (at least)","220.2 h in cities"]);
+ assert.deepEqual(tooltipLines(mixed,numbers,{}).map(plain),["Options 05, 06","RM 5,630 + unknown","220.2 h in cities"]);
  const priced=exact("p",5395,218.25,{purchases:[fare("f",5395,5395,{source:"user",estimated:true})]});
- assert.deepEqual(tooltipLines([priced],new Map([["p",1]]),{}).map(plain),["Option 01","RM 5,395","218.3 h in cities · 30.0 h travel","RM 24.72 per city hour","Includes estimates"]);
+ assert.deepEqual(tooltipLines([priced],new Map([["p",1]]),{}).map(plain),["Option 01","RM 5,395","218.3 h in cities · 30.0 h travel","RM 24.72 per hour in cities","Includes estimates"]);
  assert.deepEqual(tooltipLines([range("q",6187,6227,221.1333)],new Map([["q",2]]),{}).map(plain).slice(0,2),["Option 02","RM 6,187 – 6,227"]);
 });
 test("axis values include lows, range highs, exact totals and a near budget",()=>{

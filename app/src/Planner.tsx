@@ -660,7 +660,7 @@ export default function Planner({ storageActions, externalRevision = 0 }: { stor
   }
   // Show weaker options (E4): the first time, the saved trip is recalculated with them; it turns off again on failure.
   function toggleDominated(show: boolean) {
-    if (!show) { setShowDominated(false); setSaveStatus(current => current === "Weaker options loaded" ? "Saved" : current); return; }
+    if (!show) { setShowDominated(false); setSaveStatus(current => current === "More options loaded" ? "Saved" : current); return; }
     if (result?.dominated_routes !== undefined) { setShowDominated(true); return; }
     setShowDominated(true);
     void act(async () => {
@@ -668,7 +668,7 @@ export default function Planner({ storageActions, externalRevision = 0 }: { stor
         const record = await saveSpec();
         const updated = await api<Result>(`/trips/${record.id}/optimize`, "POST", { include_dominated: true });
         accept(await api<SavedTrip>(`/trips/${record.id}`)); acceptResult(updated, record.id);
-        setSaveStatus("Weaker options loaded");
+        setSaveStatus("More options loaded");
       } catch (err) { setShowDominated(false); throw err; }
     }, "weaker");
   }
@@ -732,8 +732,8 @@ export default function Planner({ storageActions, externalRevision = 0 }: { stor
         const overBudgetNumbers = new Map(refinement.map((route, index) => [route.id, index + 1]));
         const weakerNumbers = new Map((result?.dominated_routes ?? []).map((route, index) => [route.id, index + 1]));
         const describe = (route: Route): ExportOption => ({ route,
-          label: numbers.has(route.id) ? `Option ${optionNumber(numbers.get(route.id)!)}` : overBudgetNumbers.has(route.id) ? `Over-budget option ${optionNumber(overBudgetNumbers.get(route.id)!)}` : `Weaker option ${optionNumber(weakerNumbers.get(route.id)!)}`,
-          category: overBudgetNumbers.has(route.id) ? "Over budget" : weakerNumbers.has(route.id) ? "Weaker" : "Best",
+          label: numbers.has(route.id) ? `Option ${optionNumber(numbers.get(route.id)!)}` : overBudgetNumbers.has(route.id) ? `Over-budget option ${optionNumber(overBudgetNumbers.get(route.id)!)}` : `More option ${optionNumber(weakerNumbers.get(route.id)!)}`,
+          category: overBudgetNumbers.has(route.id) ? "Over budget" : weakerNumbers.has(route.id) ? "More" : "Best",
         });
         if (scope === "selected" && !selected) throw new Error("Select an itinerary before exporting.");
         const options = scope === "selected" ? [describe(selected!)] : [...displayRoutes, ...(showDominated ? [] : result?.dominated_routes ?? []), ...refinement].map(describe);

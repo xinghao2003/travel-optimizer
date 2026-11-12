@@ -78,9 +78,9 @@ test("production static root supports multiple trips, weaker options, copies, an
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.getByLabel("Trip name")).toHaveValue("Static acceptance trip");
   await expect(page.getByRole("heading", { name: /Options/ })).toBeVisible();
-  const weaker = page.getByLabel("Show weaker options", { exact: true });
+  const weaker = page.getByLabel("Show more options", { exact: true });
   await weaker.check();
-  await expect(page.locator(".p-save-status")).toContainText("Weaker options loaded");
+  await expect(page.locator(".p-save-status")).toContainText("More options loaded");
   await page.getByRole("tab", { name: "Itinerary", exact: true }).click();
   await expect(page.getByRole("tabpanel", { name: "Itinerary", exact: true }).getByRole("heading", { name: /^Option \d/ })).toBeVisible();
   await expect(page.locator(".planner-map canvas")).toBeVisible();

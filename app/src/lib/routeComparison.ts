@@ -7,7 +7,7 @@ const epsilon = 1e-6;
 const cents = (value: number) => Math.round(value * 100) / 100;
 const signedMoney = (value: number) => value === 0 ? moneyShort(0) : `${value > 0 ? "+" : "−"}${moneyShort(Math.abs(value))}`;
 const interval = (low: number, high: number, format: (value: number) => string) => low === high ? format(low) : `${format(low)} to ${format(high)}`;
-const signedHours = (value: number, unit: string) => Math.abs(value) < epsilon ? `same ${unit === "city h" ? "city time" : "travel time"}`
+const signedHours = (value: number, unit: string) => Math.abs(value) < epsilon ? `same ${unit === "h in cities" ? "time in cities" : "travel time"}`
   : `${value > 0 ? "+" : "−"}${Math.abs(value) < .1 ? "<0.1" : hoursText(Math.abs(value))} ${unit}`;
 
 /** Differences use full stored precision, never the rounded row labels. Missing prices are not treated as zero. */
@@ -20,22 +20,22 @@ export function compareRoute(route: ComparedRoute, baseline: ComparedRoute): Rou
   const high = routeHigh === null || baseHigh === null ? null
     : cents(routeHigh - (baseline.total_cost_myr ?? baseline.cost_low_myr));
   const price = low === null || high === null ? "Price difference unknown" : low === 0 && high === 0 ? "Same price" : interval(low, high, signedMoney);
-  const details = [`Price: ${price}.`, `City time: ${signedHours(hours, "city h")}.`,
+  const details = [`Price: ${price}.`, `Time in cities: ${signedHours(hours, "h in cities")}.`,
     `Travel time: ${signedHours(route.travel_hours - baseline.travel_hours, "travel h")}.`];
   let rate: string | null = null;
   if (low !== null && high !== null) {
     if (hours > epsilon && low >= 0) {
       if (high === 0) details.push("More city time at no extra cost.");
       else {
-        rate = `${interval(low / hours, high / hours, moneyShort)}/extra city h`;
+        rate = `${interval(low / hours, high / hours, moneyShort)}/extra hour in cities`;
         details.push(`Extra cost: ${rate}.`, `${interval(low / hours * 24, high / hours * 24, moneyShort)} per extra city day (24 hours).`);
       }
     } else if (hours < -epsilon && high <= 0) {
-      details.push(`Savings per city hour given up: ${interval(-high / -hours, -low / -hours, moneyShort)}.`);
+      details.push(`Savings per hour in cities given up: ${interval(-high / -hours, -low / -hours, moneyShort)}.`);
     } else if (hours > epsilon && high < 0) details.push("Cheaper and more city time.");
     else if (hours < -epsilon && low > 0) details.push("Costs more and gives less city time.");
   } else details.push("Fill in missing prices before comparing upgrade costs.");
-  return { summary: `${price} · ${signedHours(hours, "city h")}`, rate, details };
+  return { summary: `${price} · ${signedHours(hours, "h in cities")}`, rate, details };
 }
 
 /** Adjacent exact-price frontier steps reveal expensive final increments that a selected-baseline average hides. */

@@ -17,7 +17,7 @@ const legendText: Record<LegendItem, string> = {
   estimated: "Includes estimates (diamond)",
   range: "Price range (band; the marker is the middle, not an expected price)",
   lower: "At least this price: some items not priced (hollow circle with arrow)",
-  weaker: "Weaker option (grey)",
+  weaker: "More option (grey)",
   budget: "Your budget (dashed line)",
   selected: "Selected",
   compared: "Compared (dashed ring)",

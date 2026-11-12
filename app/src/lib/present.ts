@@ -92,10 +92,10 @@ export function dateRange(start: string, end: string) {
   return a.day === b.day ? `${b.day} ${b.month} ${b.year}` : `${a.day}–${b.day} ${b.month} ${b.year}`;
 }
 
-/** The total price of an option: "RM 5,395" (exact), "RM 6,187 – 6,227" (range) or "From RM 2,480" (some items not priced). */
+/** The total price of an option: "RM 5,395" (exact), "RM 6,187 – 6,227" (range) or "RM 2,480 + unknown" (some items not priced). */
 export function priceText(route: Pick<Route, "total_cost_myr" | "cost_low_myr" | "cost_high_myr">) {
   if (route.total_cost_myr !== null) return moneyShort(route.total_cost_myr);
-  if (route.cost_high_myr === null) return `From ${moneyShort(route.cost_low_myr)}`;
+  if (route.cost_high_myr === null) return `${moneyShort(route.cost_low_myr)} + unknown`;
   return `${moneyShort(route.cost_low_myr)} – ${amount(route.cost_high_myr)}`;
 }
 
@@ -143,11 +143,11 @@ export function unpricedSummary(route: Pick<Route, "purchases" | "movements">, r
   return { count: notPriced.length, openEnded: openEnded.length, chip, text };
 }
 
-/** "RM 24.72 per city hour" (exact) or "RM 28.0 – 28.2 per city hour" (range). Null when some items are not priced. */
+/** "RM 24.72 per hour in cities" (exact) or "RM 28.0 – 28.2 per hour in cities" (range). Null when some items are not priced. */
 export function perCityHourText(route: Pick<Route, "total_cost_myr" | "cost_low_myr" | "cost_high_myr" | "cost_per_stay_hour_myr" | "stay_hours">) {
   if (route.cost_high_myr === null || route.stay_hours <= 0) return null;
-  if (route.total_cost_myr !== null) return route.cost_per_stay_hour_myr === null ? null : `${moneyShort(route.cost_per_stay_hour_myr)} per city hour`;
-  return `${formatNumber(route.cost_low_myr / route.stay_hours, 1, "MYR")} – ${formatNumber(route.cost_high_myr / route.stay_hours, 1)} per city hour`;
+  if (route.total_cost_myr !== null) return route.cost_per_stay_hour_myr === null ? null : `${moneyShort(route.cost_per_stay_hour_myr)} per hour in cities`;
+  return `${formatNumber(route.cost_low_myr / route.stay_hours, 1, "MYR")} – ${formatNumber(route.cost_high_myr / route.stay_hours, 1)} per hour in cities`;
 }
 
 /** E9.4 amount of one purchase: "RM 2,180", "RM 210 – 250", "RM 900 or more" or "Not priced". */
@@ -236,7 +236,7 @@ export function optionChips(route: Route, { budget, rates, estimatedOnce, weaker
   const high = highest(route);
   if (!overBudget && budget !== null && high !== null && high > budget) chips.push({ text: "May exceed budget", tone: "warn" });
   if (route.movements.some(movement => movement.schedule_estimated)) chips.push({ text: "Estimated timetable", tone: "warn" });
-  if (weaker) chips.push({ text: "Weaker", tone: "plain" });
+  if (weaker) chips.push({ text: "More", tone: "plain" });
   if (overBudget) chips.push({ text: "Over budget", tone: "warn" });
   if (compared) chips.push({ text: "Compared", tone: "plain" });
   return chips;

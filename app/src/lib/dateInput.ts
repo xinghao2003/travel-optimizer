@@ -22,6 +22,36 @@ export function acceptsTemporalText(text: string, type: TemporalType): boolean {
   return pattern.test(text);
 }
 
+const masks: Record<TemporalType, { sizes: number[]; separators: string[] }> = {
+  date: { sizes: [4, 2, 2], separators: ["-", "-"] },
+  "datetime-local": { sizes: [4, 2, 2, 2, 2], separators: ["-", "-", " ", ":"] },
+  time: { sizes: [2, 2], separators: [":"] },
+};
+
+/**
+ * Insert separators while the user types digits, e.g. "20260501" -> "2026-05-01".
+ * A typed separator ends a short 2-digit group with a leading zero ("9:" -> "09:").
+ */
+export function formatTemporalText(raw: string, type: TemporalType): string {
+  const { sizes, separators } = masks[type];
+  const groups = [""];
+  for (const char of raw) {
+    const index = groups.length - 1, group = groups[index];
+    if (/\d/.test(char)) {
+      groups[index] = group + char;
+      if (groups[index].length === sizes[index]) {
+        if (index === sizes.length - 1) break;
+        groups.push("");
+      }
+    } else if (group && sizes[index] === 2) {
+      groups[index] = group.padStart(2, "0");
+      if (index === sizes.length - 1) break;
+      groups.push("");
+    }
+  }
+  return groups.reduce((text, group, index) => index === 0 ? group : text + separators[index - 1] + group, "");
+}
+
 export function temporalError(text: string, type: TemporalType, min?: string): string {
   if (!text) return "";
   const value = text.replace(" ", "T");

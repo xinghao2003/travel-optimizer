@@ -3,7 +3,7 @@ import * as Popover from "@radix-ui/react-popover";
 import { CalendarDays, Clock } from "lucide-react";
 import { DayPicker } from "react-day-picker";
 import "react-day-picker/style.css";
-import { acceptsTemporalText, calendarDateValue, parseCalendarDate, temporalError, type TemporalType } from "../../lib/dateInput";
+import { acceptsTemporalText, calendarDateValue, formatTemporalText, parseCalendarDate, temporalError, type TemporalType } from "../../lib/dateInput";
 import { Select, SelectItem } from "./select";
 
 type TemporalInputProps = Omit<ComponentProps<"input">, "type" | "value" | "onChange" | "min"> & {
@@ -55,7 +55,9 @@ export function TemporalInput({ type, value, onValueChange, min, id: suppliedId,
             onFocus={event => { focused.current = true; props.onFocus?.(event); }}
             onChange={event => {
               const raw = event.target.value;
-              if (acceptsTemporalText(raw, type)) commit(raw.replace(" ", "T"));
+              // Auto-insert separators only when typing or pasting at the end, so deletions and mid-text edits keep the caret.
+              const next = raw.length > text.length && event.target.selectionStart === raw.length ? formatTemporalText(raw, type) : raw;
+              if (acceptsTemporalText(next, type)) commit(next.replace(" ", "T"));
             }}
             onBlur={event => {
               focused.current = false;

@@ -115,7 +115,7 @@ export const parseSpec: Parser<TripSpec> = value => {
   const spec = model<TripSpec>(value, {
     name: defaults(text(1, 120), "My trip"), home: parsePlace, departures: defaults(array(parsePlace, 0, 3), []), arrivals: defaults(array(parsePlace, 0, 3), []),
     visits: array(input => model(input, { place: parsePlace, min_stay_hours: defaults(number(0, 8760), 0) }), 1, 4),
-    ordered_visits: defaults(bool, false), start_date: date, end_date: date, date_mode: defaults(enumeration(["fixed", "flexible"]), "fixed"),
+    ordered_visits: defaults(bool, false), one_way: defaults(nullable(enumeration(["from_home", "to_home"])), null), start_date: date, end_date: date, date_mode: defaults(enumeration(["fixed", "flexible"]), "fixed"),
     adults: defaults(number(1, 9, true), 1), budget_myr: money, modes: defaults(array(mode), ["flight", "rail", "bus", "coach"]),
     max_transfers: defaults(nullable(number(0, 10, true)), null), allow_overnight: defaults(bool, true), exclude_unpriced_flights: defaults(bool, false),
     rail_fallback: defaults(fallback, fallback({})), home_departure_earliest: defaults(nullable(time), null), home_arrival_latest: defaults(nullable(time), null),
@@ -131,6 +131,14 @@ export const parseSpec: Parser<TripSpec> = value => {
   if (ids.includes(spec.home.id)) fail("Required destinations must be unique and different from home.");
   if (!spec.departures.length) spec.departures = [spec.home];
   if (!spec.arrivals.length) spec.arrivals = [spec.home];
+  if (spec.one_way) {
+    // The direction without travel to or from home has no gateways, journeys or home time.
+    const unused = spec.one_way === "from_home" ? "return" : "outbound";
+    if (unused === "return") { spec.arrivals = [spec.home]; spec.home_arrival_latest = null; }
+    else { spec.departures = [spec.home]; spec.home_departure_earliest = null; }
+    spec.positioning_policies = (spec.positioning_policies ?? []).filter(p => p.direction !== unused);
+    spec.positioning_services = (spec.positioning_services ?? []).filter(s => s.direction !== unused);
+  }
   for (const group of [spec.departures, spec.arrivals]) unique(group.map(p => p.id), "Candidate endpoints must be unique.");
   for (const [code, rate] of Object.entries(spec.exchange_rates)) if ([...code].length !== 3 || !/^\p{L}+$/u.test(code) || rate <= 0) fail("Exchange rates must be positive MYR per unit of currency.");
   spec.exchange_rates.MYR = 1;

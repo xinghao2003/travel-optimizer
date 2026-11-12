@@ -722,7 +722,9 @@ const placeNames = (places: { name: string }[], home: { name: string } | null) =
 /** The two summary lines of a trip (C3): its places, then dates, departure times, adults, budget and transport. */
 export function tripSummary(draft: TripDraft) {
   const visits = draft.visits.map(visit => visit.min_stay_hours > 0 ? `${visit.place.name} ${visit.min_stay_hours} h+` : visit.place.name).join(", ");
-  const route = `${placeNames(draft.departures, draft.home)} → ${visits}${draft.visits.length > 1 ? draft.ordered_visits ? " (in this order)" : " (any order)" : ""} → ${placeNames(draft.arrivals, draft.home)}`;
+  const order = draft.visits.length > 1 ? draft.ordered_visits ? " (in this order)" : " (any order)" : "";
+  const route = [draft.one_way !== "to_home" && placeNames(draft.departures, draft.home), visits + order, draft.one_way !== "from_home" && placeNames(draft.arrivals, draft.home)]
+    .filter(Boolean).join(" → ") + (draft.one_way ? " (one way)" : "");
   const details = [
     `${dateRange(draft.start_date, draft.end_date)} (${draft.date_mode === "fixed" ? "exact dates" : "any days"})`,
     `leave ${hhmm(draft.departure_start)}–${hhmm(draft.departure_end)}`,
@@ -746,8 +748,8 @@ export function settingsSummaries(draft: TripDraft, batchSize: number, minutes: 
   const homeOnly = (places: { id: string }[]) => !places.length || (places.length === 1 && places[0].id === draft.home?.id);
   const journeys = draft.positioning_services?.length ?? 0;
   const places = group([
-    [`Start: ${placeNames(draft.departures, draft.home)}`, !homeOnly(draft.departures)],
-    [`End: ${placeNames(draft.arrivals, draft.home)}`, !homeOnly(draft.arrivals)],
+    ...(draft.one_way === "to_home" ? [] : [[`Start: ${placeNames(draft.departures, draft.home)}`, !homeOnly(draft.departures)] as [string, boolean]]),
+    ...(draft.one_way === "from_home" ? [] : [[`End: ${placeNames(draft.arrivals, draft.home)}`, !homeOnly(draft.arrivals)] as [string, boolean]]),
     ...(draft.home_departure_earliest ? [[`leave home after ${hhmm(draft.home_departure_earliest)}`, true] as [string, boolean]] : []),
     ...(draft.home_arrival_latest ? [[`be home by ${hhmm(draft.home_arrival_latest)}`, true] as [string, boolean]] : []),
     ...(journeys ? [[plural(journeys, "journey"), true] as [string, boolean]] : []),
@@ -820,7 +822,7 @@ export function validateDraft(draft: TripDraft): Record<string, string> {
   }
   if (!draft.departure_start || !draft.departure_end) errors.departureWindow = "Enter both departure times.";
   else if (hhmm(draft.departure_end) <= hhmm(draft.departure_start)) errors.departureWindow = "The latest departure must be after the earliest.";
-  if (draft.start_date === draft.end_date && draft.home_departure_earliest && draft.home_arrival_latest && hhmm(draft.home_arrival_latest) <= hhmm(draft.home_departure_earliest)) errors.homeTimes = "Be home after you leave home.";
+  if (!draft.one_way && draft.start_date === draft.end_date && draft.home_departure_earliest && draft.home_arrival_latest && hhmm(draft.home_arrival_latest) <= hhmm(draft.home_departure_earliest)) errors.homeTimes = "Be home after you leave home.";
   if (draft.visits.some(visit => !(Number.isFinite(visit.min_stay_hours) && visit.min_stay_hours > 0 && visit.min_stay_hours <= 8760))) errors.stays = "Enter a minimum stay greater than 0 and up to 8,760 hours for each city.";
   if (!Number.isInteger(draft.adults) || draft.adults < 1 || draft.adults > 9) errors.adults = "Enter 1 to 9 adults.";
   if (draft.budget_myr !== null && !(draft.budget_myr >= 0)) errors.budget = "Enter 0 or more, or leave it blank.";
@@ -836,9 +838,15 @@ function dayParts(value: string) {
 }
 
 /** The helper line under the date mode (C4): "Leave home on 4 Dec. Be back home on 14 Dec." or "Leave and come back on any days from 4 to 14 Dec." */
-export function dateModeText(draft: Pick<TripDraft, "start_date" | "end_date" | "date_mode">) {
+export function dateModeText(draft: Pick<TripDraft, "start_date" | "end_date" | "date_mode" | "one_way">) {
   const start = dayParts(draft.start_date), end = dayParts(draft.end_date);
   if (!start || !end) return "";
+  if (draft.one_way) {
+    if (draft.date_mode === "fixed") return draft.one_way === "from_home"
+      ? `Leave home on ${start.day} ${start.month}. The trip ends on ${end.day} ${end.month}.`
+      : `The trip starts on ${start.day} ${start.month}. Be back home on ${end.day} ${end.month}.`;
+    return `Travel on any days from ${start.month === end.month && start.year === end.year ? start.day : `${start.day} ${start.month}`} to ${end.day} ${end.month}.`;
+  }
   if (draft.date_mode === "fixed") return `Leave home on ${start.day} ${start.month}. Be back home on ${end.day} ${end.month}.`;
   const from = start.month === end.month && start.year === end.year ? start.day : `${start.day} ${start.month}`;
   return `Leave and come back on any days from ${from} to ${end.day} ${end.month}.`;

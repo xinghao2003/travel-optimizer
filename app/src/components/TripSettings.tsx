@@ -7,7 +7,7 @@ import { InfoTip } from "./InfoTip";
 import { Field, NumberField, PlacePicker } from "./PlannerForms";
 import { PositioningSettings } from "./PositioningSettings";
 import { dateModeText, formatLocal, modeLabel, settingsSummaries, staySumWarning, transitSearchModes, type FooterState, type SettingsSummary } from "../lib/present";
-import { localInputToISO, modes, type Place, type TripDraft, type TripSpec } from "../lib/planner";
+import { localInputToISO, modes, type OneWay, type Place, type TripDraft, type TripSpec } from "../lib/planner";
 
 const count = (n: number, word: string) => `${n} ${n === 1 ? word : `${word}s`}`;
 /** The minimum stay of a city in days, after a value has been entered. */
@@ -25,7 +25,7 @@ export function TripSettings({ draft, edit, places, errors, transitConfigured, s
   batchSize: number; onBatchSize: (value: number) => void;
   roundMinutes: number | null; onRoundMinutes: (value: number | null) => void;
 }) {
-  const reasonId = useId(), modesErrorId = useId(), dateModeName = useId(), windowErrorId = useId();
+  const reasonId = useId(), modesErrorId = useId(), dateModeName = useId(), tripTypeName = useId(), windowErrorId = useId();
   const changeHome = useRef<HTMLButtonElement>(null);
   const [changingHome, setChangingHome] = useState(false);
   // Polite status lines for what a change removed as well.
@@ -51,6 +51,17 @@ export function TripSettings({ draft, edit, places, errors, transitConfigured, s
       visits: draft.visits.filter(item => item.place.id !== place.id), commitments: draft.commitments.filter(item => item.place_id !== place.id) });
     setHomeStatus(visit ? `${place.name} removed from cities to visit.${appointments ? ` Also removed ${count(appointments, "appointment")} in ${place.name}.` : ""}` : "");
     homeFocus.current = "change"; setChangingHome(false);
+  }
+  // A one-way trip has no cities, journeys or home time on the side without home: choosing it removes them.
+  function setOneWay(oneWay: OneWay | null) {
+    if (!oneWay) return edit({ ...draft, one_way: null });
+    const unused = oneWay === "from_home" ? "return" : "outbound";
+    const journeys = draft.positioning_services?.filter(item => item.direction === unused).length ?? 0;
+    if (journeys && !window.confirm(`One way removes your ${count(journeys, "journey")} ${unused === "return" ? "from end" : "to start"} cities.`)) return;
+    edit({ ...draft, one_way: oneWay,
+      ...(unused === "return" ? { arrivals: [], home_arrival_latest: null } : { departures: [], home_departure_earliest: null }),
+      positioning_policies: draft.positioning_policies?.filter(item => item.direction !== unused),
+      positioning_services: draft.positioning_services?.filter(item => item.direction !== unused) });
   }
   function removeVisit(place: Place) {
     const appointments = draft.commitments.filter(item => item.place_id === place.id).length;
@@ -84,26 +95,36 @@ export function TripSettings({ draft, edit, places, errors, transitConfigured, s
   const changed = Object.values(summaries).flatMap(group => group.changes);
   const rail = draft.rail_fallback;
   const home = draft.home;
+  const homeTip = `The trip ${draft.one_way === "from_home" ? "starts" : draft.one_way === "to_home" ? "ends" : "starts and ends"} here. Time at home does not count as time in cities.`;
   // Home and cities to visit are missing on every new trip: the footer says so, the fields stay unmarked.
   const placeErrors = !isNew;
 
   return <section id="trip-settings" className="p-panel p-settings" aria-labelledby="settings-title">
     <h2 id="settings-title" tabIndex={-1}>Trip settings</h2>
-    {searchActive && <p className="p-notice">A search is running. Changing places, the visit order, dates, adults, transport, departure times, start and end cities or estimated train timetables stops it.</p>}
+    {searchActive && <p className="p-notice">A search is running. Changing places, the visit order, round trip or one way, dates, adults, transport, departure times, start and end cities or estimated train timetables stops it.</p>}
 
     <div className="p-settings-grid">
       <div className="p-setting">
         {home && !changingHome ? <div className="p-field">
-          <div className="p-field-label"><span className="p-label">Home city</span><InfoTip topic="home city">The trip starts and ends here. Time at home does not count as time in cities.</InfoTip></div>
+          <div className="p-field-label"><span className="p-label">Home city</span><InfoTip topic="home city">{homeTip}</InfoTip></div>
           <div className="p-home-chip">
             <span>{[home.name, home.country_code, home.airport_codes.join(", ")].filter(Boolean).join(" · ")}</span>
             <button ref={changeHome} type="button" className="p-text-button" aria-label="Change home city" onClick={() => { homeFocus.current = "picker"; setChangingHome(true); }}>Change</button>
           </div>
         </div> : <>
           <PlacePicker inputId="home-city" label="Home city" disabledIds={home ? [home.id] : []} onSelect={chooseHome}
-            info={<InfoTip topic="home city">The trip starts and ends here. Time at home does not count as time in cities.</InfoTip>} />
+            info={<InfoTip topic="home city">{homeTip}</InfoTip>} />
           {home && <button type="button" className="p-text-button" onClick={() => { homeFocus.current = "change"; setChangingHome(false); }}>Cancel</button>}
         </>}
+        <div className="p-check-row">
+          <fieldset className="p-radio-group">
+            <legend className="sr-only">Trip type</legend>
+            {([[null, "Round trip"], ["from_home", "One way from home"], ["to_home", "One way to home"]] as const).map(([value, label]) => <label className="p-check" key={label}>
+              <input type="radio" name={tripTypeName} checked={(draft.one_way ?? null) === value} onChange={() => setOneWay(value)} />{label}
+            </label>)}
+          </fieldset>
+          <InfoTip topic="one way" align="end">One way from home ends in the last city you visit; time there counts until the end date. One way to home starts in the first city you visit; time there counts from the start date.</InfoTip>
+        </div>
         <p className="p-field-status" aria-live="polite">{homeStatus}</p>
       </div>
 

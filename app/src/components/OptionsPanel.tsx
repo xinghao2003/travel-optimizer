@@ -131,7 +131,7 @@ export function OptionsPanel({ result, displayRoutes, numbers, refinement, selec
 
     <div className="p-options-heading">
       <h2 id="options-title" tabIndex={-1}>Options</h2>
-      <InfoTip topic="options">Each option is a complete trip from home and back. An option is shown when no other option found is both cheaper and gives more time in your cities. Best means best among the transport found and your settings, not every ticket on sale.</InfoTip>
+      <InfoTip topic="options">Each option is a complete trip from home and back, or one way to or from home. An option is shown when no other option found is both cheaper and gives more time in your cities. Best means best among the transport found and your settings, not every ticket on sale.</InfoTip>
     </div>
 
     {displayRoutes.length > 0 && <>

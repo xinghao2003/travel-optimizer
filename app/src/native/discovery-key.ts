@@ -25,6 +25,7 @@ export function discoveryKey(spec: TripSpec): string {
     parts.push("rail-fallback-v1", `enabled=True reference_date=${reference} max_shift_days=${settings.max_shift_days} station_radius_km=${pythonFloat(settings.station_radius_km)}`);
   }
   if (spec.ordered_visits && spec.visits.length > 1) parts.push("ordered-visits-v1");
+  if (spec.one_way) parts.push("one-way-v1", spec.one_way);
   if (spec.home_departure_earliest != null || spec.home_arrival_latest != null || spec.positioning_policies?.length) {
     const policies = (spec.positioning_policies ?? []).map(p => `direction=${repr(p.direction)} gateway_id=${repr(p.gateway_id)} mode=${repr(p.mode)} search_more=${p.search_more ? "True" : "False"} available=${p.available ? "True" : "False"}`);
     parts.push(spec.home_departure_earliest ?? null, spec.home_arrival_latest ?? null, policies);

@@ -49,7 +49,7 @@ export function solveNative(input: SolverInput, previous?: SearchState, seconds 
   const additions = supplied(spec), places = placesOf(spec);
   const movements = [...input.movements.filter(movement => movement.source !== SUPPLIED).map(normalizeJourney), ...additions.movements];
   const offers = [...additions.offers, ...input.offers.map(normalizeFare)], rules = input.rules;
-  const finishAtHome = input.finish_at_home ?? true, limit = input.label_limit ?? null;
+  const finishAtHome = (input.finish_at_home ?? true) && spec.one_way !== "from_home", limit = input.label_limit ?? null;
   const signature = fingerprint([4, spec, movements.map(journey => journey.raw), offers, rules, finishAtHome, ...(spec.exclude_unpriced_flights ? ["flight-cover-v2"] : [])]);
   const start = at(spec.start_date, spec.home_departure_earliest ?? "00:00", spec.home.timezone);
   const end = spec.home_arrival_latest != null ? at(spec.end_date, spec.home_arrival_latest, spec.home.timezone) : at(addDate(spec.end_date, 1), "00:00", spec.home.timezone) - 1n;
@@ -89,9 +89,13 @@ export function solveNative(input: SolverInput, previous?: SearchState, seconds 
     for (const [id, values] of added) for (const value of values) eventSet(id).add(value);
   }
   const bundleIds = new Set(offers.filter(offer => offer.validated && offer.movement_ids.length > 1).flatMap(offer => offer.movement_ids));
-  const initial: Label[] = spec.departures.map(gateway => ({ city: spec.home.id, phase: 0, mask: required.has(gateway.id) && gateway.id === spec.home.id ? bitOf(gateway.id) : 0,
-    arrival: start, path: [], stays: [], reward: false, own_location: spec.home.id, own_used: false, rental_pickup: null, rental_start: null,
-    charges: [], departure_gateway: gateway.id, arrival_gateway: "", price: null, return_mask: 0, revisiting: false, history: [], stay_hours: 0 }));
+  const blank = { arrival: start, path: [], stays: [], own_location: spec.home.id, own_used: false, rental_pickup: null, rental_start: null,
+    charges: [], arrival_gateway: "", price: null, return_mask: 0, revisiting: false, history: [], stay_hours: 0 };
+  // A trip to home is already in the first city visited at the start; its stay counts from then.
+  const initial: Label[] = spec.one_way === "to_home"
+    ? spec.visits.slice(0, spec.ordered_visits ? 1 : undefined).map(({ place: { id } }) => ({ ...blank, city: id, phase: 1, mask: bitOf(id), reward: true, departure_gateway: id }))
+    : spec.departures.map(gateway => ({ ...blank, city: spec.home.id, phase: 0, mask: required.has(gateway.id) && gateway.id === spec.home.id ? bitOf(gateway.id) : 0,
+      reward: false, departure_gateway: gateway.id }));
   const state: SearchState = previous?.signature === signature ? previous : { signature, queue: frontier(), labels: new Map(), completed: [], expanded: 0, pruned: 0 };
   if (state !== previous) for (const label of initial) enqueue(state.queue, label, spec.exchange_rates);
   const roundStartExpanded = state.expanded, expansionBudget = input.expansion_budget ?? null;
@@ -200,7 +204,7 @@ export function solveNative(input: SolverInput, previous?: SearchState, seconds 
   }
   function expand(initial: Label, target: string, journey: Journey, dep: bigint, arr: bigint, homeDate: string) {
     let current = initial;
-    if (!current.path.length && spec.date_mode === "fixed" && homeDate !== spec.start_date) return;
+    if (!current.path.length && spec.date_mode === "fixed" && homeDate !== spec.start_date && spec.one_way !== "to_home") return;
     if (current.rental_pickup !== null && journey.raw.vehicle_kind !== "rental") { const closed = rentalClose(current, dep); if (!closed) return; current = closed; }
     let rentalPickup = current.rental_pickup, rentalStart = current.rental_start;
     if (journey.raw.vehicle_kind === "rental" && rentalPickup === null) { if (!spec.cars.rental_pickups.includes(current.city)) return; rentalPickup = current.city; rentalStart = dep; }

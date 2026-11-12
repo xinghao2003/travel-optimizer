@@ -7,10 +7,13 @@ export type Place = { id: string; name: string; latitude: number; longitude: num
 export type Visit = { place: Place; min_stay_hours: number };
 export type PositioningPolicy = { direction: "outbound" | "return"; gateway_id: string; mode: Mode; search_more: boolean; available: boolean };
 export type PositioningService = { id: string; direction: "outbound" | "return"; gateway_id: string; mode: Mode; departure: string; arrival: string; fare_amount: number | null; currency: string; label: string };
+export type OneWay = "from_home" | "to_home";
 export type TripSpec = {
   name: string; home: Place; departures: Place[]; arrivals: Place[]; visits: Visit[];
   /** Visit the cities in the order of `visits`; otherwise the search picks the order. */
   ordered_visits?: boolean;
+  /** from_home ends in the last city visited; to_home starts in the first city visited. Unset is a round trip. */
+  one_way?: OneWay | null;
   start_date: string; end_date: string; date_mode: "fixed" | "flexible";
   adults: number; budget_myr: number | null; modes: Mode[]; max_transfers: number | null; allow_overnight: boolean;
   departure_start: string; departure_end: string;

@@ -19,15 +19,21 @@ export function* permutations<T>(values: T[], count = values.length): Generator<
   if (count === 0) { yield []; return; }
   for (let i = 0; i < values.length; i++) for (const tail of permutations([...values.slice(0, i), ...values.slice(i + 1)], count - 1)) yield [values[i], ...tail];
 }
+/** Visit orders, with revisits on the way back for trips that return home. */
 function* visitOrders(spec: TripSpec) {
   const ids = spec.visits.map(v => v.place.id);
   const firsts = spec.ordered_visits ? [ids] : permutations(ids);
   for (const first of firsts) {
     yield first;
+    if (spec.one_way === "from_home") continue;
     for (let count = 1; count < first.length; count++) for (const suffix of permutations(first.slice(0, -1), count)) yield [...first, ...suffix];
   }
 }
 const compact = (path: string[]) => path.filter((id, i) => i === 0 || id !== path[i - 1]);
+/** The places before the first visit: home and the start city, or none for a trip that starts there. */
+const tripHead = (spec: TripSpec, departure: Place) => spec.one_way === "to_home" ? [] : [spec.home.id, departure.id];
+/** The places after the last visit: the end city and home, or none for a trip that ends there. */
+const tripTail = (spec: TripSpec, arrival: Place) => spec.one_way === "from_home" ? [] : [arrival.id, spec.home.id];
 export function seedDates(spec: TripSpec): string[] {
   const days = daysBetween(spec.start_date, spec.end_date), count = spec.visits.length + 1;
   return Array.from({ length: count }, (_, i) => addDate(spec.start_date, round(days * i / Math.max(1, count - 1), 0)));
@@ -40,7 +46,7 @@ export function roughDateWindows(spec: TripSpec): Map<string, [bigint, bigint]> 
   }
   const stays = new Map(spec.visits.map(v => [v.place.id, v.min_stay_hours]));
   for (const order of visitOrders(spec)) for (const departure of spec.departures) for (const arrival of spec.arrivals) {
-    const path = compact([spec.home.id, departure.id, ...order.filter(id => id !== departure.id), arrival.id, spec.home.id]);
+    const path = compact([...tripHead(spec, departure), ...order.filter(id => id !== departure.id), ...tripTail(spec, arrival)]);
     const unspent = new Set(stays.keys());
     let elapsed = 0;
     for (let i = 0; i + 1 < path.length; i++) {
@@ -75,11 +81,13 @@ export function tasksFor(spec: TripSpec, metros: MetroAirports, transitEnabled: 
   }
   const dates = seedDates(spec);
   for (const order of visitOrders(spec)) for (const departure of spec.departures) for (const arrival of spec.arrivals) {
-    const path = compact([spec.home.id, departure.id, ...order, arrival.id, spec.home.id]);
+    const path = compact([...tripHead(spec, departure), ...order, ...tripTail(spec, arrival)]);
+    // Leg i leaves the i-th place of a round trip; a trip from the first city skips the leg from home.
+    const shift = spec.one_way === "to_home" ? 1 : -Number(departure.id !== spec.home.id);
     for (let i = 0; i + 1 < path.length; i++) {
-      let day = dates[Math.min(dates.length - 1, Math.max(0, i - Number(departure.id !== spec.home.id)))];
-      if (i === 0) day = spec.start_date;
-      if (i === path.length - 2) day = spec.end_date;
+      let day = dates[Math.min(dates.length - 1, Math.max(0, i + shift))];
+      if (i === 0 && spec.one_way !== "to_home") day = spec.start_date;
+      if (i === path.length - 2 && spec.one_way !== "from_home") day = spec.end_date;
       if (spec.modes.includes("flight")) task(path[i], path[i + 1], day, "flight");
       if (hasTransit) task(path[i], path[i + 1], day, "transit");
     }
@@ -98,7 +106,8 @@ export function tasksFor(spec: TripSpec, metros: MetroAirports, transitEnabled: 
     days.push(item.date); flightDays.set(key, days);
   }
   const minimum = duration(spec.visits.reduce((sum, visit) => sum + visit.min_stay_hours, 0), HOUR), bundles: DiscoveryTask[] = [];
-  for (const gateway of spec.departures) {
+  // A one-way trip never both leaves and comes back to a gateway, so round trips cannot apply.
+  for (const gateway of spec.one_way ? [] : spec.departures) {
     if (!spec.arrivals.some(p => p.id === gateway.id)) continue;
     let earliest = start, latest = end;
     if (gateway.id !== spec.home.id) for (const direction of ["outbound", "return"] as const) {

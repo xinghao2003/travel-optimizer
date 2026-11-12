@@ -12,8 +12,6 @@ type Direction = PositioningPolicy["direction"];
 type PolicyValue = "search" | "supplied" | "unavailable";
 const policyLabels: Record<PolicyValue, string> = { search: "Search", supplied: "Your journeys only", unavailable: "Don't use" };
 const count = (n: number, word: string) => `${n} ${n === 1 ? word : `${word}s`}`;
-/** A trip date (YYYY-MM-DD) as "4 Dec"; blank while the date input is cleared or holds an invalid date (a 5-digit year). */
-const tripDay = (date: string) => date && !Number.isNaN(Date.parse(`${date}T00:00:00Z`)) ? formatLocal(`${date}T00:00:00Z`, "UTC", "day") : "";
 
 /**
  * "Start the trip from" or "End the trip at" (G). An empty list means home only. Home is checked when the list is
@@ -147,30 +145,40 @@ function GatewayPositioning({ draft, gateway, direction, edit }: {
 }
 
 /**
- * The body of More settings › Start and end cities (G): the start and end lists, the home times and one
- * disclosure per start or end city and direction. `homeTimesError` is validateDraft's homeTimes error.
+ * Where's home › other start and end cities. On a round trip one list covers both directions until the user
+ * chooses "Different on the way back", which shows the separate start and end lists (with home as a choice).
+ * Each other city has its travel settings to and from home.
  */
-export function PositioningSettings({ draft, edit, homeTimesError }: { draft: TripDraft; edit: (value: TripDraft) => void; homeTimesError?: string }) {
+export function StartCities({ draft, edit }: { draft: TripDraft; edit: (value: TripDraft) => void }) {
   const home = draft.home;
-  const start = tripDay(draft.start_date), end = tripDay(draft.end_date);
-  // A one-way trip has no travel from or to home on one side.
   const used: Direction[] = draft.one_way === "from_home" ? ["outbound"] : draft.one_way === "to_home" ? ["return"] : ["outbound", "return"];
-  return <>
-    <div className="p-group-columns">
-      {used.includes("outbound") && <EndpointList draft={draft} edit={edit} direction="outbound" />}
-      {used.includes("return") && <EndpointList draft={draft} edit={edit} direction="return" />}
-    </div>
-    <div className="p-subhead"><h3>Home times{home ? ` (${home.timezone})` : ""}</h3><InfoTip topic="home times">Blank means any time on that day. Also applies with flexible dates.</InfoTip></div>
-    <div className="p-group-fields">
-      {used.includes("outbound") && <Field label={<>Leave home after{start && <span className="sr-only"> on {start}</span>}</>} unit={start ? `on ${start}` : undefined}>
-        <TemporalInput type="time" value={draft.home_departure_earliest ?? ""} onValueChange={value => edit({ ...draft, home_departure_earliest: value || null })} />
-      </Field>}
-      {used.includes("return") && <Field label={<>Be home by{end && <span className="sr-only"> on {end}</span>}</>} unit={end ? `on ${end}` : undefined} error={homeTimesError}>
-        <TemporalInput type="time" value={draft.home_arrival_latest ?? ""} onValueChange={value => edit({ ...draft, home_arrival_latest: value || null })} />
-      </Field>}
-    </div>
-    {home && used.flatMap(direction => (direction === "outbound" ? draft.departures : draft.arrivals)
-      .filter(gateway => gateway.id !== home.id)
+  const others = (list: Place[]) => list.filter(place => place.id !== home?.id);
+  const homeIn = (list: Place[]) => !list.length || list.some(place => place.id === home?.id);
+  const ids = (list: Place[]) => others(list).map(place => place.id).sort().join("|");
+  const same = used.length === 1 || (ids(draft.departures) === ids(draft.arrivals) && homeIn(draft.departures) && homeIn(draft.arrivals));
+  const [split, setSplit] = useState(!same);
+  if (!home) return null;
+  const separate = split && used.length === 2;
+  const key = (direction: Direction) => direction === "outbound" ? "departures" as const : "arrivals" as const;
+  const shared = others(draft[key(used[0])]);
+  const full = shared.length >= 2;
+  // Home stays a choice; the engine reads a list with only home as [].
+  const setShared = (places: Place[]) => edit({ ...draft, ...Object.fromEntries(used.map(direction => [key(direction), places.length ? [home, ...places] : []])) });
+  const label = used.length === 2 ? "Also leave from and return to" : used[0] === "outbound" ? "Also leave from" : "Also return to";
+  return <div className="p-start-cities">
+    {separate ? <div className="p-group-columns">{used.map(direction => <EndpointList key={direction} draft={draft} edit={edit} direction={direction} />)}</div> : <>
+      <PlacePicker label={label} placeholder="Another city, e.g. one with more flights" disabled={full} limitText={`${shared.length} of 2`}
+        hint={full ? "Up to 2 other cities." : undefined} disabledIds={[home.id, ...shared.map(place => place.id)]}
+        onSelect={place => { if (!full) setShared([...shared, place]); }} />
+      {shared.length > 0 && <div className="p-chips">{shared.map(place => <span key={place.id}>{place.name}
+        <button type="button" aria-label={`Remove ${place.name}`} onClick={() => setShared(shared.filter(item => item.id !== place.id))}>×</button>
+      </span>)}</div>}
+    </>}
+    {used.length === 2 && <button type="button" className="p-text-button" onClick={() => {
+      if (separate) { const list = others(draft.departures); edit({ ...draft, departures: list.length ? [home, ...list] : [], arrivals: list.length ? [home, ...list] : [] }); }
+      setSplit(!separate);
+    }}>{separate ? "Same cities on the way back" : "Different on the way back"}</button>}
+    {used.flatMap(direction => draft[key(direction)].filter(gateway => gateway.id !== home.id)
       .map(gateway => <GatewayPositioning key={`${home.id}:${direction}:${gateway.id}`} draft={draft} gateway={gateway} direction={direction} edit={edit} />))}
-  </>;
+  </div>;
 }

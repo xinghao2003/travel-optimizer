@@ -217,7 +217,7 @@ const exact = (id, total, stay_hours, extra = {}) => option(id, { total_cost_myr
 const range = (id, low, high, stay_hours) => option(id, { cost_low_myr: low, cost_high_myr: high, stay_hours });
 const partial = (id, low, stay_hours) => option(id, { cost_low_myr: low, stay_hours });
 const kualaLumpur = { ...place("KUL", "Kuala Lumpur"), timezone: "Asia/Kuala_Lumpur" };
-const draftTrip = (extra = {}) => ({ ...blankTrip(), home: kualaLumpur, visits: spec.visits, start_date: "2026-12-04", end_date: "2026-12-14", ...extra });
+const draftTrip = (extra = {}) => ({ ...blankTrip(), date_mode: "fixed", home: kualaLumpur, visits: spec.visits, start_date: "2026-12-04", end_date: "2026-12-14", ...extra });
 
 test("money, durations and dates", () => {
   assert.equal(plain(moneyShort(5395)), "RM 5,395");
@@ -294,7 +294,7 @@ test("the options empty state follows the search and explains why nothing fits",
   const state = (extra = {}) => optionsEmptyState({ ...base, ...extra });
   const lines = value => value && value.lines.map(line => [plain(line.text), line.action?.target ?? null]);
   assert.equal(state({ best: 3 }), null);
-  assert.deepEqual(lines(state({ searched: false })), [["No options yet. Search transport to find options. They appear while the search runs.", null]]);
+  assert.deepEqual(lines(state({ searched: false })), [["No options yet. Find trips to see options. They appear while the search runs.", null]]);
   assert.deepEqual(lines(state({ active: true, pending: 85 })), [["Searching. The first options appear after a few searches.", null]]);
   assert.deepEqual(lines(state({ pending: 41 })), [["No complete itinerary yet. 41 searches are left.", null]]);
   assert.deepEqual(lines(state({ pending: 1 })), [["No complete itinerary yet. 1 search is left.", null]]);
@@ -356,9 +356,9 @@ test("the status strip shows the first matching state and routes Check more comb
   assert.equal(running.actions[0].tip, "Found options and your prices are kept.");
   assert.deepEqual(row(strip({ result: { ...done, discovery_required: true }, job: job("paused", { pending: 41 }) })), ["stale", "Your trip changed. Search again to include the changes. Options shown use the earlier search.", "Search again:search"]);
   assert.equal(strip({ job: job("superseded", { pending: 41 }) }).id, "stale");
-  assert.deepEqual(row(strip({ saved: { snapshot: null }, result: null })), ["not-searched", "Not searched yet.", "Search transport:search"]);
+  assert.deepEqual(row(strip({ saved: { snapshot: null }, result: null })), ["not-searched", "Not searched yet.", "Find trips:search"]);
   // The server marks the result of a trip that was never searched as discovery_required.
-  assert.deepEqual(row(strip({ saved: { snapshot: null }, result: { discovery_required: true, optimization_complete: true, coverage: {} } })), ["not-searched", "Not searched yet.", "Search transport:search"]);
+  assert.deepEqual(row(strip({ saved: { snapshot: null }, result: { discovery_required: true, optimization_complete: true, coverage: {} } })), ["not-searched", "Not searched yet.", "Find trips:search"]);
   const paused = strip({ job: job("paused", { pending: 41, batch_budget: 100 }) });
   assert.deepEqual(row(paused), ["paused", "Search paused · 41 searches left.", "Search more:continue"]);
   assert.equal(paused.tip, "The search pauses after each batch of 100 new requests to data providers. Search more runs the next batch. Saved results are reused.");
@@ -537,16 +537,16 @@ test("trip summary lines", () => {
 });
 
 test("settings summaries show each group and what differs from the defaults", () => {
-  const defaults = settingsSummaries(draftTrip(), 100);
+  const defaults = settingsSummaries(draftTrip({ date_mode: "flexible" }), 100);
   assert.deepEqual(Object.fromEntries(Object.entries(defaults).map(([key, group]) => [key, group.summary])), {
     places: "Home only",
-    departures: "Leave 09:00–17:00 · any number of changes · overnight allowed",
+    departures: "Any days · depart any time · any number of changes · overnight allowed",
     buffers: "Flights 90 + 30 min · trains and buses 15 + 10 min · changes 30 min · airport transfer 45 min",
     appointments: "None", cars: "Not used", prices: "MYR only", timetables: "Off", searchSize: "100 requests per batch",
   });
   assert.deepEqual(Object.values(defaults).flatMap(group => group.changes), []);
   const base = blankTrip();
-  const changed = settingsSummaries(draftTrip({
+  const changed = settingsSummaries(draftTrip({ date_mode: "flexible",
     departures: [kualaLumpur, place("SIN", "Singapore")], home_departure_earliest: "07:00:00",
     positioning_services: [{ id: "s1", direction: "outbound", gateway_id: "SIN", mode: "rail", departure: "2026-12-03T23:00:00Z", arrival: "2026-12-04T04:30:00Z", fare_amount: null, currency: "MYR", label: "ETS" }],
     max_transfers: 1, timing: { ...base.timing, airport_transfer_fallback_minutes: null },
@@ -567,7 +567,7 @@ test("settings summaries show each group and what differs from the defaults", ()
 
 test("draft validation lists errors in the order the settings footer reports them", () => {
   assert.deepEqual(validateDraft(draftTrip()), {});
-  const empty = validateDraft({ ...blankTrip(), modes: [], start_date: "2026-12-14", end_date: "2026-12-04", departure_end: "09:00" });
+  const empty = validateDraft({ ...blankTrip(), modes: [], start_date: "2026-12-14", end_date: "2026-12-04", departure_start: "17:00", departure_end: "09:00" });
   assert.deepEqual(Object.keys(empty), ["home", "visits", "modes", "dates", "departureWindow"]);
   assert.equal(Object.values(empty)[0], "Add your home city.");
   assert.equal(empty.visits, "Add at least one city to visit.");
@@ -617,10 +617,10 @@ test("the settings footer states", () => {
   const labels = state => state.buttons.map(button => button.label);
   const fresh = settingsFooter({ ...flags, isNew: true, searched: false });
   assert.equal(fresh.text, "Ready. The search can take a few minutes.");
-  assert.deepEqual(labels(fresh), ["Save without searching", "Search transport"]);
+  assert.deepEqual(labels(fresh), ["Save without searching", "Find trips"]);
   assert.deepEqual(fresh.buttons.map(button => button.run), ["save", "search"]);
   // The result of a trip that was never searched is marked stale too.
-  assert.deepEqual(labels(settingsFooter({ ...flags, searched: false, stale: true })), ["Search transport"]);
+  assert.deepEqual(labels(settingsFooter({ ...flags, searched: false, stale: true })), ["Find trips"]);
   const stale = settingsFooter({ ...flags, stale: true });
   assert.deepEqual([stale.text, labels(stale), stale.disabled], ["Your changes need a new search.", ["Search again"], false]);
   const idle = settingsFooter(flags);
@@ -629,7 +629,7 @@ test("the settings footer states", () => {
   const active = settingsFooter({ ...flags, active: true, stale: true });
   assert.deepEqual([active.text, active.disabled], ["Searching…", true]);
   const invalid = settingsFooter({ ...flags, isNew: true, searched: false, errors: { home: "Add your home city.", modes: "Choose at least one type of transport." } });
-  assert.deepEqual([invalid.text, labels(invalid), invalid.disabled], ["Add your home city.", ["Save without searching", "Search transport"], true]);
+  assert.deepEqual([invalid.text, labels(invalid), invalid.disabled], ["Add your home city.", ["Save without searching", "Find trips"], true]);
 });
 
 test("airport transfer directions show their use, missing prices, own prices and order", () => {

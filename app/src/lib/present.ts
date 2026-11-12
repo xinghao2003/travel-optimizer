@@ -1,4 +1,5 @@
 import { blankTrip, defaultBatchSize, localInputToISO, modes, type AirportConnectionRequirement, type AirportTransferMode, type AirportTransferRow, type ApiError, type Charge, type Coverage, type Job, type Mode, type Movement, type Offer, type PricingRule, type Result, type Route, type SavedTrip, type Segment, type TripDraft } from "./planner";
+import { departsAnyTime } from "./plan";
 import type { MissingFareGroup } from "./missingFares";
 import type { OptimizationJob } from "./planner";
 
@@ -344,7 +345,7 @@ export function searchState({ invalid, dirty, saved, result, job, minutes, apply
   });
   // Before the stale row (C3.1 has it after): the planner also marks the result of a trip that was
   // never searched as discovery_required, because no saved search matches the trip yet.
-  if (!searched) return state("not-searched", "info", "Not searched yet.", [{ label: "Search transport", run: "search" }]);
+  if (!searched) return state("not-searched", "info", "Not searched yet.", [{ label: "Find trips", run: "search" }]);
   if (stale) return state("stale", "warn", "Your trip changed. Search again to include the changes. Options shown use the earlier search.", [{ label: "Search again", run: "search" }]);
   if (job?.updating_options && ["paused", "cancelled", "interrupted"].includes(status!)) return state(status === "cancelled" ? "stopped" : status!, "info",
     "Changes saved. Continue the round to update options.", [timedContinue], { secondary: null });
@@ -727,7 +728,7 @@ export function tripSummary(draft: TripDraft) {
     .filter(Boolean).join(" → ") + (draft.one_way ? " (one way)" : "");
   const details = [
     `${dateRange(draft.start_date, draft.end_date)} (${draft.date_mode === "fixed" ? "exact dates" : "any days"})`,
-    `leave ${hhmm(draft.departure_start)}–${hhmm(draft.departure_end)}`,
+    ...(departsAnyTime(draft) ? [] : [`leave ${hhmm(draft.departure_start)}–${hhmm(draft.departure_end)}`]),
     plural(draft.adults, "adult"),
     draft.budget_myr === null ? "no budget" : `budget ${moneyShort(draft.budget_myr)}`,
     modes.filter(mode => draft.modes.includes(mode)).map(modeLabel).join(", "),
@@ -755,10 +756,11 @@ export function settingsSummaries(draft: TripDraft, batchSize: number, minutes: 
     ...(journeys ? [[plural(journeys, "journey"), true] as [string, boolean]] : []),
   ], "Home only");
 
-  const leave = (trip: TripDraft) => `${hhmm(trip.departure_start)}–${hhmm(trip.departure_end)}`;
+  const leave = (trip: TripDraft) => departsAnyTime(trip) ? "depart any time" : `leave ${hhmm(trip.departure_start)}–${hhmm(trip.departure_end)}`;
   const transfers = draft.max_transfers === null ? "any number of changes" : draft.max_transfers === 0 ? "no changes" : `max ${plural(draft.max_transfers, "change")}`;
   const departures = group([
-    [`leave ${leave(draft)}`, leave(draft) !== leave(defaults)],
+    [draft.date_mode === "fixed" ? "exact dates" : "any days", draft.date_mode !== defaults.date_mode],
+    [leave(draft), leave(draft) !== leave(defaults)],
     [transfers, draft.max_transfers !== defaults.max_transfers],
     [draft.allow_overnight ? "overnight allowed" : "no overnight journeys", draft.allow_overnight !== defaults.allow_overnight],
   ]);
@@ -882,7 +884,7 @@ export function settingsFooter({ errors, isNew, searched, active, stale }: {
   errors: Record<string, string>; isNew: boolean; searched: boolean; active: boolean; stale: boolean;
 }): FooterState {
   const ready = "Ready. The search can take a few minutes.";
-  const search: FooterButton = { label: "Search transport", run: "search", variant: "default" };
+  const search: FooterButton = { label: "Find trips", run: "search", variant: "default" };
   const restart: FooterButton = { label: "Start a new search", run: "search", variant: "secondary" };
   const state: FooterState = active ? { text: "Searching…", buttons: [restart], disabled: true }
     : isNew ? { text: ready, buttons: [{ label: "Save without searching", run: "save", variant: "ghost" }, search], disabled: false }
@@ -1206,7 +1208,7 @@ export function optionsEmptyState({ searched, active, pending, hasResult, best, 
 }): EmptyState | null {
   if (best > 0) return null;
   const line = (text: string, action: OptionsAction | null = null) => ({ text, action });
-  if (!searched) return { id: "not-searched", title: null, lines: [line("No options yet. Search transport to find options. They appear while the search runs.")] };
+  if (!searched) return { id: "not-searched", title: null, lines: [line("No options yet. Find trips to see options. They appear while the search runs.")] };
   if (excludeUnpricedFlights && hiddenUnpricedFlights > 0) return { id: "unpriced-flights", title: "Itineraries found, but flight prices are missing", lines: [
     line(`${plural(hiddenUnpricedFlights, "complete itinerary", "complete itineraries")} found so far ${hiddenUnpricedFlights === 1 ? "is" : "are"} hidden because at least one flight has no applicable price.`, { label: "Show them", target: "show-unpriced-flights" }),
     line("A round-trip price applies only when both matching flights are included. Add missing flight prices to compare complete totals."),

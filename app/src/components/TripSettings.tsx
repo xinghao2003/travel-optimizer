@@ -5,19 +5,18 @@ import { ChevronDown, GripVertical, LoaderCircle, Play } from "lucide-react";
 import { Button } from "./ui/button";
 import { InfoTip } from "./InfoTip";
 import { Field, NumberField, PlacePicker } from "./PlannerForms";
-import { PositioningSettings } from "./PositioningSettings";
+import { StartCities } from "./PositioningSettings";
+import { anyDeparture, autoStayHours, availabilityText, departsAnyTime, groupState, isAutoStay, setGroup, stayText, transportGroups, withAutoStays } from "../lib/plan";
 import { dateModeText, formatLocal, modeLabel, settingsSummaries, staySumWarning, transitSearchModes, type FooterState, type SettingsSummary } from "../lib/present";
-import { localInputToISO, modes, type OneWay, type Place, type TripDraft, type TripSpec } from "../lib/planner";
+import { localInputToISO, type OneWay, type Place, type TripDraft, type TripSpec } from "../lib/planner";
 
 const count = (n: number, word: string) => `${n} ${n === 1 ? word : `${word}s`}`;
-/** The minimum stay of a city in days, after a value has been entered. */
-const stayDays = (hours: number) => hours > 0 ? count(Number((hours / 24).toFixed(1)), "day") : "";
 
 /**
  * Trip settings (C4): the core fields, More settings (G) and the sticky footer with the search actions.
  * `errors` is validateDraft(draft). The forms in More settings show their own errors inline (C2).
  */
-export function TripSettings({ draft, edit, places, errors, transitConfigured, searchActive, partyNotice, isNew, footer, busyAction, onSearch, onSaveOnly, batchSize, onBatchSize, roundMinutes, onRoundMinutes }: {
+export function TripSettings({ draft, edit: setDraft, places, errors, transitConfigured, searchActive, partyNotice, isNew, footer, busyAction, onSearch, onSaveOnly, batchSize, onBatchSize, roundMinutes, onRoundMinutes }: {
   draft: TripDraft; edit: (value: TripDraft) => void; places: Place[]; errors: Record<string, string>;
   transitConfigured: boolean; searchActive: boolean; partyNotice: string | null; isNew: boolean;
   footer: FooterState; busyAction: string | null; onSearch: () => void; onSaveOnly: () => void;
@@ -25,7 +24,9 @@ export function TripSettings({ draft, edit, places, errors, transitConfigured, s
   batchSize: number; onBatchSize: (value: number) => void;
   roundMinutes: number | null; onRoundMinutes: (value: number | null) => void;
 }) {
-  const reasonId = useId(), modesErrorId = useId(), dateModeName = useId(), tripTypeName = useId(), windowErrorId = useId();
+  // Automatic minimum stays follow the free time and the number of cities.
+  const edit = (next: TripDraft) => setDraft(withAutoStays(draft, next));
+  const reasonId = useId(), modesErrorId = useId(), windowErrorId = useId(), fromId = useId(), untilId = useId();
   const changeHome = useRef<HTMLButtonElement>(null);
   const [changingHome, setChangingHome] = useState(false);
   // Polite status lines for what a change removed as well.
@@ -79,150 +80,155 @@ export function TripSettings({ draft, edit, places, errors, transitConfigured, s
     setVisitStatus(`${item.place.name} moved to position ${to + 1} of ${next.length}.`);
     requestAnimationFrame(() => document.getElementById(`visit-handle-${item.place.id}`)?.focus());
   }
-  // Departure window › Change: opens More settings › Departure times and changes, then focuses the earliest time.
-  function changeDepartureTimes() {
-    const field = document.getElementById("setting-departure-start");
-    for (let group = field?.closest("details"); group; group = group.parentElement?.closest("details")) group.open = true;
-    field?.focus();
-  }
 
   const visits = draft.visits;
   const full = visits.length >= 4;
   const ordered = !!draft.ordered_visits && visits.length > 1;
-  const firstStay = visits[0]?.min_stay_hours ?? 0;
   const staySum = staySumWarning(draft);
   const summaries = settingsSummaries(draft, batchSize, roundMinutes);
-  const changed = Object.values(summaries).flatMap(group => group.changes);
+  const transitTypes = transportGroups[1].modes.filter(mode => draft.modes.includes(mode));
+  const transitSummary: SettingsSummary = { summary: transitTypes.length ? transitTypes.map(modeLabel).join(", ") : "Off",
+    changes: groupState(draft.modes, transportGroups[1]) === "some" ? ["Some trains & buses"] : [] };
+  const changed = [...Object.entries(summaries).filter(([key]) => key !== "places").flatMap(([, group]) => group.changes), ...transitSummary.changes];
+  const auto = autoStayHours(draft);
+  const availability = availabilityText(draft);
+  const anyTime = departsAnyTime(draft);
   const rail = draft.rail_fallback;
   const home = draft.home;
   const homeTip = `The trip ${draft.one_way === "from_home" ? "starts" : draft.one_way === "to_home" ? "ends" : "starts and ends"} here. Time at home does not count as time in cities.`;
   // Home and cities to visit are missing on every new trip: the footer says so, the fields stay unmarked.
   const placeErrors = !isNew;
 
-  return <section id="trip-settings" className="p-panel p-settings" aria-labelledby="settings-title">
-    <h2 id="settings-title" tabIndex={-1}>Trip settings</h2>
+  return <section id="trip-settings" className="p-panel p-settings p-plan" aria-labelledby="settings-title">
+    <h2 id="settings-title" tabIndex={-1}>{isNew ? "Plan a trip" : "Trip settings"}</h2>
     {searchActive && <p className="p-notice">A search is running. Changing places, the visit order, round trip or one way, dates, adults, transport, departure times, start and end cities or estimated train timetables stops it.</p>}
 
-    <div className="p-settings-grid">
-      <div className="p-setting">
-        {home && !changingHome ? <div className="p-field">
-          <div className="p-field-label"><span className="p-label">Home city</span><InfoTip topic="home city">{homeTip}</InfoTip></div>
-          <div className="p-home-chip">
-            <span>{[home.name, home.country_code, home.airport_codes.join(", ")].filter(Boolean).join(" · ")}</span>
-            <button ref={changeHome} type="button" className="p-text-button" aria-label="Change home city" onClick={() => { homeFocus.current = "picker"; setChangingHome(true); }}>Change</button>
+    <div className="p-plan-rows">
+      <div className="p-plan-row">
+        <h3 className="p-plan-question">Where's home?</h3>
+        <div className="p-plan-body">
+          <div className="p-plan-line">
+            {home && !changingHome ? <div className="p-home-chip">
+              <span>{[home.name, home.country_code, home.airport_codes.join(", ")].filter(Boolean).join(" · ")}</span>
+              <button ref={changeHome} type="button" className="p-text-button" aria-label="Change home city" onClick={() => { homeFocus.current = "picker"; setChangingHome(true); }}>Change</button>
+            </div> : <div className="p-plan-grow">
+              <PlacePicker inputId="home-city" label="Home city" disabledIds={home ? [home.id] : []} onSelect={chooseHome} />
+              {home && <button type="button" className="p-text-button" onClick={() => { homeFocus.current = "change"; setChangingHome(false); }}>Cancel</button>}
+            </div>}
+            <Field label="Trip type" className="p-trip-type" info={<InfoTip topic="trip type" align="end">One way from home ends in the last city you visit. One way to home starts in the first city you visit. {homeTip}</InfoTip>}>
+              <Select value={draft.one_way ?? "round"} onValueChange={value => setOneWay(value === "round" ? null : value as OneWay)}>
+                <SelectItem value="round">Round trip</SelectItem>
+                <SelectItem value="from_home">One way from home</SelectItem>
+                <SelectItem value="to_home">One way to home</SelectItem>
+              </Select>
+            </Field>
           </div>
-        </div> : <>
-          <PlacePicker inputId="home-city" label="Home city" disabledIds={home ? [home.id] : []} onSelect={chooseHome}
-            info={<InfoTip topic="home city">{homeTip}</InfoTip>} />
-          {home && <button type="button" className="p-text-button" onClick={() => { homeFocus.current = "change"; setChangingHome(false); }}>Cancel</button>}
-        </>}
-        <div className="p-check-row">
-          <fieldset className="p-radio-group">
-            <legend className="sr-only">Trip type</legend>
-            {([[null, "Round trip"], ["from_home", "One way from home"], ["to_home", "One way to home"]] as const).map(([value, label]) => <label className="p-check" key={label}>
-              <input type="radio" name={tripTypeName} checked={(draft.one_way ?? null) === value} onChange={() => setOneWay(value)} />{label}
-            </label>)}
-          </fieldset>
-          <InfoTip topic="one way" align="end">One way from home ends in the last city you visit; time there counts until the end date. One way to home starts in the first city you visit; time there counts from the start date.</InfoTip>
+          <p className="p-field-status" aria-live="polite">{homeStatus}</p>
+          {home && <StartCities key={`${home.id}:${draft.one_way ?? "round"}`} draft={draft} edit={edit} />}
         </div>
-        <p className="p-field-status" aria-live="polite">{homeStatus}</p>
       </div>
 
-      <div className="p-setting">
-        <PlacePicker label={ordered ? "Cities to visit (in this order)" : "Cities to visit (any order)"} placeholder="Add a city: name or airport code" limitText={`${visits.length} of 4`} disabled={full}
-          hint={full ? "Up to 4 cities. Remove one to add another." : undefined} disabledIds={[home?.id ?? "", ...visits.map(visit => visit.place.id)]}
-          error={placeErrors ? errors.visits : undefined}
-          info={<InfoTip topic="cities to visit" align="end">The search picks the best order, unless you choose Visit in this order. Each city gets at least its minimum stay.</InfoTip>}
-          onSelect={place => { if (!full) { edit({ ...draft, visits: [...visits, { place, min_stay_hours: 0 }] }); setVisitStatus(""); } }} />
-        {visits.length > 0 && <ul className="p-visit-rows">{visits.map((visit, i) => <li key={visit.place.id}
-          onDragStart={event => { dragged.current = i; event.dataTransfer.effectAllowed = "move"; }}
-          onDragOver={event => { if (dragged.current !== null) event.preventDefault(); }}
-          onDrop={event => { event.preventDefault(); if (dragged.current !== null) moveVisit(dragged.current, i); dragged.current = null; }}
-          onDragEnd={event => { dragged.current = null; event.currentTarget.draggable = false; }}>
-          {ordered && <button type="button" id={`visit-handle-${visit.place.id}`} className="p-icon-button p-drag-handle"
-            aria-label={`${visit.place.name}, position ${i + 1} of ${visits.length}. Drag, or press the up and down arrow keys, to move it.`}
-            // Only the handle starts a drag, so text in the row's fields stays selectable.
-            onPointerDown={event => { const row = event.currentTarget.closest("li"); if (row) row.draggable = true; }}
-            onPointerUp={event => { const row = event.currentTarget.closest("li"); if (row) row.draggable = false; }}
-            onKeyDown={event => {
-              if (event.key === "ArrowUp" || event.key === "ArrowDown") { event.preventDefault(); moveVisit(i, i + (event.key === "ArrowUp" ? -1 : 1)); }
-            }}><GripVertical size={16} aria-hidden="true" /></button>}
-          <span className="p-visit-name">{ordered && `${i + 1}. `}{[visit.place.name, visit.place.country_code].filter(Boolean).join(" · ")}</span>
-          <NumberField className="p-stay-field" label={<><span className="sr-only">Minimum stay in {visit.place.name}: </span>At least</>} unit="h" hint={stayDays(visit.min_stay_hours)}
-            value={visit.min_stay_hours || null} min={0} max={8760} optional placeholder="Required"
-            error={visit.min_stay_hours > 0 ? undefined : "Enter a minimum stay greater than 0 hours."}
-            message="Enter a minimum stay greater than 0 and up to 8,760 hours."
-            onChange={n => edit({ ...draft, visits: visits.map((item, j) => j === i ? { ...item, min_stay_hours: n ?? 0 } : item) })} />
-          <button type="button" className="p-icon-button" aria-label={`Remove ${visit.place.name}`} onClick={() => removeVisit(visit.place)}>×</button>
-        </li>)}</ul>}
-        {visits.length > 1 && <label className="p-check"><input type="checkbox" checked={!!draft.ordered_visits} onChange={e => edit({ ...draft, ordered_visits: e.target.checked })} />Visit in this order</label>}
-        {visits.length > 1 && firstStay > 0 && visits.some(visit => visit.min_stay_hours !== firstStay) && <button type="button" className="p-text-button"
-          onClick={() => edit({ ...draft, visits: visits.map(visit => ({ ...visit, min_stay_hours: firstStay })) })}>Use {firstStay} h for all cities</button>}
-        <p className="p-field-status" aria-live="polite">{visitStatus}</p>
-      </div>
-
-      {staySum && <p className="p-notice p-setting-wide">{staySum}</p>}
-
-      <div className="p-setting p-setting-wide p-dates">
-        <div className="p-date-range">
-          <Field label="Start date" info={<InfoTip topic="dates">Dates use your home city's time.</InfoTip>}>
-            <TemporalInput type="date" value={draft.start_date} onValueChange={value => edit({ ...draft, start_date: value })} />
-          </Field>
-          <span className="p-date-to" aria-hidden="true">to</span>
-          <Field label="End date" error={errors.dates}>
-            <TemporalInput type="date" min={draft.start_date} value={draft.end_date} onValueChange={value => edit({ ...draft, end_date: value })} />
-          </Field>
+      <div className="p-plan-row">
+        <h3 className="p-plan-question">Where to?</h3>
+        <div className="p-plan-body">
+          <PlacePicker label={ordered ? "Cities to visit (in this order)" : "Cities to visit (any order)"} placeholder="Add a city: name or airport code" limitText={`${visits.length} of 4`} disabled={full}
+            hint={full ? "Up to 4 cities. Remove one to add another." : undefined} disabledIds={[home?.id ?? "", ...visits.map(visit => visit.place.id)]}
+            error={placeErrors ? errors.visits : undefined}
+            info={<InfoTip topic="cities to visit" align="end">The search picks the best order, unless you choose Visit in this order. Each city gets at least its minimum stay. The automatic minimum divides your free time evenly after 1 day for each journey.</InfoTip>}
+            onSelect={place => { if (!full) { edit({ ...draft, visits: [...visits, { place, min_stay_hours: 0 }] }); setVisitStatus(""); } }} />
+          {visits.length > 0 && <ul className="p-visit-rows">{visits.map((visit, i) => <li key={visit.place.id}
+            onDragStart={event => { dragged.current = i; event.dataTransfer.effectAllowed = "move"; }}
+            onDragOver={event => { if (dragged.current !== null) event.preventDefault(); }}
+            onDrop={event => { event.preventDefault(); if (dragged.current !== null) moveVisit(dragged.current, i); dragged.current = null; }}
+            onDragEnd={event => { dragged.current = null; event.currentTarget.draggable = false; }}>
+            {ordered && <button type="button" id={`visit-handle-${visit.place.id}`} className="p-icon-button p-drag-handle"
+              aria-label={`${visit.place.name}, position ${i + 1} of ${visits.length}. Drag, or press the up and down arrow keys, to move it.`}
+              // Only the handle starts a drag, so text in the row's fields stays selectable.
+              onPointerDown={event => { const row = event.currentTarget.closest("li"); if (row) row.draggable = true; }}
+              onPointerUp={event => { const row = event.currentTarget.closest("li"); if (row) row.draggable = false; }}
+              onKeyDown={event => {
+                if (event.key === "ArrowUp" || event.key === "ArrowDown") { event.preventDefault(); moveVisit(i, i + (event.key === "ArrowUp" ? -1 : 1)); }
+              }}><GripVertical size={16} aria-hidden="true" /></button>}
+            <span className="p-visit-name">{ordered && `${i + 1}. `}{[visit.place.name, visit.place.country_code].filter(Boolean).join(" · ")}</span>
+            <NumberField className="p-stay-field" label={<><span className="sr-only">Minimum stay in {visit.place.name}: </span>At least</>} unit="days"
+              hint={visit.min_stay_hours > 0 ? isAutoStay(draft, visit.min_stay_hours) ? "Automatic" : visit.min_stay_hours < 24 ? stayText(visit.min_stay_hours) : undefined : undefined}
+              value={visit.min_stay_hours ? Math.round(visit.min_stay_hours / 2.4) / 10 : null} min={0} max={365} optional placeholder="Required"
+              error={visit.min_stay_hours > 0 ? undefined : "Enter a minimum stay greater than 0 days."}
+              message="Enter a minimum stay greater than 0 and up to 365 days."
+              onChange={n => edit({ ...draft, visits: visits.map((item, j) => j === i ? { ...item, min_stay_hours: n === null ? 0 : Math.round(n * 2400) / 100 } : item) })} />
+            <button type="button" className="p-icon-button" aria-label={`Remove ${visit.place.name}`} onClick={() => removeVisit(visit.place)}>×</button>
+          </li>)}</ul>}
+          {visits.length > 1 && <label className="p-check"><input type="checkbox" checked={!!draft.ordered_visits} onChange={e => edit({ ...draft, ordered_visits: e.target.checked })} />Visit in this order</label>}
+          {auto !== null && visits.some(visit => visit.min_stay_hours !== auto) && <button type="button" className="p-text-button"
+            onClick={() => edit({ ...draft, visits: visits.map(visit => ({ ...visit, min_stay_hours: auto })) })}>Use the automatic minimum ({stayText(auto)}) for all cities</button>}
+          <p className="p-field-status" aria-live="polite">{visitStatus}</p>
+          {staySum && <p className="p-notice">{staySum}</p>}
         </div>
-        <fieldset className="p-radio-group">
-          <legend className="sr-only">Date mode</legend>
-          {([["fixed", "Exact dates"], ["flexible", "Any days in this period"]] as const).map(([mode, label]) => <label className="p-check" key={mode}>
-            <input type="radio" name={dateModeName} checked={draft.date_mode === mode} onChange={() => edit({ ...draft, date_mode: mode })} />{label}
-          </label>)}
-        </fieldset>
-        <p className="p-hint">{dateModeText(draft)}</p>
       </div>
 
-      <div className="p-setting p-setting-wide">
-        <p className="p-departure-text">Leave between {draft.departure_start.slice(0, 5)} and {draft.departure_end.slice(0, 5)} (local time). <button type="button" className="p-text-button" aria-label="Change departure times"
-          aria-describedby={errors.departureWindow ? "departure-window-error" : undefined} onClick={changeDepartureTimes}>Change</button></p>
-        {errors.departureWindow && <p id="departure-window-error" className="p-field-error">{errors.departureWindow}</p>}
-      </div>
-
-      <div className="p-setting">
-        <NumberField label="Adults" value={draft.adults} min={1} max={9} integer message="Enter 1 to 9 adults." error={errors.adults}
-          onChange={n => { if (n !== null) edit({ ...draft, adults: n }); }} />
-        <div aria-live="polite">{partyNotice && <p className="p-notice">{partyNotice}</p>}</div>
-      </div>
-      <div className="p-setting">
-        <NumberField label={`Budget for ${count(draft.adults, "adult")} (MYR)`} value={draft.budget_myr} optional placeholder="No limit" message="Enter 0 or more, or leave it blank." error={errors.budget}
-          info={<InfoTip topic="budget" align="end">Total for all adults. Options that cost more than this, even at their lowest price, move to Over budget.</InfoTip>}
-          onChange={n => edit({ ...draft, budget_myr: n })} />
-      </div>
-
-      <fieldset className="p-modes p-setting-wide" aria-describedby={errors.modes ? modesErrorId : undefined}>
-        <legend>Transport<InfoTip topic="transport">Used between all places in the trip. Car needs More settings › Cars.</InfoTip></legend>
-        <div className="p-mode-chips">{modes.map(mode => <label className="p-check" key={mode}>
-          <input type="checkbox" checked={draft.modes.includes(mode)} onChange={e => edit({ ...draft, modes: e.target.checked ? [...draft.modes, mode] : draft.modes.filter(m => m !== mode) })} />{modeLabel(mode)}
-        </label>)}</div>
-        {errors.modes && <p id={modesErrorId} className="p-field-error">{errors.modes}</p>}
+      <fieldset className="p-plan-row">
+        <legend className="p-plan-question">When are you free?</legend>
+        <div className="p-plan-body">
+          <div className="p-when">
+            <span className="p-when-label" id={fromId}>From</span>
+            <TemporalInput type="date" aria-labelledby={fromId} value={draft.start_date} onValueChange={value => edit({ ...draft, start_date: value })} />
+            {draft.one_way !== "to_home" ? <TemporalInput type="time" aria-label="From time (optional)" value={draft.home_departure_earliest ?? ""} onValueChange={value => edit({ ...draft, home_departure_earliest: value || null })} /> : <span />}
+            <span className="p-when-label" id={untilId}>Until</span>
+            <TemporalInput type="date" aria-labelledby={untilId} min={draft.start_date} aria-invalid={errors.dates ? true : undefined} value={draft.end_date} onValueChange={value => edit({ ...draft, end_date: value })} />
+            {draft.one_way !== "from_home" ? <TemporalInput type="time" aria-label="Until time (optional)" aria-invalid={errors.homeTimes ? true : undefined} value={draft.home_arrival_latest ?? ""} onValueChange={value => edit({ ...draft, home_arrival_latest: value || null })} /> : <span />}
+          </div>
+          {(errors.dates || errors.homeTimes) && <p className="p-field-error" role="alert">{errors.dates ?? errors.homeTimes}</p>}
+          <small className="p-when-text">{availability ?? "Times are optional. Blank means the whole day."}{draft.date_mode === "fixed" && " · Exact dates: leave on the first day and return on the last day."}</small>
+        </div>
       </fieldset>
 
-      {!transitConfigured && draft.modes.some(mode => transitSearchModes.includes(mode)) && <div className="p-notice p-setting-wide">
-        <p>Trains, buses, coaches, subways and trams are not searched: transit search is turned off in this build.</p>
-        <InfoTip topic="transit search" align="end">To turn it on, build the catalogs with BROWSER_TRANSIT_ENABLED=true (the default), then reload the page.</InfoTip>
-      </div>}
+      <div className="p-plan-row">
+        <h3 className="p-plan-question">Who's going?</h3>
+        <div className="p-plan-body">
+          <div className="p-plan-line">
+            <NumberField label="Adults" value={draft.adults} min={1} max={9} integer message="Enter 1 to 9 adults." error={errors.adults}
+              onChange={n => { if (n !== null) edit({ ...draft, adults: n }); }} />
+            <NumberField label={`Budget for ${count(draft.adults, "adult")} (MYR)`} value={draft.budget_myr} optional placeholder="No limit" message="Enter 0 or more, or leave it blank." error={errors.budget}
+              info={<InfoTip topic="budget" align="end">Total for all adults. Options that cost more than this, even at their lowest price, move to Over budget.</InfoTip>}
+              onChange={n => edit({ ...draft, budget_myr: n })} />
+          </div>
+          <div aria-live="polite">{partyNotice && <p className="p-notice">{partyNotice}</p>}</div>
+        </div>
+      </div>
+
+      <fieldset className="p-plan-row" aria-describedby={errors.modes ? modesErrorId : undefined}>
+        <legend className="p-plan-question">Transport</legend>
+        <div className="p-plan-body">
+          <div className="p-plan-line">
+            <div className="p-mode-chips">{transportGroups.map(group => {
+              const state = groupState(draft.modes, group);
+              return <label className="p-check" key={group.id}>
+                <input type="checkbox" checked={state !== "off"} onChange={e => edit({ ...draft, modes: setGroup(draft.modes, group, e.target.checked) })} />
+                {group.label}{state === "some" && <span className="p-mode-some"> (some)</span>}
+              </label>;
+            })}</div>
+            <InfoTip topic="transport" align="end">Flights are searched for you. Trains & buses are anything with a timetable and a ticket per person, including private express coaches. Car & taxi leave any time and are priced per vehicle; your own or a rental car also needs Advanced › Cars.</InfoTip>
+          </div>
+          {errors.modes && <p id={modesErrorId} className="p-field-error">{errors.modes}</p>}
+          {!transitConfigured && draft.modes.some(mode => transitSearchModes.includes(mode)) && <p className="p-notice">Trains and buses are not searched: transit search is turned off in this build.</p>}
+        </div>
+      </fieldset>
     </div>
 
     <details className="p-more">
-      <summary><span>More settings</span><span className="p-more-summary">{changed.length ? changed.join(" · ") : "All default"}</span><ChevronDown size={16} className="p-chevron" aria-hidden="true" /></summary>
+      <summary><span>Advanced</span><span className="p-more-summary">{changed.length ? changed.join(" · ") : "All default"}</span><ChevronDown size={16} className="p-chevron" aria-hidden="true" /></summary>
       <div className="p-more-body">
-        <SettingsGroup title="Start and end cities" summary={summaries.places}>
-          <PositioningSettings draft={draft} edit={edit} homeTimesError={errors.homeTimes} />
-        </SettingsGroup>
-
-        <SettingsGroup title="Departure times and changes" summary={summaries.departures}>
-          <fieldset className="p-time-range">
-            <legend>Leave between<InfoTip topic="departure times">Local time at each departure city. Applies to the scheduled departure of flights, trains and buses. Your journeys to start and end cities can be outside these times.</InfoTip></legend>
+        <SettingsGroup title="Dates and departures" summary={summaries.departures}>
+          <div className="p-check-row">
+            <label className="p-check"><input type="checkbox" checked={draft.date_mode === "fixed"} onChange={e => edit({ ...draft, date_mode: e.target.checked ? "fixed" : "flexible" })} />Leave on the first day and return on the last day</label>
+            <InfoTip topic="exact dates">Off: the whole journey can be on any days between From and Until. {dateModeText(draft)}</InfoTip>
+          </div>
+          <div className="p-check-row">
+            <label className="p-check"><input type="checkbox" checked={!anyTime} onChange={e => edit({ ...draft, ...(e.target.checked ? { departure_start: "09:00", departure_end: "21:00" } : anyDeparture) })} />Only depart between</label>
+            <InfoTip topic="departure times">Local time at each departure city. Applies to the scheduled departure of flights, trains and buses. Your own journeys can be outside these times.</InfoTip>
+          </div>
+          {!anyTime && <fieldset className="p-time-range">
+            <legend className="sr-only">Departure times</legend>
             <div className="p-time-inputs">
               <TemporalInput id="setting-departure-start" type="time" aria-label="Earliest departure" value={draft.departure_start} onValueChange={value => edit({ ...draft, departure_start: value })} />
               <span aria-hidden="true">and</span>
@@ -230,7 +236,7 @@ export function TripSettings({ draft, edit, places, errors, transitConfigured, s
                 value={draft.departure_end} onValueChange={value => edit({ ...draft, departure_end: value })} />
             </div>
             {errors.departureWindow && <p id={windowErrorId} className="p-field-error">{errors.departureWindow}</p>}
-          </fieldset>
+          </fieldset>}
           <div className="p-group-fields">
             <NumberField label="Max changes per journey" value={draft.max_transfers} optional integer max={10} placeholder="Any" onChange={n => edit({ ...draft, max_transfers: n })} />
           </div>
@@ -238,6 +244,13 @@ export function TripSettings({ draft, edit, places, errors, transitConfigured, s
             <label className="p-check"><input type="checkbox" checked={draft.allow_overnight} onChange={e => edit({ ...draft, allow_overnight: e.target.checked })} />Allow overnight journeys</label>
             <InfoTip topic="overnight journeys">A journey is overnight when it crosses midnight in the departure city's time.</InfoTip>
           </div>
+        </SettingsGroup>
+
+        <SettingsGroup title="Trains & buses" summary={transitSummary}>
+          <p className="p-hint">Types of scheduled transport to search.</p>
+          <div className="p-mode-chips">{transportGroups[1].modes.map(mode => <label className="p-check" key={mode}>
+            <input type="checkbox" checked={draft.modes.includes(mode)} onChange={e => edit({ ...draft, modes: e.target.checked ? [...draft.modes, mode] : draft.modes.filter(m => m !== mode) })} />{modeLabel(mode)}
+          </label>)}</div>
         </SettingsGroup>
 
         <SettingsGroup title="Time buffers" summary={summaries.buffers}>

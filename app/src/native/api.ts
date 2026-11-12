@@ -91,7 +91,7 @@ export class BrowserPlannerApi {
       throw new PlannerError("Stop the other continuous calculation before starting this one.", 409);
     }
     const trip = await this.repository.requireTrip(id); requireMinimumStays(trip.spec);
-    if (!trip.snapshot) throw new PlannerError("Search transport before checking saved combinations.", 409);
+    if (!trip.snapshot) throw new PlannerError("Find trips before checking saved combinations.", 409);
     if ((await this.repository.list<Job>("jobs")).some(j => j.trip_id === id && ["queued", "running"].includes(j.status))) throw new PlannerError("Stop the transport search before checking combinations continuously.", 409);
     if (this.discovery.isRunning(id)) throw new PlannerError("Wait for the in-flight transport request to finish before checking combinations.", 409);
     const job: OptimizationJob = { id: crypto.randomUUID().replaceAll("-", ""), trip_id: id, trip_revision: trip.revision, status: "queued", batches: 0,

@@ -123,6 +123,29 @@ html { scroll-padding-top: calc(var(--header-h) + var(--tabs-h, 0px) + 8px); scr
 .optimizer .p-setting .p-notice { margin: 8px 0 0; }
 .optimizer div.p-notice { display: flex; align-items: flex-start; gap: 8px; }
 .optimizer div.p-notice p { flex: 1; margin: 0; color: inherit; }
+/* Plan step: one question per row, the question beside its fields from 720 px. */
+.p-plan { max-width: 920px; }
+.p-plan-rows { display: grid; }
+.p-plan-row { display: grid; grid-template-columns: 180px minmax(0, 1fr); align-items: start; gap: 8px 24px; margin: 0; padding: 18px 0; border: 0; border-top: 1px solid var(--border); min-width: 0; }
+.p-plan-row:first-child { border-top: 0; padding-top: 4px; }
+fieldset.p-plan-row > legend { float: left; }
+.optimizer .p-plan-question { display: flex; align-items: center; gap: 6px; margin: 0; padding: 8px 0 0; color: var(--foreground); font-size: 14px; font-weight: 600; }
+.p-plan-body { display: grid; gap: 10px; min-width: 0; }
+.p-plan-body > .p-field-status:empty { display: none; }
+.p-plan-line { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 16px; }
+.p-plan-line > .p-field, .p-plan-grow { flex: 1 1 14rem; min-width: 0; }
+.optimizer .p-plan-line > .p-trip-type { flex: 0 1 12rem; }
+.p-start-cities { display: grid; gap: 8px; justify-items: start; }
+.p-start-cities > * { width: 100%; }
+.p-start-cities > .p-text-button { width: auto; }
+.p-when { display: grid; grid-template-columns: auto minmax(9rem, 12rem) minmax(6rem, 8rem); align-items: center; gap: 8px 10px; justify-content: start; }
+.p-when-label { color: var(--foreground); font-weight: 500; }
+.optimizer .p-when-text { font-size: 12px; }
+.p-mode-some { color: var(--muted-foreground); font-weight: 400; }
+@media (max-width: 719.98px) {
+  .p-plan-row { grid-template-columns: minmax(0, 1fr); }
+  fieldset.p-plan-row > legend { float: none; }
+}
 .p-home-chip { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-height: 36px; color: var(--foreground); }
 .p-visit-rows { display: grid; gap: 6px; margin: 10px 0 0; padding: 0; list-style: none; }
 .p-visit-rows li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 6px 6px 6px 12px; border-radius: 6px; background: var(--muted-surface); }

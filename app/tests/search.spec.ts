@@ -63,7 +63,7 @@ test("native live discovery keeps unpriced flight schedules and finds the indepe
       journeys: selected.map((m: { segments: { mode: string }[] }) => m.segments.filter(s => s.mode === "flight")) }] : [], search_url: "https://www.google.com/travel/flights", kind: request.kind } });
   });
   await page.goto("/");
-  await page.getByRole("button", { name: "Search transport", exact: true }).last().click();
+  await page.getByRole("button", { name: "Find trips", exact: true }).last().click();
   await expect.poll(() => page.evaluate(async id => {
     const { PlannerRepository } = await import("/src/native/repository.ts"), repository = new PlannerRepository();
     try {
@@ -136,7 +136,7 @@ test("full native Planner searches and applies Missing info while a provider res
     await repository.put("trips", trip.id, trip); await repository.close(); localStorage.setItem("wayfinder:last-trip", trip.id); return trip.id;
   });
   await page.goto("/");
-  await page.getByRole("button", { name: "Search transport", exact: true }).last().click();
+  await page.getByRole("button", { name: "Find trips", exact: true }).last().click();
   await inFlight;
   await page.getByRole("tab", { name: /Missing info/ }).click();
   const price = page.locator("#panel-missing [data-price-input]").first();

@@ -303,7 +303,7 @@ export function TripSettings({ draft, edit: setDraft, places, errors, transitCon
               <SelectItem value="requests">Requests</SelectItem><SelectItem value="minutes">Minutes</SelectItem>
             </Select></Field>
             {roundMinutes === null ? <NumberField label="Requests per search batch" value={batchSize} min={1} max={500} integer
-              info={<InfoTip topic="requests per search batch">The search pauses after this many new requests to data providers. Search more runs the next batch. Saved results are reused.</InfoTip>}
+              info={<InfoTip topic="requests per search batch">A batch is this many new requests to data providers. Find trips runs up to 10 batches on its own; then Search more runs the next batch. Saved results are reused.</InfoTip>}
               onChange={n => { if (n !== null) onBatchSize(n); }} /> :
               <NumberField label="Minutes per round" value={roundMinutes} min={1} max={1440} integer
                 hint="Includes provider waiting, optimization and saving. Pausing can take a little longer while the current operation finishes."

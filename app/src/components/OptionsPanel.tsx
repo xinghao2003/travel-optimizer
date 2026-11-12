@@ -4,8 +4,7 @@ import { CircleAlert, Info } from "lucide-react";
 import { Button } from "./ui/button";
 import { InfoTip } from "./InfoTip";
 import { ModeIcon } from "./ModeIcon";
-import { hoursText, moneyShort, optionChips, optionNumber, perCityHourText, priceEstimated, priceText, routeChain, type EmptyState, type NextStep, type OptionChip, type OptionsTarget } from "../lib/present";
-import { useMediaQuery } from "../lib/useMediaQuery";
+import { hoursText, moneyShort, optionChips, optionNumber, perCityHourText, priceEstimated, priceText, routeChain, sortRoutes, type EmptyState, type NextStep, type OptionChip, type OptionsTarget } from "../lib/present";
 import type { Result, Route } from "../lib/planner";
 import { compareRoute, marginalComparisons, type RouteComparison } from "../lib/routeComparison";
 
@@ -60,6 +59,38 @@ function OptionRow({ route, number, name = "Option", selected, chips, placeName,
   </li>;
 }
 
+const pickLabels = { cheapest: "Cheapest", stay: "Most time in cities", balanced: "Best balance" } as const;
+/**
+ * The recommended picks above the list: the first best option for each ranking. Cheapest and Best balance use only
+ * options with a known highest price, so a missing price never makes an option look cheap. One option that wins
+ * several rankings shows once with all its labels. None with fewer than 2 best options or no priced option.
+ */
+function Picks({ routes, priceWeight, numbers, selectedId, placeName, onSelect }: {
+  routes: Route[]; priceWeight: number; numbers: Map<string, number>; selectedId: string | null;
+  placeName: (id: string) => string; onSelect: (id: string) => void;
+}) {
+  const priced = routes.filter(route => (route.total_cost_myr ?? route.cost_high_myr) !== null);
+  if (routes.length < 2 || !priced.length) return null;
+  const picks = new Map<string, { route: Route; labels: string[] }>();
+  for (const key of Object.keys(pickLabels) as (keyof typeof pickLabels)[]) {
+    const route = sortRoutes(key === "stay" ? routes : priced, key, { priceWeight })[0];
+    const pick = picks.get(route.id) ?? { route, labels: [] };
+    pick.labels.push(pickLabels[key]); picks.set(route.id, pick);
+  }
+  return <ul className="p-picks" aria-label="Recommended options">{[...picks.values()].map(({ route, labels }) => {
+    const chain = routeChain(route);
+    return <li key={route.id}>
+      <button type="button" className="p-pick" aria-pressed={route.id === selectedId} onClick={() => onSelect(route.id)}>
+        <span className="p-pick-label">{labels.join(" · ")}</span>
+        <span className="p-pick-price">{priceText(route)}</span>
+        <span className="p-pick-line">{hoursText(route.stay_hours)} h in cities · {hoursText(route.travel_hours)} h travel</span>
+        <span className="p-pick-line">{[chain.from, ...chain.steps.map(step => step.to)].map(placeName).join(" → ")}</span>
+        <span className="sr-only">Option {optionNumber(numbers.get(route.id) ?? 0)}</span>
+      </button>
+    </li>;
+  })}</ul>;
+}
+
 /**
  * The Options column (C6): Next steps, the chart, the list toolbar, the option rows with Show more, the Over budget
  * group and the empty states (C12). Planner owns the order (`displayRoutes`, `numbers`), the selection and the actions.
@@ -77,9 +108,8 @@ export function OptionsPanel({ result, displayRoutes, numbers, refinement, selec
   budget: number | null; adults: number; rates: Record<string, number>; placeName: (id: string) => string;
 }) {
   const sortId = useId(), balanceId = useId();
-  const narrow = useMediaQuery("(max-width: 599.98px)");
   const [allSteps, setAllSteps] = useState(false);
-  const [chartOpen, setChartOpen] = useState(false);
+  const [view, setView] = useState<"list" | "chart">("list");
   const stepList = useRef<HTMLUListElement>(null);
   const optionList = useRef<HTMLOListElement>(null);
   // After "Show more", focus goes to the first row it added: the button itself can go away.
@@ -135,13 +165,13 @@ export function OptionsPanel({ result, displayRoutes, numbers, refinement, selec
     </div>
 
     {displayRoutes.length > 0 && <>
-      {narrow ? <details className="p-chart-toggle" onToggle={event => setChartOpen(event.currentTarget.open)}>
-        <summary>Show chart</summary>
-        {chartOpen && chart}
-      </details> : chart}
+      <Picks routes={result?.routes ?? []} priceWeight={1 - timePreference / 100} numbers={numbers} selectedId={selectedId} placeName={placeName} onSelect={id => onSelect(id, "row")} />
 
       <div className="p-options-toolbar">
         <p className="p-options-count">{best} best option{best === 1 ? "" : "s"}{weaker.size > 0 && ` · ${weaker.size} more`}</p>
+        <div className="p-view-toggle" role="group" aria-label="View">
+          {(["list", "chart"] as const).map(item => <button type="button" key={item} aria-pressed={view === item} onClick={() => setView(item)}>{item === "list" ? "List" : "Chart"}</button>)}
+        </div>
         <div className="p-options-sort">
           <label htmlFor={sortId}>Sort</label>
           <Select id={sortId} value={ranking} onValueChange={value => onRanking(value)}>
@@ -163,9 +193,11 @@ export function OptionsPanel({ result, displayRoutes, numbers, refinement, selec
             onChange={event => onTimePreference(Number(event.target.value))} /><span>More city time</span></div>
         </div>}
       </div>
+      {view === "chart" && chart}
       {estimatedOnce && <p className="p-hint p-options-note">All options include estimated prices.</p>}
       {baseline && <p className="p-hint p-options-note">Differences compare with selected {label(baseline.id)}.</p>}
 
+      {view === "list" && <>
       <ol ref={optionList} className="p-options">
         {displayRoutes.slice(0, visibleCount).map(route => <OptionRow key={route.id} route={route} number={numbers.get(route.id) ?? 0} selected={route.id === selectedId}
           chips={chips(route, false)} comparison={comparison(route)} placeName={placeName} onSelect={() => onSelect(route.id, "row")} />)}
@@ -173,6 +205,7 @@ export function OptionsPanel({ result, displayRoutes, numbers, refinement, selec
       {left > 0 && <button type="button" className="p-show-more" onClick={() => { firstNewRow.current = visibleCount; onShowMore(); }}>
         {left > 40 ? `Show 40 more (${left} left)` : `Show ${left} more`}
       </button>}
+      </>}
     </>}
 
     {emptyState && <div className="p-options-empty" data-state={emptyState.id}>

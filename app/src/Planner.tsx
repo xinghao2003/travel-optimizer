@@ -33,6 +33,8 @@ const pollError: AppError = { text: "Can't get the search status. Retrying…", 
 type Panel = "options" | "itinerary" | "missing";
 /** Option rows shown at first, and added by each "Show more" (C6). */
 const pageSize = 40;
+/** Request batches a search continues on its own after the first (B3). */
+const autoBatches = 9;
 /** Best, weaker and over-budget options of a result. */
 const resultRoutes = (result: Result | null) => [...(result?.routes ?? []), ...(result?.dominated_routes ?? []), ...(result?.refinement_routes ?? [])];
 /**
@@ -337,9 +339,11 @@ export default function Planner({ storageActions, externalRevision = 0 }: { stor
     finally { setBusyAction(null); }
   }
   async function search(continuation = false) {
+    if (!continuation) autoRounds.current = 0;
     await act(async () => {
       const record = await saveSpec();
       const status = await api<Job>(continuation && job ? `/searches/${job.id}/continue` : `/trips/${record.id}/searches`, "POST", { budget: batchSize, minutes: roundMinutes });
+      autoJob.current = status.id;
       setJob(status);
       // The status strip follows the search, and the options update while it runs (B3, C4).
       setSettingsOpen(false);
@@ -347,6 +351,21 @@ export default function Planner({ storageActions, externalRevision = 0 }: { stor
       setFocusTarget("options-title");
     }, continuation ? "continue" : "search");
   }
+  // One Find trips runs the whole search: a search started in this session continues its request batches on its own
+  // (up to autoBatches more), then checks the remaining combinations once. Later batches use Search more.
+  const autoJob = useRef<string | null>(null), autoRounds = useRef(0), autoChecked = useRef<string | null>(null);
+  useEffect(() => {
+    if (!job || job.id !== autoJob.current || busyAction !== null || dirty || applyState) return;
+    if (job.status === "paused" && job.pause_reason === "requests" && job.pending > 0 && autoRounds.current < autoBatches) {
+      autoRounds.current++;
+      void search(true);
+    } else if (job.status === "complete" && result?.optimization_complete === false && autoChecked.current !== job.id
+      && !(optimization && ["queued", "running", "stopping"].includes(optimization.status))) {
+      autoChecked.current = job.id;
+      checkMore();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [job?.id, job?.status, job?.pause_reason, job?.pending, result?.optimization_complete, busyAction, dirty, applyState]);
   // Settings footer › Save without searching (new trip). Once saved, the trip has the workspace and its options heading.
   function saveOnly() {
     void act(async () => { await saveSpec(); setFocusTarget("options-title"); }, "save");
@@ -976,7 +995,7 @@ export default function Planner({ storageActions, externalRevision = 0 }: { stor
     <ErrorBanner error={error} onDismiss={() => setError(null)} onReload={reloadTrip} onRetrySave={() => { setError(null); autosave(); }} onSearchAgain={() => void search()} />
     <main id="main" aria-busy={loadingTrip || undefined}>{loadingTrip ? <p className="p-main-loading" role="status"><LoaderCircle size={18} className="p-spin" aria-hidden="true" />Opening {loadingName || "the trip"}…</p> : <>
     <TripBar draft={draft} edit={edit} saved={saved} settingsOpen={settingsShown} onToggleSettings={() => setSettingsOpen(open => !open)}>
-      {saved && <StatusStrip state={strip} details={details} busyAction={busyAction} settingsOpen={settingsShown} onStop={stopSearch} onSearch={continuation => void search(continuation)} onCheckMore={checkMore} onStopChecking={stopChecking} />}
+      {saved && <StatusStrip state={strip} details={details} busyAction={busyAction} settingsOpen={settingsShown} onStop={stopSearch} onSearch={continuation => { autoRounds.current = 0; void search(continuation); }} onCheckMore={checkMore} onStopChecking={stopChecking} />}
     </TripBar>
     {settingsShown && <TripSettings draft={draft} edit={edit} places={places} errors={errors} transitConfigured={transitConfigured} searchActive={active}
       partyNotice={partySizeNotice(saved, draft.adults)} isNew={!saved} footer={footer} busyAction={busyAction}

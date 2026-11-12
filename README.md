@@ -89,12 +89,7 @@ uv sync
 npm --prefix app install
 ```
 
-Optional: for towns without an airport, download the GeoNames city list before building the catalogs. Without it, airport cities and custom coordinates remain available.
-
-```powershell
-New-Item -ItemType Directory -Force data\geonames
-Invoke-WebRequest https://download.geonames.org/export/dump/cities500.zip -OutFile data\geonames\cities500.zip
-```
+The catalog build downloads the GeoNames city list to `data/geonames/cities500.zip` when it is missing, and fails without it. GeoNames gives each airport city its city-centre coordinates, so train, bus and road searches start in the city, not at the airport. Towns without an airport are included from `CATALOG_MIN_POPULATION` people (default 15000); a lower value makes the place catalog larger (about 70 MB with all towns).
 
 Start the flight function and the Vite dev server, both with hot reload, in one console, then open <http://127.0.0.1:5173>. Ctrl+C stops both. Use `-Port` and `-WebPort` for other ports.
 

@@ -1,20 +1,24 @@
 """Build the public browser catalogs: places, airports, and provider configuration.
 
-Places are IATA airport cities from airportsdata, plus every GeoNames town with 500 or more
-people when data/geonames/cities500.zip is present. The output is written to
-app/public/browser-data/ and contains no trip data.
+Places are IATA airport cities from airportsdata, plus GeoNames towns with at least
+CATALOG_MIN_POPULATION people (default 15000; the full list is about 70 MB). Airport cities use the GeoNames city centre, so transit and road searches start in the
+city, not at the airport. data/geonames/cities500.zip is downloaded when it is missing; the build
+fails without it. The output is written to app/public/browser-data/ and contains no trip data.
 """
 import json
 import os
 from pathlib import Path
 import re
 import unicodedata
+import urllib.request
 import zipfile
 
 import airportsdata
 
 ROOT = Path(__file__).resolve().parents[1]
 GEONAMES = ROOT / "data/geonames/cities500.zip"
+GEONAMES_URL = "https://download.geonames.org/export/dump/cities500.zip"
+MIN_POPULATION = int(os.environ.get("CATALOG_MIN_POPULATION", "15000"))
 OUTPUT = ROOT / "app/public/browser-data"
 
 
@@ -50,9 +54,24 @@ def airport_cities(airports, metros):
                "timezone": str(primary.get("tz") or "") or "UTC", "airport_codes": codes}
 
 
+def download_geonames():
+    """Download the GeoNames city list once. A partial download never replaces the file."""
+    if GEONAMES.exists():
+        return
+    GEONAMES.parent.mkdir(parents=True, exist_ok=True)
+    partial = GEONAMES.with_suffix(".download")
+    print(f"Downloading {GEONAMES_URL} …")
+    try:
+        urllib.request.urlretrieve(GEONAMES_URL, partial)
+        with zipfile.ZipFile(partial) as zipped:
+            zipped.getinfo("cities500.txt")
+    except Exception as error:
+        partial.unlink(missing_ok=True)
+        raise SystemExit(f"Can't download the GeoNames city list ({error}). Download {GEONAMES_URL} to {GEONAMES} and build again.")
+    partial.replace(GEONAMES)
+
+
 def geonames_places():
-    if not GEONAMES.exists():
-        return {}
     rows = {}
     with zipfile.ZipFile(GEONAMES) as zipped, zipped.open("cities500.txt") as stream:
         for line in stream:
@@ -81,18 +100,21 @@ def match_city(city, rows_by_country):
 
 
 def main():
+    download_geonames()
     airports, metros = airportsdata.load("IATA"), airportsdata.load_iata_macs()
-    rows = geonames_places()
+    towns = geonames_places()
     rows_by_country = {}
-    for row in rows.values():
+    for row in towns.values():
         rows_by_country.setdefault(row["place"]["country_code"], []).append(row)
+    rows = {id: row for id, row in towns.items() if row["population"] >= MIN_POPULATION}
     for city in airport_cities(airports, metros):
         matched = match_city(city, rows_by_country)
         base = dict(matched) if matched else place(city["code"], city["name"], city["latitude"], city["longitude"], city["timezone"], city["country_code"])
-        item = {**base, "airport_codes": city["airport_codes"], "flight_code": city["flight_code"]}
+        # The airport city name (Penang) stays the name; GeoNames gives the city centre (George Town).
+        item = {**base, "name": city["name"], "airport_codes": city["airport_codes"], "flight_code": city["flight_code"]}
         codes = " ".join([city["code"], city["flight_code"], *city["airport_codes"]])
         # Airport cities rank first in search.
-        rows[item["id"]] = {"place": item, "search": normalized(f"{item['name']} {codes} {item['country_code']}"), "population": 1_000_000_000}
+        rows[item["id"]] = {"place": item, "search": normalized(f"{item['name']} {base['name']} {codes} {item['country_code']}"), "population": 1_000_000_000}
     places = {"schema_version": 2, "rows": list(rows.values())}
     catalog = {"schema_version": 1, "airports": {code: {key: row[key] for key in ("name", "lat", "lon", "tz")} for code, row in airports.items()},
                "metros": {code: list(row.get("airports", {})) for code, row in metros.items()}}

@@ -104,8 +104,10 @@ try {
         $process = $processes[$tag]
         if ($process -and -not $process.HasExited) {
             Write-Host ('{0} [start] stopping {1}' -f (Get-Date -Format 'HH:mm:ss'), $tag) -ForegroundColor Gray
-            # The whole tree: the uvicorn reloader and npm start child processes.
-            try { $process.Kill($true) } catch {}
+            # The whole tree: the uvicorn reloader and npm start child processes. Process.Kill($true) kills a
+            # parent before it lists the children, so the uvicorn worker (under uv's launcher) survives and
+            # keeps its port. taskkill lists the complete tree first.
+            & taskkill.exe /T /F /PID $process.Id *> $null
             try { [void]$process.WaitForExit(10000) } catch {}
         }
     }

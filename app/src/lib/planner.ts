@@ -6,6 +6,12 @@ export const modes: Mode[] = ["flight", "rail", "bus", "coach", "subway", "tram"
 export type Place = { id: string; name: string; latitude: number; longitude: number; timezone: string; country_code: string; airport_codes: string[]; flight_code: string | null };
 export type Visit = { place: Place; min_stay_hours: number };
 export type PositioningPolicy = { direction: "outbound" | "return"; gateway_id: string; mode: Mode; search_more: boolean; available: boolean };
+/**
+ * A journey between home and a start or end city that runs regularly: every `every_minutes` from `first` to `last`
+ * (local time at the departure city), taking `duration_minutes`. "Any time" is 00:00 to 23:59 every 30 minutes.
+ * The solver expands it into timed journeys over the trip dates. `fare_amount` is for the whole party.
+ */
+export type PositioningPattern = { id: string; direction: "outbound" | "return"; gateway_id: string; mode: Mode; first: string; last: string; every_minutes: number; duration_minutes: number; fare_amount: number | null; currency: string; label: string };
 export type PositioningService = { id: string; direction: "outbound" | "return"; gateway_id: string; mode: Mode; departure: string; arrival: string; fare_amount: number | null; currency: string; label: string };
 export type OneWay = "from_home" | "to_home";
 export type TripSpec = {
@@ -20,7 +26,7 @@ export type TripSpec = {
   exclude_unpriced_flights?: boolean;
   rail_fallback?: { enabled: boolean; reference_date: string | null; max_shift_days: number; station_radius_km: number };
   home_departure_earliest?: string | null; home_arrival_latest?: string | null;
-  positioning_policies?: PositioningPolicy[]; positioning_services?: PositioningService[];
+  positioning_policies?: PositioningPolicy[]; positioning_services?: PositioningService[]; positioning_patterns?: PositioningPattern[];
   commitments: { place_id: string; start: string; end: string }[];
   timing: { connection_minutes: number; flight_before_minutes: number; flight_after_minutes: number; transit_before_minutes: number; transit_after_minutes: number; airport_transfer_fallback_minutes: number | null };
   cars: { own_enabled: boolean; own_capacity: number; own_cost_per_km: number; rental_enabled: boolean; rental_capacity: number; rental_pickups: string[]; rental_dropoffs: string[]; rental_daily_myr: number | null; rental_pickup_myr: number; rental_one_way_myr: number | null; rental_cost_per_km: number | null; taxi_capacity: number };

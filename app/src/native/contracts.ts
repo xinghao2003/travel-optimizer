@@ -105,6 +105,15 @@ export const parseSpec: Parser<TripSpec> = value => {
     awareInterval(service.departure, service.arrival, "Positioning services need increasing timezone-aware departure and arrival times.");
     return service;
   };
+  const positioningPattern: Parser = input => {
+    const pattern = model<NonNullable<TripSpec["positioning_patterns"]>[number]>(input, {
+      id: text(1, 160), direction: enumeration(["outbound", "return"]), gateway_id: text(), mode, first: time, last: time,
+      every_minutes: number(10, 1440, true), duration_minutes: number(1, 2880, true),
+      fare_amount: money, currency: defaults(currency, "MYR"), label: defaults(text(0, 160), "Regular service"),
+    });
+    if (timeKey(pattern.last) < timeKey(pattern.first)) fail("A regular service's last departure must not be before its first.");
+    return pattern;
+  };
   const commitment: Parser = input => {
     const item = model<TripSpec["commitments"][number]>(input, { place_id: text(), start: datetime, end: datetime });
     awareInterval(item.start, item.end, "Commitments need timezone-aware start/end times in increasing order.");
@@ -119,10 +128,12 @@ export const parseSpec: Parser<TripSpec> = value => {
     adults: defaults(number(1, 9, true), 1), budget_myr: money, modes: defaults(array(mode), ["flight", "rail", "bus", "coach"]),
     max_transfers: defaults(nullable(number(0, 10, true)), null), allow_overnight: defaults(bool, true), exclude_unpriced_flights: defaults(bool, false),
     rail_fallback: defaults(fallback, fallback({})), home_departure_earliest: defaults(nullable(time), null), home_arrival_latest: defaults(nullable(time), null),
-    positioning_policies: defaults(array(positioningPolicy, 0, 48), []), positioning_services: defaults(array(positioningService, 0, 120), []),
+    positioning_policies: defaults(array(positioningPolicy, 0, 48), []), positioning_services: defaults(array(positioningService, 0, 120), []), positioning_patterns: defaults(array(positioningPattern, 0, 24), []),
     departure_start: defaults(time, "09:00:00"), departure_end: defaults(time, "17:00:00"), commitments: defaults(array(commitment), []),
     timing: defaults(timing, timing({})), cars: defaults(cars, cars({})), exchange_rates: defaults(rates, { MYR: 1 }),
   });
+  // Absent when empty, so trips without regular services keep their stored shape and fingerprints.
+  if (!spec.positioning_patterns?.length) delete spec.positioning_patterns;
   if (daysBetween(spec.start_date, spec.end_date) < 0 || daysBetween(spec.start_date, spec.end_date) > 365) fail("Choose an increasing date range of at most 365 days.");
   if (timeKey(spec.departure_end) <= timeKey(spec.departure_start)) fail("The local departure window must end after it starts.");
   if (!spec.modes.length) fail("Select at least one transport mode.");
@@ -138,6 +149,7 @@ export const parseSpec: Parser<TripSpec> = value => {
     else { spec.departures = [spec.home]; spec.home_departure_earliest = null; }
     spec.positioning_policies = (spec.positioning_policies ?? []).filter(p => p.direction !== unused);
     spec.positioning_services = (spec.positioning_services ?? []).filter(s => s.direction !== unused);
+    if (spec.positioning_patterns) spec.positioning_patterns = spec.positioning_patterns.filter(s => s.direction !== unused);
   }
   for (const group of [spec.departures, spec.arrivals]) unique(group.map(p => p.id), "Candidate endpoints must be unique.");
   for (const [code, rate] of Object.entries(spec.exchange_rates)) if ([...code].length !== 3 || !/^\p{L}+$/u.test(code) || rate <= 0) fail("Exchange rates must be positive MYR per unit of currency.");
@@ -145,8 +157,8 @@ export const parseSpec: Parser<TripSpec> = value => {
   if (spec.commitments.some(c => !ids.includes(c.place_id))) fail("Fixed commitments must belong to required destinations.");
   if (spec.start_date === spec.end_date && spec.home_departure_earliest && spec.home_arrival_latest && spec.home_departure_earliest >= spec.home_arrival_latest) fail("Latest home arrival must follow earliest home departure.");
   unique((spec.positioning_policies ?? []).map(p => JSON.stringify([p.direction, p.gateway_id, p.mode])), "Positioning policies must be unique per direction, gateway, and mode.");
-  unique((spec.positioning_services ?? []).map(s => s.id), "Positioning service IDs must be unique.");
-  for (const item of [...(spec.positioning_policies ?? []), ...(spec.positioning_services ?? [])]) {
+  unique([...(spec.positioning_services ?? []), ...(spec.positioning_patterns ?? [])].map(s => s.id), "Positioning service IDs must be unique.");
+  for (const item of [...(spec.positioning_policies ?? []), ...(spec.positioning_services ?? []), ...(spec.positioning_patterns ?? [])]) {
     const gateways = item.direction === "outbound" ? spec.departures : spec.arrivals;
     if (item.gateway_id === spec.home.id || !gateways.some(p => p.id === item.gateway_id)) fail("Positioning must reference a non-home gateway in the selected direction.");
   }

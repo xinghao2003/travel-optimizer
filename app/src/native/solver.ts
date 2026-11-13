@@ -26,14 +26,43 @@ function supplied(spec: Spec): { movements: Journey[]; offers: Fare[] } {
     if (service.fare_amount != null) offers.push(normalizeFare({ id: `positioning-fare:${service.id}`, movement_ids: [`positioning:${service.id}`], low: service.fare_amount,
       high: service.fare_amount, currency: service.currency, source: "user", adults: spec.adults, label: `${service.label} · whole party` }));
   }
+  patternJourneys(spec, places, movements, offers);
   return { movements, offers };
+}
+/** Journeys one regular service can add: enough for every 10 minutes over two weeks. */
+const patternLimit = 2016;
+/** The timed journeys of the user's regular services (PositioningPattern), from the day before the trip to the day after. */
+function patternJourneys(spec: Spec, places: Map<string, Place>, movements: Journey[], offers: Fare[]) {
+  const clock = (minute: number) => `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
+  const minuteOf = (time: string) => Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5));
+  for (const pattern of spec.positioning_patterns ?? []) {
+    const a = pattern.direction === "outbound" ? spec.home.id : pattern.gateway_id;
+    const b = pattern.direction === "outbound" ? pattern.gateway_id : spec.home.id;
+    const from = places.get(a)!, to = places.get(b)!;
+    let count = 0;
+    for (let day = addDate(spec.start_date, -1); day <= addDate(spec.end_date, 1) && count < patternLimit; day = addDate(day, 1)) {
+      for (let minute = minuteOf(pattern.first); minute <= minuteOf(pattern.last) && count < patternLimit; minute += pattern.every_minutes, count++) {
+        const dep = at(day, clock(minute), from.timezone), arr = dep + duration(pattern.duration_minutes, MINUTE);
+        const id = `positioning:${pattern.id}@${day}T${clock(minute)}`, departure = iso(dep), arrival = iso(arr);
+        const segment = { mode: pattern.mode, from_id: a, to_id: b, from_name: from.name, to_name: to.name, from_timezone: from.timezone, to_timezone: to.timezone,
+          departure, arrival, service: pattern.label, source: SUPPLIED } as Segment;
+        movements.push(normalizeJourney({ id, from_id: a, to_id: b, mode: pattern.mode, departure, arrival, duration_minutes: pattern.duration_minutes, source: SUPPLIED,
+          segments: [segment], assumptions: ["Your regular service; check its timetable for holidays. Onward airport access and flight buffers are separate."] } as Movement));
+        if (pattern.fare_amount != null) offers.push(normalizeFare({ id: `positioning-fare:${pattern.id}@${day}T${clock(minute)}`, movement_ids: [id], low: pattern.fare_amount,
+          high: pattern.fare_amount, currency: pattern.currency, source: "user", adults: spec.adults, label: `${pattern.label} · whole party` }));
+      }
+    }
+  }
+}
+/** The direction of a user-supplied journey: a timed service, or a journey of a regular service ("positioning:{id}@…"). */
+function suppliedDirection(spec: Spec, movementId: string) {
+  const service = spec.positioning_services?.find(item => movementId === `positioning:${item.id}`);
+  if (service) return service.direction;
+  return spec.positioning_patterns?.find(item => movementId.startsWith(`positioning:${item.id}@`))?.direction ?? null;
 }
 function positioningAllowed(spec: Spec, movement: Movement, phase: number) {
   const direction = phase === 0 ? "outbound" : phase === 3 ? "return" : null;
-  if (movement.source === SUPPLIED) {
-    const service = spec.positioning_services?.find(item => movement.id === `positioning:${item.id}`);
-    if (!service || service.direction !== direction) return false;
-  }
+  if (movement.source === SUPPLIED && suppliedDirection(spec, movement.id) !== direction) return false;
   if (direction === null) return true;
   const modes = new Set([movement.mode as string, ...movement.segments.filter(segment => !["walk", "foot", "wait", "transfer"].includes(segment.mode)).map(segment => segment.mode)]);
   return !(spec.positioning_policies ?? []).some(policy => policy.direction === direction

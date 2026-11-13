@@ -825,6 +825,7 @@ export function validateDraft(draft: TripDraft): Record<string, string> {
   if (!draft.departure_start || !draft.departure_end) errors.departureWindow = "Enter both departure times.";
   else if (hhmm(draft.departure_end) <= hhmm(draft.departure_start)) errors.departureWindow = "The latest departure must be after the earliest.";
   if (!draft.one_way && draft.start_date === draft.end_date && draft.home_departure_earliest && draft.home_arrival_latest && hhmm(draft.home_arrival_latest) <= hhmm(draft.home_departure_earliest)) errors.homeTimes = "Be home after you leave home.";
+  if ((draft.positioning_patterns ?? []).some(item => item.last.slice(0, 5) < item.first.slice(0, 5) || !/^[A-Z]{3}$/.test(item.currency))) errors.patterns = "Fix the regular service: its last departure must not be before its first, and its currency needs 3 letters.";
   if (draft.visits.some(visit => !(Number.isFinite(visit.min_stay_hours) && visit.min_stay_hours > 0 && visit.min_stay_hours <= 8760))) errors.stays = "Enter a minimum stay greater than 0 and up to 8,760 hours for each city.";
   if (!Number.isInteger(draft.adults) || draft.adults < 1 || draft.adults > 9) errors.adults = "Enter 1 to 9 adults.";
   if (draft.budget_myr !== null && !(draft.budget_myr >= 0)) errors.budget = "Enter 0 or more, or leave it blank.";

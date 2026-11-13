@@ -2,11 +2,11 @@ import { TemporalInput } from "./ui/temporal-input";
 import { Select, SelectItem } from "./ui/select";
 import { useId, useState } from "react";
 import { ChevronDown } from "lucide-react";
-import { Field, PlacePicker } from "./PlannerForms";
+import { Field, NumberField, PlacePicker } from "./PlannerForms";
 import { InfoTip } from "./InfoTip";
 import { Button } from "./ui/button";
 import { formatLocal, modeLabel, moneyShort } from "../lib/present";
-import { localInputToISO, modes, type Mode, type Place, type PositioningPolicy, type TripDraft } from "../lib/planner";
+import { localInputToISO, modes, type Mode, type Place, type PositioningPattern, type PositioningPolicy, type TripDraft } from "../lib/planner";
 
 type Direction = PositioningPolicy["direction"];
 type PolicyValue = "search" | "supplied" | "unavailable";
@@ -47,7 +47,17 @@ function EndpointList({ draft, edit, direction }: { draft: TripDraft; edit: (val
   </fieldset>;
 }
 
-/** One city and direction (G): how to travel by each mode turned on, your journeys, and the form to add one. */
+type Way = "search" | "regular" | "anytime" | "tickets" | "custom";
+const wayLabels: Record<Way, string> = { search: "Find it for me", regular: "Runs regularly", anytime: "Any time (car, lift, taxi)", tickets: "I have tickets", custom: "Per transport type" };
+const anyTime = { first: "00:00", last: "23:59", every_minutes: 30 };
+const clockOf = (time: string) => time.slice(0, 5);
+
+/**
+ * One other city and direction (G): how the user gets between home and the city. Find it for me searches it. Runs
+ * regularly and Any time are a regular service the solver expands into timed journeys; I have tickets uses the
+ * journeys added below. The last three turn off searching for this pair. "Per transport type" shows the policy of
+ * each mode, for trips whose modes differ.
+ */
 function GatewayPositioning({ draft, gateway, direction, edit }: {
   draft: TripDraft; gateway: Place; direction: Direction; edit: (value: TripDraft) => void;
 }) {
@@ -56,21 +66,45 @@ function GatewayPositioning({ draft, gateway, direction, edit }: {
   const destination = direction === "outbound" ? gateway : home;
   const [form, setForm] = useState({ mode: "" as Mode | "", departure: "", arrival: "", fare: "", currency: "MYR", label: "" });
   const [error, setError] = useState("");
+  const [customOpen, setCustomOpen] = useState(false);
   const policies = draft.positioning_policies ?? [];
   const services = draft.positioning_services ?? [];
-  const group = services.filter(s => s.direction === direction && s.gateway_id === gateway.id);
+  const patterns = draft.positioning_patterns ?? [];
+  const mine = <T extends { direction: Direction; gateway_id: string }>(item: T) => item.direction === direction && item.gateway_id === gateway.id;
+  const group = services.filter(mine);
+  const pattern = patterns.find(mine);
   const allowed = modes.filter(mode => draft.modes.includes(mode));
-  const policyFor = (mode: Mode) => policies.find(p => p.direction === direction && p.gateway_id === gateway.id && p.mode === mode);
+  const policyFor = (mode: Mode) => policies.find(p => mine(p) && p.mode === mode);
   const valueOf = (mode: Mode): PolicyValue => policyFor(mode)?.available === false ? "unavailable" : policyFor(mode)?.search_more === false ? "supplied" : "search";
   const formMode = form.mode && allowed.includes(form.mode) ? form.mode : allowed[0];
   const adults = count(draft.adults, "adult");
+  const values = new Set(allowed.map(valueOf));
+  const way: Way = customOpen || values.size > 1 || values.has("unavailable") ? "custom"
+    : pattern ? (clockOf(pattern.first) === anyTime.first && clockOf(pattern.last) === anyTime.last ? "anytime" : "regular")
+    : values.has("supplied") ? "tickets" : "search";
 
   // Policies of modes that are turned off stay as they are.
   function changePolicy(mode: Mode, value: PolicyValue) {
     edit({ ...draft, positioning_policies: [
-      ...policies.filter(p => !(p.direction === direction && p.gateway_id === gateway.id && p.mode === mode)),
+      ...policies.filter(p => !(mine(p) && p.mode === mode)),
       { direction, gateway_id: gateway.id, mode, available: value !== "unavailable", search_more: value === "search" },
     ] });
+  }
+  function chooseWay(next: Way) {
+    setCustomOpen(next === "custom");
+    if (next === "custom") return;
+    const others = policies.filter(p => !mine(p)), rest = patterns.filter(p => !mine(p));
+    // Searching uses no policy; the other ways use only your journeys for every mode.
+    const own = next === "search" ? [] : allowed.map(mode => ({ direction, gateway_id: gateway.id, mode, available: true, search_more: false }));
+    const road = allowed.find(mode => mode === "car" || mode === "taxi"), scheduled = allowed.find(mode => mode !== "flight") ?? allowed[0];
+    const base = pattern ?? { id: crypto.randomUUID(), direction, gateway_id: gateway.id, duration_minutes: 60, fare_amount: null, currency: "MYR",
+      label: `${origin.name} → ${destination.name}`, mode: scheduled };
+    const kept = next === "regular" ? [{ ...base, mode: base.mode, ...(way === "anytime" || !pattern ? { first: "06:00", last: "22:00", every_minutes: 30 } : {}) }]
+      : next === "anytime" ? [{ ...base, mode: road ?? base.mode, ...anyTime }] : [];
+    edit({ ...draft, positioning_policies: [...others, ...own], positioning_patterns: [...rest, ...kept] as PositioningPattern[] });
+  }
+  function setPattern(change: Partial<PositioningPattern>) {
+    if (pattern) edit({ ...draft, positioning_patterns: patterns.map(item => item === pattern ? { ...item, ...change } : item) });
   }
   function add() {
     try {
@@ -93,53 +127,83 @@ function GatewayPositioning({ draft, gateway, direction, edit }: {
     } catch (err) { setError(err instanceof Error ? err.message : "This journey can't be added."); }
   }
 
-  const values = allowed.map(valueOf);
-  const policySummary = new Set(values).size <= 1 ? policyLabels[values[0] ?? "search"]
-    : allowed.filter(mode => valueOf(mode) !== "search").map(mode => `${modeLabel(mode)}: ${policyLabels[valueOf(mode)].toLowerCase()}`).join(" · ");
+  const summary = way === "regular" && pattern ? `${modeLabel(pattern.mode)} ${clockOf(pattern.first)}–${clockOf(pattern.last)}, every ${pattern.every_minutes} min`
+    : way === "anytime" && pattern ? `${modeLabel(pattern.mode)}, any time` : wayLabels[way];
   const sameDay = (a: string, aZone: string, b: string, bZone: string) => formatLocal(a, aZone, "date") === formatLocal(b, bZone, "date");
 
   return <details className="p-subgroup">
     <summary>
-      <span className="p-subgroup-title">Travel from {origin.name} to {destination.name} ({direction === "outbound" ? "before" : "after"} the trip)</span>
-      <span className="p-group-summary">{[policySummary, group.length ? count(group.length, "journey") : ""].filter(Boolean).join(" · ")}</span>
+      <span className="p-subgroup-title">{origin.name} → {destination.name} ({direction === "outbound" ? "before" : "after"} the trip)</span>
+      <span className="p-group-summary">{[summary, group.length ? count(group.length, "journey") : ""].filter(Boolean).join(" · ")}</span>
       <ChevronDown size={16} className="p-chevron" aria-hidden="true" />
     </summary>
     <div className="p-subgroup-body">
-      <h4>How to travel</h4>
-      <p className="p-hint">Only transport types turned on for this trip are listed.</p>
-      <div className="p-group-fields">{allowed.map(mode => <Field key={mode} label={modeLabel(mode)}>
-        <Select value={valueOf(mode)} onValueChange={value => changePolicy(mode, value as PolicyValue)}>
-          {(Object.keys(policyLabels) as PolicyValue[]).map(value => <SelectItem key={value} value={value}>{policyLabels[value]}</SelectItem>)}
-        </Select>
-      </Field>)}</div>
-      {allowed.filter(mode => valueOf(mode) === "supplied" && !group.some(s => s.mode === mode)).map(mode =>
+      <div className="p-group-fields">
+        <Field label="How do you get there?">
+          <Select value={way} onValueChange={value => chooseWay(value as Way)}>
+            {(Object.keys(wayLabels) as Way[]).map(value => <SelectItem key={value} value={value}>{wayLabels[value]}</SelectItem>)}
+          </Select>
+        </Field>
+      </div>
+
+      {(way === "regular" || way === "anytime") && pattern && <>
+        <div className="p-group-fields">
+          <Field label="Transport"><Select value={allowed.includes(pattern.mode) ? pattern.mode : ""} onValueChange={value => setPattern({ mode: value as Mode })}>
+            {allowed.map(mode => <SelectItem key={mode} value={mode}>{modeLabel(mode)}</SelectItem>)}
+          </Select></Field>
+          {way === "regular" && <>
+            <Field label={`First (${origin.name} time)`}><TemporalInput type="time" value={clockOf(pattern.first)} onValueChange={value => { if (value) setPattern({ first: value }); }} /></Field>
+            <Field label="Last"><TemporalInput type="time" value={clockOf(pattern.last)} onValueChange={value => { if (value) setPattern({ last: value }); }} /></Field>
+            <NumberField label="Every (min)" value={pattern.every_minutes} min={10} max={1440} integer onChange={n => { if (n !== null) setPattern({ every_minutes: n }); }} />
+          </>}
+          <NumberField label="Takes (min)" value={pattern.duration_minutes} min={1} max={2880} integer onChange={n => { if (n !== null) setPattern({ duration_minutes: n }); }} />
+          <NumberField label={`Price for ${adults} (optional)`} value={pattern.fare_amount} optional placeholder="Not priced" onChange={n => setPattern({ fare_amount: n })} />
+          <Field label="Currency"><input maxLength={3} value={pattern.currency} onChange={e => { const code = e.target.value.toUpperCase(); if (/^[A-Z]{0,3}$/.test(code)) setPattern({ currency: code }); }} /></Field>
+        </div>
+        {clockOf(pattern.last) < clockOf(pattern.first) && <p className="p-field-error">The last departure must not be before the first.</p>}
+        {!allowed.includes(pattern.mode) && <p className="p-notice">{modeLabel(pattern.mode)} is off in Transport. Choose another type or turn it on.</p>}
+        <p className="p-hint">{way === "regular" ? "Your schedule is used on every day of the trip. Check holiday timetables before you book." : "Leaves when you are ready. Use the time it usually takes."}</p>
+      </>}
+
+      {way === "custom" && <>
+        <p className="p-hint">Only transport types turned on for this trip are listed.</p>
+        <div className="p-group-fields">{allowed.map(mode => <Field key={mode} label={modeLabel(mode)}>
+          <Select value={valueOf(mode)} onValueChange={value => changePolicy(mode, value as PolicyValue)}>
+            {(Object.keys(policyLabels) as PolicyValue[]).map(value => <SelectItem key={value} value={value}>{policyLabels[value]}</SelectItem>)}
+          </Select>
+        </Field>)}</div>
+      </>}
+      {way === "tickets" && !group.length && <p className="p-notice">Add your journey below. Without one, there are no options through {gateway.name}.</p>}
+      {way === "custom" && allowed.filter(mode => valueOf(mode) === "supplied" && !group.some(s => s.mode === mode)).map(mode =>
         <p className="p-notice" key={mode}>{modeLabel(mode)}: only your journeys are allowed here, but you have not added one. It gives no options.</p>)}
 
-      <div className="p-subhead"><h4>Your journeys</h4><InfoTip topic="your journeys" align="end">Enter city-to-city times, including station access. Airport time before onward flights is added separately. Your journeys are used even outside the departure times. To change a journey, remove it and add it again.</InfoTip></div>
-      {group.length ? <ul className="p-item-rows">{group.map(service => {
-        const unused = !draft.modes.includes(service.mode) ? `${modeLabel(service.mode)} is off for this trip` : valueOf(service.mode) === "unavailable" ? "set to Don't use" : "";
-        return <li key={service.id}>
-          <span>{service.label} · {modeLabel(service.mode)} · {formatLocal(service.departure, origin.timezone)} → {formatLocal(service.arrival, destination.timezone, sameDay(service.departure, origin.timezone, service.arrival, destination.timezone) ? "time" : "datetime")} · {service.fare_amount === null ? "Not priced" : moneyShort(service.fare_amount, service.currency)} for {adults}
-            {unused && <span className="p-warning"> · not used: {unused}</span>}</span>
-          <button type="button" className="p-text-button" aria-label={`Remove ${service.label}`} onClick={() => edit({ ...draft, positioning_services: services.filter(s => s.id !== service.id) })}>Remove</button>
-        </li>;
-      })}</ul> : <p className="p-hint">None.</p>}
+      {(way === "tickets" || way === "custom" || group.length > 0) && <>
+        <div className="p-subhead"><h4>Your journeys</h4><InfoTip topic="your journeys" align="end">Enter city-to-city times, including station access. Airport time before onward flights is added separately. Your journeys are used even outside the departure times. To change a journey, remove it and add it again.</InfoTip></div>
+        {group.length ? <ul className="p-item-rows">{group.map(service => {
+          const unused = !draft.modes.includes(service.mode) ? `${modeLabel(service.mode)} is off for this trip` : valueOf(service.mode) === "unavailable" ? "set to Don't use" : "";
+          return <li key={service.id}>
+            <span>{service.label} · {modeLabel(service.mode)} · {formatLocal(service.departure, origin.timezone)} → {formatLocal(service.arrival, destination.timezone, sameDay(service.departure, origin.timezone, service.arrival, destination.timezone) ? "time" : "datetime")} · {service.fare_amount === null ? "Not priced" : moneyShort(service.fare_amount, service.currency)} for {adults}
+              {unused && <span className="p-warning"> · not used: {unused}</span>}</span>
+            <button type="button" className="p-text-button" aria-label={`Remove ${service.label}`} onClick={() => edit({ ...draft, positioning_services: services.filter(s => s.id !== service.id) })}>Remove</button>
+          </li>;
+        })}</ul> : <p className="p-hint">None.</p>}
 
-      <details className="p-add-form">
-        <summary>Add your journey</summary>
-        <div className="p-group-fields">
-          <Field label="Transport"><Select value={formMode ?? ""} onValueChange={value => setForm(f => ({ ...f, mode: value as Mode }))}>{allowed.map(mode => <SelectItem key={mode} value={mode}>{modeLabel(mode)}</SelectItem>)}</Select></Field>
-          <Field label="Name (optional)"><input maxLength={160} value={form.label} onChange={e => setForm(f => ({ ...f, label: e.target.value }))} /></Field>
-          <Field label={`Departs (${origin.name} time)`}><TemporalInput type="datetime-local" value={form.departure} onValueChange={value => setForm(f => ({ ...f, departure: value }))} /></Field>
-          <Field label={`Arrives (${destination.name} time)`}><TemporalInput type="datetime-local" value={form.arrival} onValueChange={value => setForm(f => ({ ...f, arrival: value }))} /></Field>
-          <Field label={`Price for ${adults} (optional)`}><input inputMode="decimal" placeholder="Not priced" value={form.fare} onChange={e => setForm(f => ({ ...f, fare: e.target.value }))} /></Field>
-          <Field label="Currency"><input maxLength={3} value={form.currency} onChange={e => setForm(f => ({ ...f, currency: e.target.value.toUpperCase() }))} /></Field>
-        </div>
-        <div className="p-form-actions">
-          <Button type="button" size="sm" variant="secondary" onClick={add}>Add journey</Button>
-          {error && <p className="p-field-error" role="alert">{error}</p>}
-        </div>
-      </details>
+        <details className="p-add-form" open={way === "tickets" && !group.length ? true : undefined}>
+          <summary>Add your journey</summary>
+          <div className="p-group-fields">
+            <Field label="Transport"><Select value={formMode ?? ""} onValueChange={value => setForm(f => ({ ...f, mode: value as Mode }))}>{allowed.map(mode => <SelectItem key={mode} value={mode}>{modeLabel(mode)}</SelectItem>)}</Select></Field>
+            <Field label="Name (optional)"><input maxLength={160} value={form.label} onChange={e => setForm(f => ({ ...f, label: e.target.value }))} /></Field>
+            <Field label={`Departs (${origin.name} time)`}><TemporalInput type="datetime-local" value={form.departure} onValueChange={value => setForm(f => ({ ...f, departure: value }))} /></Field>
+            <Field label={`Arrives (${destination.name} time)`}><TemporalInput type="datetime-local" value={form.arrival} onValueChange={value => setForm(f => ({ ...f, arrival: value }))} /></Field>
+            <Field label={`Price for ${adults} (optional)`}><input inputMode="decimal" placeholder="Not priced" value={form.fare} onChange={e => setForm(f => ({ ...f, fare: e.target.value }))} /></Field>
+            <Field label="Currency"><input maxLength={3} value={form.currency} onChange={e => setForm(f => ({ ...f, currency: e.target.value.toUpperCase() }))} /></Field>
+          </div>
+          <div className="p-form-actions">
+            <Button type="button" size="sm" variant="secondary" onClick={add}>Add journey</Button>
+            {error && <p className="p-field-error" role="alert">{error}</p>}
+          </div>
+        </details>
+      </>}
     </div>
   </details>;
 }

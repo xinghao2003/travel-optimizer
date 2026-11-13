@@ -113,7 +113,9 @@ export function tasksFor(spec: TripSpec, metros: MetroAirports, transitEnabled: 
     if (gateway.id !== spec.home.id) for (const direction of ["outbound", "return"] as const) {
       const [a, b] = direction === "outbound" ? [spec.home.id, gateway.id] : [gateway.id, spec.home.id];
       const services = (spec.positioning_services ?? []).filter(s => s.direction === direction && s.gateway_id === gateway.id && spec.modes.includes(s.mode) && micros(s.departure) >= start && micros(s.arrival) <= end);
-      if (!searchModes(spec, a, b).length && services.length) {
+      // A regular service runs every day, so it never narrows the dates.
+      const regular = (spec.positioning_patterns ?? []).some(s => s.direction === direction && s.gateway_id === gateway.id && spec.modes.includes(s.mode));
+      if (!searchModes(spec, a, b).length && services.length && !regular) {
         if (direction === "outbound") earliest = maxInstant(earliest, minInstant(...services.map(s => micros(s.arrival))));
         else latest = minInstant(latest, maxInstant(...services.map(s => micros(s.departure))));
       }

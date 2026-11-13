@@ -125,6 +125,7 @@ export function TripSettings({ draft, edit: setDraft, places, errors, transitCon
           </div>
           <p className="p-field-status" aria-live="polite">{homeStatus}</p>
           {home && <StartCities key={`${home.id}:${draft.one_way ?? "round"}`} draft={draft} edit={edit} />}
+          {errors.patterns && <p className="p-field-error" role="alert">{errors.patterns}</p>}
         </div>
       </div>
 

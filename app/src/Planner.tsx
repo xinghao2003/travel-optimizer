@@ -127,6 +127,7 @@ export default function Planner({ storageActions, externalRevision = 0 }: { stor
     value = { ...value,
       positioning_policies: (value.positioning_policies ?? []).filter(validPositioning),
       positioning_services: value.home?.id === draftRef.current.home?.id ? (value.positioning_services ?? []).filter(validPositioning) : [],
+      positioning_patterns: value.home?.id === draftRef.current.home?.id ? (value.positioning_patterns ?? []).filter(validPositioning) : [],
     };
     draftRef.current = value; setDraft(value); version.current++; dirtyRef.current = true; setDirty(true); setSaveStatus("Unsaved changes"); setError(null);
   }

@@ -1,8 +1,10 @@
 # Apply missing information during a search
 
-Missing info remains editable while a search runs. Typing creates browser
-drafts; it does not change the active calculation. The Apply bar shows
-**Apply and continue** during an active round and **Apply** otherwise.
+Prices to add remains editable while a search runs. Typing creates browser
+drafts; it does not change the active calculation. Drafts save on their own
+1.5 s after the last change (Ctrl+Enter saves at once). Saving uses the Apply
+transaction below; the bottom bar shows only while it runs, after an error, or
+when a value needs fixing.
 
 Apply sends airport-change drafts, airport-transfer drafts, and journey/shared
 price drafts in one request. All categories are validated before one revision

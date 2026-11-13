@@ -1,6 +1,6 @@
-# Edit Missing info as CSV
+# Edit prices as CSV
 
-Open **Missing info → Edit as CSV**. The text box starts with the current
+Open **Prices to add → Edit as CSV**. The text box starts with the current
 values. **Copy CSV** copies that text; edit it elsewhere and paste the result
 back into the same box, including its header. You can also edit directly in
 the box or paste tab-separated cells copied from a spreadsheet. No file
@@ -14,10 +14,10 @@ If automatic copy is blocked, a separate read-only text box shows and selects
 the rules. Your CSV text is preserved.
 
 Select **Preview changes** to inspect matches and errors. **Import as drafts**
-stages all valid changes together. Any error blocks the whole import. Select
-**Apply** to save those drafts with the other Missing info edits and update
-options once. Imported drafts persist in this browser and can be undone in the
-normal forms or discarded through the Apply bar.
+stages all valid changes together. Any error blocks the whole import. The
+imported drafts then save on their own with the other pending edits and update
+options once. Until they save they persist in this browser and can be undone in
+the normal forms.
 
 ## Rows and values
 

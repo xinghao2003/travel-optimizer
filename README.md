@@ -13,7 +13,7 @@ The planner runs entirely in the browser: trips, prices and search progress are 
 
 ## Trip setup and results
 
-The page has a header (trip select, save status, and the **⋯** menu), the trip bar with **Edit trip** and the search status, the **Plan a trip** form, and a workspace with three panels: **Options**, **Itinerary**, and **Missing info**. From 1100 px the Options column is beside a side panel for Itinerary and Missing info; on narrower screens one tab bar switches the three panels.
+The page has a header (trip select, save status, and the **⋯** menu), the trip bar with **Edit trip** and the search status, the **Plan a trip** form, and a workspace with three panels: **Options**, **Itinerary**, and **Prices to add**. From 1100 px the Options column is beside a side panel for Itinerary and Prices to add; on narrower screens one tab bar switches the three panels.
 
 - The form asks four questions: **Where's home?**, **Where to?**, **When are you free?** and **Who's going?**, then **Transport**. Everything else is under **Advanced**.
 - Choose a home city, up to two other cities to leave from and return to (**Also leave from and return to**; **Different on the way back** gives separate start and end lists), and one to four cities to visit. The optimizer chooses one start and one end city and the visit order.
@@ -27,7 +27,7 @@ The page has a header (trip select, save status, and the **⋯** menu), the trip
 - Flight, rail, bus, coach, subway, tram, car, and taxi are modeled. Full flight timestamps include layovers and actual airport timezones. City/terminal access, readiness buffers, and final travel home are included. City-stay hours include nights; home, positioning cities, and transportation do not count.
 - Edit fixed/ranged fares, save reusable fixed/distance pricing rules, and enter currency conversion rates. Overrides take precedence over retrieved fares; rules estimate missing prices. Person/party/vehicle units and seating capacity are explicit. Connector rules use their actual city/airport endpoints and country.
 - Unknown fares stay not priced. Options with a range or a not-priced part show "RM x + unknown" or "RM a – b", and options that may exceed the budget are flagged. Definitely over-budget options stay outside the best options; up to ten examples are in the **Over budget** group for ticket/price refinement.
-- The **Missing info** panel lists what to check, in priority order: airport changes, airport transfers, journey prices, connections between cities, combined tickets to check, group prices you set, and price rules. Repeated journeys with the same endpoints, fare type, mode, currency, and missing-price reason share one row, with distinct affected-itinerary counts. Expand a group to inspect journey dates and services or enter individual prices. A value you enter (here or with **Set price** in the itinerary) is a draft marked **Not applied**; drafts are kept in this browser and survive reloads without recalculating. The **Apply** bar at the bottom shows the drafts of the trip: **Apply** (Ctrl+Enter) saves them all and recalculates once, **Discard** removes them. Each value is a whole-party amount per journey, not a bundled total. Group prices are reusable estimates for their selected matching scope within this trip; later journeys reuse them when they match. Prices of priced journeys remain editable in the itinerary's **Tickets and prices**.
+- The **Prices to add** panel lists what to check, in priority order: airport changes, airport transfers, journey prices, connections between cities, combined tickets to check, group prices you set, and price rules. Repeated journeys with the same endpoints, fare type, mode, currency, and missing-price reason share one row, with distinct affected-itinerary counts. Expand a group to inspect journey dates and services or enter individual prices. A value you enter (here or with **Set price** in the itinerary) saves on its own 1.5 s after the last change, once the field has committed it (Enter, or leaving the price fields), and the options recalculate once for all values entered together; **Ctrl+Enter** saves at once. Until then it is marked **Not saved yet** and is kept in this browser across reloads. A bar at the bottom shows only while saving, after a failed save (**Try again**, **Discard**), or when a value needs fixing. Each value is a whole-party amount per journey, not a bundled total. Group prices are reusable estimates for their selected matching scope within this trip; later journeys reuse them when they match. Prices of priced journeys remain editable in the itinerary's **Tickets and prices**.
 - An own car must be physically available and recovered to home. Rentals require declared pickup/drop-off locations, daily/driving costs, and one-way charges. Rentals are returned at an allowed location before changing transport. Rental inventory is not live.
 - Trips, price edits, rules, graphs, and search checkpoints persist in this browser (IndexedDB); see [browser storage](docs/browser-storage.md). To debug a search or calculation, use **⋯ › Download debug bundle** and replay it with `app/scripts/replay.mjs`; see [debug bundles and replay](docs/browser-storage.md#debug-bundles-and-replay). Price, timing, and driving-price edits recalculate saved data. Changed cities, dates, travelers, or coverage may require another search.
 
@@ -39,13 +39,12 @@ Option rows show the total price for the party, the time in cities, and the pric
 
 ## Pricing and search coverage
 
-**Missing info → Edit as CSV** opens one text editor with the current journey
+**Prices to add → Edit as CSV** opens one text editor with the current journey
 prices, airport transfers, airport changes, and exchange rates. Select **Copy
 CSV**, fill the values elsewhere, and paste them back into the same box; direct
 editing and pasted spreadsheet cells are also supported. **Preview changes**
-checks the rows, then **Import as drafts** fills the forms. **Apply** saves the
-batch and recalculates once. Blank cells leave values unchanged. Exchange rates
-entered in Missing info also remain drafts until Apply. See
+checks the rows, then **Import as drafts** fills the forms, which save on their
+own as one batch and recalculate once. Blank cells leave values unchanged. See
 [CSV editing](docs/missing-info-csv.md) for columns, scopes and limits.
 
 **Journey prices > Group by** selects which station, category, connection,
@@ -72,8 +71,8 @@ Under **Advanced › Search size**, choose **Minutes** to run the whole search a
 
 In request mode, optimization defaults to **25,000 expanded labels**. Hitting the limit is explicitly marked "Not all combinations were checked". **Check more combinations** starts continuous checking on the saved graph and becomes **Stop checking**. It resumes a matching checkpoint in bounded batches, publishes options after each batch, and makes no provider requests. Exploration shares short turns across starting routes, favoring usable prices while giving unpriced paths regular turns so later combined tickets remain eligible. It stops when complete, when requested, or before edits are applied. There is no checkpoint-size limit; large searches can exhaust memory or disk space. Stopping can wait for the current operation and saving. Only one continuous checker runs at a time; closing the page stops it, and it continues only when requested again. Changed inputs restart from the saved graph, rather than searching only the previous frontier. Accommodation, sightseeing hours, and reliability remain later phases.
 
-While a search runs, Missing info remains editable. **Apply and continue**
-pauses safely, saves all Apply-bar drafts together, and recalculates from the
+While a search runs, Prices to add remains editable. Saving pauses the search
+safely, saves all pending values together, and recalculates from the
 full saved graph within the same remaining round allowance. Previously weaker
 routes can become best under the new inputs. If time expires, edits remain
 saved and the round waits for explicit continuation. See
@@ -123,7 +122,7 @@ Round trips use two kinds of flight-function calls: one search returns the outbo
 
 Multi-city ticket opportunities are registered directly in the manual-quote list with search links. They never enter the provider queue or increment processed, pending, provider-request, or cache-hit counts, and they do not trigger extra publications. A separate manual-quote counter shows the number of unique opportunities. Ticket candidates are deduplicated by city pairs and departure dates before constructing provider queries. Coverage is published every four provider-query tasks; when a solve takes at least one second, changed provider data is batched until other discovery work has had as much time as that solve, or sixteen queries have been processed, whichever comes first. Pausing/completing discovery and manual trip/rule changes force an up-to-date solve. Overlapping optimization requests can reuse a matching completed snapshot.
 
-Airport–city transfers can be entered before a search in **Missing info › Airport transfers**. It lists configured airports in both directions and adds airports encountered in retrieved journeys. Add taxi, car, rail, subway, tram, bus, or coach ways with a travel time and optional whole-party price/range; they are drafts until **Apply**. Applied ways apply to current and future matching journeys in that trip and party size; individual component fare overrides take priority. Alternatives change door-to-door timing while retaining the underlying flight ticket and bundle coverage. They are user assumptions, without timetable or operating-hour verification. An unedited taxi retains the existing road/fallback timing; airport-to-airport connections remain separate.
+Airport–city transfers can be entered before a search in **Prices to add › Airport transfers**. It lists configured airports in both directions and adds airports encountered in retrieved journeys. Add taxi, car, rail, subway, tram, bus, or coach ways with a travel time and optional whole-party price/range; they save on their own like other prices. Applied ways apply to current and future matching journeys in that trip and party size; individual component fare overrides take priority. Alternatives change door-to-door timing while retaining the underlying flight ticket and bundle coverage. They are user assumptions, without timetable or operating-hour verification. An unedited taxi retains the existing road/fallback timing; airport-to-airport connections remain separate.
 
 ## Tests
 

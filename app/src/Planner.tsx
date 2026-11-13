@@ -35,6 +35,8 @@ type Panel = "options" | "itinerary" | "missing";
 const pageSize = 40;
 /** Request batches a search continues on its own after the first (B3). */
 const autoBatches = 9;
+/** Milliseconds after the last price change before the drafts save (C9). */
+const autoSaveDelay = 1500;
 /** Best, weaker and over-budget options of a result. */
 const resultRoutes = (result: Result | null) => [...(result?.routes ?? []), ...(result?.dominated_routes ?? []), ...(result?.refinement_routes ?? [])];
 /**
@@ -856,7 +858,9 @@ export default function Planner({ storageActions, externalRevision = 0 }: { stor
    * Drafts for another party size or components outside the saved data stay in this browser.
    * The session token is checked after every request, so a trip opened meanwhile is never changed.
    */
-  function applyDrafts() {
+  function applyDrafts(options?: { auto?: boolean }) {
+    // Saving on its own (auto) is silent: it never shows an error for drafts it can't send or moves the focus.
+    const auto = options?.auto === true;
     const tripId = savedRef.current?.id;
     const drafts = tripDrafts.read();
     const fares = canonicalFares(drafts.fares, templateOf);
@@ -865,16 +869,19 @@ export default function Planner({ storageActions, externalRevision = 0 }: { stor
     if (!tripId || busy) return;
     if (!hasChanges) {
       // The Apply bar counts every fare draft, so it shows while only "Other drafts" are left.
-      if (Object.keys(fares).length) setApplyError({ text: "No change matches the current options. Undo the drafts under Missing info › Other drafts, or change the trip back.", reload: false });
+      if (!auto && Object.keys(fares).length) setApplyError({ text: "No change matches the current options. Undo the drafts under Prices to add › Other drafts, or change the trip back.", reload: false });
       return;
     }
-    if (invalidFields(drafts).length) { focusInvalid(drafts); return; }
+    if (invalidFields(drafts).length) { if (!auto) focusInvalid(drafts); return; }
     // A trip with marked settings can't save, and every step saves the trip first.
     if (invalid) {
+      if (auto) return;
       setApplyError({ text: "Fix the marked trip settings first.", reload: false });
       setSettingsOpen(true); setFocusTarget("settings-title");
       return;
     }
+    // The price forms are inert while saving, which takes the focus away: a save on its own gives it back.
+    keptFocus.current = auto && document.activeElement !== document.body ? document.activeElement as HTMLElement | null : null;
     const before = result?.routes.length ?? 0;
     // Focus after Apply: the itinerary heading when Apply started there, else the panel in view (C9).
     const focus = document.activeElement?.closest("#panel-itinerary") ? "itinerary-title" : panelHeading();
@@ -918,22 +925,41 @@ export default function Planner({ storageActions, externalRevision = 0 }: { stor
         setSaveStatus(applied.updating ? (applied.job && ["queued", "running"].includes(applied.job.status)
           ? "Changes saved · updating options" : "Changes saved · continue the round to update options")
           : savedRef.current?.snapshot ? `Applied · ${before} → ${applied.trip.result?.routes.length ?? before} best options` : "Applied");
-        setFocusTarget([focus, "options-title"]);
+        if (!auto) setFocusTarget([focus, "options-title"]);
       } catch (err) {
         if (!current()) return;
         const message = (err instanceof Error ? err.message : String(err)).replace(/\.$/, "");
         setApplyError({ text: `Could not finish Apply: ${message}. Your drafts are kept.`, reload: (err as { status?: number }).status === 409 });
-      } finally { applyBusy.current = false; setApplyState(false); }
+      } finally {
+        applyBusy.current = false; setApplyState(false);
+      }
     }, "apply");
   }
-  // Exchange rates join the other Missing info drafts and are saved by Apply.
+  // After the inert price forms are back (a commit with applyState off), the field that had the focus gets it again.
+  const keptFocus = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    const element = keptFocus.current;
+    if (applyState || !element) return;
+    keptFocus.current = null;
+    if (element.isConnected && (document.activeElement === document.body || document.activeElement === null)) element.focus();
+  }, [applyState]);
+  // Drafts save on their own once they have not changed for autoSaveDelay (fields stage a draft on every keystroke).
+  // Ctrl+Enter saves at once.
+  const draftSignature = JSON.stringify(tripDrafts.drafts);
+  useEffect(() => {
+    if (!saved || draftTotal === 0 || invalidCount > 0 || applyState || busy || applyError) return;
+    const timer = window.setTimeout(() => applyDrafts({ auto: true }), autoSaveDelay);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftSignature, draftTotal, invalidCount, applyState, busy, applyError, saved?.id]);
+  // Exchange rates join the other price drafts and save with them.
   function addRate(currency: string, rate: number) {
     const current = tripDrafts.read();
     tripDrafts.stageImported({ ...current, exchangeRates: { ...current.exchangeRates, [currency]: rate } });
   }
   // Apply bar › Discard: removes every draft of this trip after a confirm. The bar closes, so focus goes to the panel in view.
   function discardDrafts() {
-    if (!window.confirm(`Discard ${draftTotal} ${draftTotal === 1 ? "change that is" : "changes that are"} not applied?`)) return;
+    if (!window.confirm(`Discard ${draftTotal} ${draftTotal === 1 ? "change that is" : "changes that are"} not saved?`)) return;
     tripDrafts.clear();
     setApplyError(null);
     setFocusTarget([panelHeading(), "options-title"]);
@@ -972,13 +998,14 @@ export default function Planner({ storageActions, externalRevision = 0 }: { stor
   const best = result?.routes.length ?? 0;
   const optionsTab: TabItem<Panel> = { id: "options", label: "Options", ...(searched && result ? { badge: best, badgeText: `${best} best option${best === 1 ? "" : "s"}` } : {}) };
   const itineraryTab: TabItem<Panel> = { id: "itinerary", label: "Itinerary" };
-  const missingTab: TabItem<Panel> = { id: "missing", label: "Missing info",
+  const missingTab: TabItem<Panel> = { id: "missing", label: "Prices to add",
     ...(searched && needs ? { badge: needs, badgeText: needsText } : allClear ? { badge: <CircleCheck size={14} />, badgeText: "nothing missing" } : {}) };
 
   if (initialLoad) return <div className="optimizer"><main className="p-page-loading" aria-busy="true"><p role="status"><LoaderCircle size={18} className="p-spin" aria-hidden="true" />Opening your trips…</p></main></div>;
 
   // The Apply bar shows in every tab while the open trip has drafts (C9).
-  const showApplyBar = !!saved && !loadingTrip && draftTotal > 0;
+  // Drafts save on their own: the bar shows only while saving, after an error, or for values to fix.
+  const showApplyBar = !!saved && !loadingTrip && draftTotal > 0 && (applyState || !!applyError || invalidCount > 0);
   return <div className="optimizer" data-drafts={showApplyBar || undefined}>
     <a href={workspace ? "#options-title" : "#settings-title"} className="p-skip-link" onClick={event => {
       // On a narrow screen the options can be in a hidden tab: show them first.

@@ -71,11 +71,11 @@ export function MissingInfoCsv({ context, busy, onStage, onUndoRate, onUndoDelet
     {message && <p className="p-mi-meta" role="status">{message}</p>}
     {error && !open && <p className="p-field-error" role="alert">{error}</p>}
     {rates.length > 0 && <ul className="p-csv-rates">{rates.map(([currency, rate]) => <li key={currency}>
-      1 {currency} = {rate} MYR <span className="p-staged">Not applied</span>
+      1 {currency} = {rate} MYR <span className="p-staged">Not saved yet</span>
       <button type="button" className="p-link-button" disabled={busy} onClick={() => onUndoRate(currency)}>Undo<span className="sr-only"> rate for {currency}</span></button>
     </li>)}</ul>}
     {deletions.length > 0 && <ul className="p-csv-rates">{deletions.map(([key, deletion]) => <li key={key}>
-      Delete {deletion.label} <span className="p-staged">Not applied</span>
+      Delete {deletion.label} <span className="p-staged">Not saved yet</span>
       <button type="button" className="p-link-button" disabled={busy} onClick={() => onUndoDeletion(key)}>Undo<span className="sr-only"> deletion of {deletion.label}</span></button>
     </li>)}</ul>}
     {open && <dialog ref={dialog} className="p-export-dialog p-csv-dialog" aria-labelledby="csv-title" onCancel={event => { event.preventDefault(); setOpen(false); }}
@@ -83,7 +83,7 @@ export function MissingInfoCsv({ context, busy, onStage, onUndoRate, onUndoDelet
         // Unstaged CSV must not trigger the page's Apply shortcut.
         if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); event.stopPropagation(); }
       }}>
-      <div className="p-export-heading"><h2 id="csv-title">Edit Missing info as CSV</h2><Button type="button" variant="ghost" size="sm" aria-label="Close CSV editor" onClick={() => setOpen(false)}><X size={18} aria-hidden="true" /></Button></div>
+      <div className="p-export-heading"><h2 id="csv-title">Edit prices as CSV</h2><Button type="button" variant="ghost" size="sm" aria-label="Close CSV editor" onClick={() => setOpen(false)}><X size={18} aria-hidden="true" /></Button></div>
       <p>Copy the CSV, fill it in, then paste it back into this box with its header. You can also edit here or paste spreadsheet cells. Blank cells leave values unchanged. Prices are for the whole party.</p>
       <details><summary>Which cells can I edit?</summary>
         <p>Edit price, max_price, currency, minutes and myr_per_unit where relevant. Airport changes also accept mode: taxi, rail, bus, coach, subway, tram or car. Airport transfers have a row for each mode; fill the rows you want.</p>

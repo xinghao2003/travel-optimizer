@@ -41,7 +41,7 @@ export function ExportDialog({ canSelect, canCurrent, hasDrafts, onClose, onExpo
         <label><input type="radio" name="export-format" checked={format === "html"} onChange={() => setFormat("html")} />HTML <small>Download a file that opens in any browser, without this app.</small></label>
       </fieldset>
       <p>Includes comparison tables, schedules and group transport prices. All options can make a long report.</p>
-      {hasDrafts && <p className="p-export-warning">You have pending edits. This export uses saved settings and calculated prices. Apply or save your edits first to include them.</p>}
+      {hasDrafts && <p className="p-export-warning">You have pending edits. This export uses saved settings and calculated prices. Wait for your edits to save to include them.</p>}
       {error && <p role="alert" className="p-export-warning">{error}</p>}
       {message && <p role="status">{message}</p>}
       <div className="p-export-actions"><Button type="button" variant="secondary" disabled={busy} onClick={onClose}>Close</Button><Button type="submit" disabled={busy || (scope === "selected" && !canSelect) || (scope === "current" && !canCurrent)}>{busy ? <LoaderCircle size={15} className="p-spin" aria-hidden="true" /> : <Download size={15} aria-hidden="true" />}{busy ? "Preparing…" : format === "pdf" ? "Open PDF report" : "Download HTML"}</Button></div>

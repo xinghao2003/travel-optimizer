@@ -71,7 +71,7 @@ export function RateField({ currency, id, added, addRate }: { currency: string; 
   const inputId = id ?? generated, errorId = `${inputId}-error`;
   const [text, setText] = useState("");
   const [error, setError] = useState("");
-  if (added) return <p className="p-mi-meta" role="status">Rate for {currency} entered. Apply pending changes to update options.</p>;
+  if (added) return <p className="p-mi-meta" role="status">Rate for {currency} entered. Options update when it saves.</p>;
   function add() {
     const rate = Number(text);
     if (text.trim() === "" || !Number.isFinite(rate) || rate <= 0) { setError("Enter a rate above 0."); return; }

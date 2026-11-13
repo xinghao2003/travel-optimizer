@@ -113,7 +113,7 @@ test("native provider HTTP coalesces cached queries and preserves failures, matr
   expect({ transitCalls, flightCalls, roadCalls }).toEqual({ transitCalls: 1, flightCalls: 2, roadCalls: 1 });
 });
 
-test("full native Planner searches and applies Missing info while a provider response is in flight", async ({ page }) => {
+test("full native Planner searches and saves prices while a provider response is in flight", async ({ page }) => {
   const forbidden: string[] = [], errors: string[] = [];
   let requests = 0, release!: () => void, entered!: () => void;
   const inFlight = new Promise<void>(resolve => { entered = resolve; }), hold = new Promise<void>(resolve => { release = resolve; });
@@ -138,13 +138,13 @@ test("full native Planner searches and applies Missing info while a provider res
   await page.goto("/");
   await page.getByRole("button", { name: "Find trips", exact: true }).last().click();
   await inFlight;
-  await page.getByRole("tab", { name: /Missing info/ }).click();
+  await page.getByRole("tab", { name: /Prices to add/ }).click();
   const price = page.locator("#panel-missing [data-price-input]").first();
+  // Enter stages the price, which then saves on its own; the save waits for the request in flight.
   await expect(price).toBeVisible(); await price.fill("1"); await price.press("Enter");
-  await expect(page.getByRole("region", { name: "Changes not applied" })).toBeVisible();
-  await page.getByRole("button", { name: "Apply and continue", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Saving changes" })).toBeVisible();
   release();
-  await expect(page.getByRole("region", { name: "Changes not applied" })).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Saving changes" })).toHaveCount(0);
   await expect.poll(() => page.evaluate(async tripId => {
     const { PlannerRepository } = await import("/src/native/repository.ts"), repository = new PlannerRepository();
     try {

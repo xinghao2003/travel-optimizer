@@ -248,7 +248,7 @@ export function MissingInfoPanel({ searched, allClear, needs, needsText, airport
   const unstageFare = (key: string) => drafts.unstage("fares", key);
   return <>
     <div className="p-panel-heading">
-      <div><h2 id="missing-title" tabIndex={-1}>Missing info</h2><InfoTip topic="Missing info">Information the search could not find. What you enter here is a draft in this browser until you select Apply. Apply updates your options once.</InfoTip></div>
+      <div><h2 id="missing-title" tabIndex={-1}>Prices to add</h2><InfoTip topic="Prices to add">Prices and details the search could not find. What you enter saves on its own when you leave the field, and your options update. Ctrl+Enter saves at once.</InfoTip></div>
       <span className="p-missing-status">{allClear && <CircleCheck size={15} aria-hidden="true" />}{searched && needs ? needsText : allClear ? "Nothing missing" : "Nothing to check yet"}</span>
     </div>
     {csvActions}

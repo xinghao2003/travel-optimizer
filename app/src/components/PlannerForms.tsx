@@ -145,9 +145,9 @@ export function focusNextPrice(from: HTMLElement, back = false) {
   if (index >= 0) inputs[index + (back ? -1 : 1)]?.focus();
 }
 
-/** A staged value (C11): "Not applied · Undo" in --chart, with a dot. `what` says what the draft does ("Removed"); `label` names the row for screen readers. */
+/** A staged value (C11): "Not saved yet · Undo" in --chart, with a dot. `what` says what the draft does ("Removed"); `label` names the row for screen readers. */
 export function Staged({ label, what, onUndo }: { label: string; what?: string; onUndo: () => void }) {
-  return <p className="p-staged"><span className="p-staged-dot" aria-hidden="true" />{what && `${what} · `}Not applied · <button type="button" className="p-link-button" onClick={onUndo}>Undo<span className="sr-only">: {label}</span></button></p>;
+  return <p className="p-staged"><span className="p-staged-dot" aria-hidden="true" />{what && `${what} · `}Not saved yet · <button type="button" className="p-link-button" onClick={onUndo}>Undo<span className="sr-only">: {label}</span></button></p>;
 }
 
 /**

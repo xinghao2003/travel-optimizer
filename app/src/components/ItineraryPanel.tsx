@@ -164,7 +164,7 @@ function TicketItem({ row, draft, adults, busy, placeName, zoneOf, offerFor, dra
       {row.componentId && <button ref={toggle} type="button" className="p-link-button" aria-expanded={editing} onClick={() => setEditing(!editing)}>Set price{about}</button>}
       {searchUrl && <a href={searchUrl} target="_blank" rel="noreferrer">Search fare{newTab}</a>}
       {row.removable && <button type="button" className="p-link-button" disabled={busy} onClick={() => onRemove(storedOfferId(row.offer))}>{row.kind === "combined" ? "Remove" : "Remove my price"}{about}</button>}
-      {row.kind === "change" && <button ref={toggle} type="button" className="p-link-button" onClick={() => pair ? onEditAirportChange(`${pair[1]}>${pair[2]}`) : onAction("airport-changes")}>Edit in Missing info{about}</button>}
+      {row.kind === "change" && <button ref={toggle} type="button" className="p-link-button" onClick={() => pair ? onEditAirportChange(`${pair[1]}>${pair[2]}`) : onAction("airport-changes")}>Edit in Prices to add{about}</button>}
     </div>
     {editing && row.componentId && <PriceEditor name={row.label} adults={adults} autoFocus applying={drafts.applying} onApply={drafts.onApply} onClose={close}
       initial={draft?.value ?? inUse}
@@ -349,7 +349,7 @@ export function ItineraryPanel({ isWide, searched, route, displayRoutes, numbers
       <div className="p-itin-section-head">
         <h3 id="tickets-title">Tickets and prices</h3>
         <InfoTip topic="Tickets and prices">Each ticket is counted once. A combined flight ticket does not include airport transfers. Prices are quotes or estimates, not booking guarantees.</InfoTip>
-        <span className="p-tickets-total">Total {priceText(route)}{tickets.some(ticket => ticket.draft) && " · Totals update after you apply."}</span>
+        <span className="p-tickets-total">Total {priceText(route)}{tickets.some(ticket => ticket.draft) && " · Totals update when your changes save."}</span>
       </div>
       <ul className="p-tickets">{tickets.map(({ row, draft }) => <TicketItem key={row.key} row={row} draft={draft} adults={adults} busy={busy} placeName={placeName} zoneOf={zoneOf}
         offerFor={offerFor} drafts={drafts} onRemove={onRemovePrice} onAction={onAction} onEditAirportChange={onEditAirportChange} />)}</ul>

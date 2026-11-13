@@ -26,15 +26,12 @@ test("native Planner restores a backup, calculates, edits and reloads without pl
     try { return (await repository.requireTrip(id)).result?.routes.map(route => ({ cost: route.total_cost_myr, ids: route.movements.map(m => m.id) })); }
     finally { await repository.close(); }
   }, fixture.id)).toEqual(fixture.routes);
-  await page.getByRole("tab", { name: /Missing info/ }).click();
+  await page.getByRole("tab", { name: /Prices to add/ }).click();
   await page.locator("#panel-missing [data-price-input]").first().fill("1");
+  // Leaving the field saves the price on its own.
   await page.locator("#panel-missing [data-price-input]").first().press("Tab");
-  await expect(page.getByRole("region", { name: "Changes not applied" })).toBeVisible();
-  await page.getByLabel("More actions").click();
-  await expect(page.getByRole("button", { name: "Restore browser backup", exact: true })).toBeDisabled();
-  await page.getByLabel("More actions").click();
-  await page.getByRole("button", { name: "Apply", exact: true }).click();
-  await expect(page.getByRole("region", { name: "Changes not applied" })).toHaveCount(0);
+  await expect(page.locator(".p-save-status")).toContainText("Applied");
+  await expect(page.getByRole("region", { name: "Saving changes" })).toHaveCount(0);
   await page.getByLabel("Trip name").fill("Native saved trip");
   await page.getByLabel("Trip name").press("Tab");
   await expect.poll(() => page.evaluate(async id => {

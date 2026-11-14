@@ -18,7 +18,7 @@ import { groupMissingFares } from "./lib/missingFares";
 import { defaultJourneyGrouping, journeyGroupFields, journeyPriceScope, sameJourneyScope } from "./lib/journeyPricing";
 import type { JourneyGroupField } from "./lib/planner";
 import { activeFares, airportChangeFieldId, buildAirportConnections, buildTransferEstimates, canonicalFares, canonicalIds, countDrafts, invalidDraftFields, knownComponentIds, savedTransferRows, sameTransferRows, transferFieldId, transferKey, transferRateId, type DraftPrice, type DraftState, type DraftTarget, type PriceValue, type SharedFare } from "./lib/drafts";
-import { useTripDrafts } from "./lib/useTripDrafts";
+import { forgetDrafts, useTripDrafts } from "./lib/useTripDrafts";
 import { airportChangeRows, appError, assumedConnections, buildNextSteps, cityGaps, needsInputCount, optionNumber, optionsEmptyState, partySizeNotice, purchaseAmount, routeSignature, searchDetails, searchState, settingsFooter, sortRoutes, splitGroups, staySumWarning, transferDirections, transitSearchModes, unresolvedAccessJourneys, validateDraft, type AppError, type OptionsTarget } from "./lib/present";
 import { api, blankTrip, defaultBatchSize, modes, plannerConfig, type AirportTransferMode, type Charge, type Job, type Movement, type Offer, type OptimizationJob, type PricingRule, type Result, type Route, type SavedSummary, type SavedTrip, type TripDraft } from "./lib/planner";
 import { useMediaQuery } from "./lib/useMediaQuery";
@@ -384,6 +384,19 @@ export default function Planner({ storageActions, externalRevision = 0 }: { stor
     setSaveStatus("Not saved yet");
     localStorage.removeItem("wayfinder:last-trip");
     setSettingsOpen(true); setFocusTarget("home-city");
+  }
+  // ⋯ › Delete trip: after the delete, a new blank trip is open.
+  async function deleteTrip() {
+    const trip = savedRef.current;
+    if (!trip || !window.confirm(`Delete the trip "${trip.spec.name}"? Its prices and search results are also deleted. You cannot undo this.`)) return;
+    if (pendingSave.current) await pendingSave.current.catch(() => undefined);
+    // Unsaved changes of a trip to delete are dropped, and autosave stops.
+    dirtyRef.current = false; setDirty(false);
+    await api(`/trips/${trip.id}`, "DELETE");
+    forgetDrafts(trip.id);
+    await newTrip();
+    setSaveStatus(`Deleted ${trip.spec.name}`);
+    await refreshList();
   }
   // ⋯ › Recalculate options (formerly Save & recalculate): saves pending changes, otherwise recalculates from saved data.
   function recalculate() {
@@ -1015,9 +1028,9 @@ export default function Planner({ storageActions, externalRevision = 0 }: { stor
       if (!isWide) setPanel("options");
       setFocusTarget("options-title");
     }}>{workspace ? "Skip to options" : "Skip to trip settings"}</a>
-    <AppHeader trips={trips} currentId={saved?.id ?? null} unsaved={!saved} status={status} statusTone={statusTone} disabled={busy} menuBusy={busyAction === "recalculate" || busyAction === "copy"}
-      onOpen={id => void act(() => openTrip(id), "open")} onNew={() => void act(newTrip, "new")} onCopy={() => void act(duplicateTrip, "copy")} onRecalculate={recalculate}
-      canCopy={!!saved && !busy} canRecalculate={!!saved && !busy} onExport={() => setExportOpen(true)} canExport={trips.length > 0 && !busy && !loadingTrip}
+    <AppHeader trips={trips} currentId={saved?.id ?? null} unsaved={!saved} status={status} statusTone={statusTone} disabled={busy} menuBusy={busyAction === "recalculate" || busyAction === "copy" || busyAction === "delete"}
+      onOpen={id => void act(() => openTrip(id), "open")} onNew={() => void act(newTrip, "new")} onCopy={() => void act(duplicateTrip, "copy")} onDelete={() => void act(deleteTrip, "delete")} onRecalculate={recalculate}
+      canCopy={!!saved && !busy} canDelete={!!saved && !busy && !loadingTrip && !active && !(optimization && ["queued", "running", "stopping"].includes(optimization.status))} canRecalculate={!!saved && !busy} onExport={() => setExportOpen(true)} canExport={trips.length > 0 && !busy && !loadingTrip}
       extraActions={storageActions?.(busy || loadingTrip || initialLoad || dirty || draftTotal > 0 || active || !!optimization && ["queued", "running", "stopping"].includes(optimization.status))} />
     <div className="p-container">
     <ErrorBanner error={error} onDismiss={() => setError(null)} onReload={reloadTrip} onRetrySave={() => { setError(null); autosave(); }} onSearchAgain={() => void search()} />

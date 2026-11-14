@@ -27,6 +27,10 @@ function save({ tripId, fares, transfers, airportChanges, exchangeRates, deletio
     else localStorage.removeItem(inputsKey(tripId));
   } catch { /* Keep the drafts in memory. */ }
 }
+/** Removes the stored drafts of a deleted trip. */
+export function forgetDrafts(tripId: string) {
+  try { localStorage.removeItem(faresKey(tripId)); localStorage.removeItem(inputsKey(tripId)); } catch { /* Nothing stored. */ }
+}
 const without = <T,>(values: Record<string, T>, key: string) => Object.fromEntries(Object.entries(values).filter(([item]) => item !== key));
 
 /**

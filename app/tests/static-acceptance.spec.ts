@@ -130,5 +130,16 @@ test("production static root supports multiple trips, weaker options, copies, an
   expect(copy.snapshot).toBeNull(); expect(copy.offers).toEqual([]);
   expect(copy.airport_connections).toEqual(first.airport_connections ?? []);
   expect(copy.airport_transfer_estimates).toEqual(first.airport_transfer_estimates ?? []);
+
+  page.once("dialog", dialog => void dialog.accept());
+  const deleteButton = page.getByRole("button", { name: /^Delete trip/ });
+  if (!await deleteButton.isVisible()) await page.getByLabel("More actions").click();
+  await deleteButton.click();
+  await expect(page.locator(".p-save-status")).toContainText("Deleted Static acceptance trip (copy)");
+  await expect(page.getByLabel("Trip name")).not.toHaveValue("Static acceptance trip (copy)");
+  await page.reload();
+  await page.getByLabel("Trip", { exact: true }).click();
+  await expect(page.getByRole("option", { name: /Static acceptance trip \(copy\)/ })).toHaveCount(0);
+  await page.keyboard.press("Escape");
   expect(forbidden).toEqual([]); expect(errors).toEqual([]);
 });

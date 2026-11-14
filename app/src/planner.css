@@ -704,3 +704,5 @@ fieldset.p-plan-row > legend { float: left; }
 .dark .planner-map .maplibregl-ctrl.maplibregl-ctrl-attrib { background: var(--card); color: var(--foreground); }
 .dark .planner-map .maplibregl-ctrl-attrib a { color: var(--muted-foreground); }
 .optimizer .p-plan-prefilled { margin: 0 0 12px; }
+/* Advanced › Search effort: the presets and Custom, with the tip beside them. */
+.p-effort { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }

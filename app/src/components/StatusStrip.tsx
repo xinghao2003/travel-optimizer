@@ -6,7 +6,7 @@ import type { SearchState, StripAction } from "../lib/present";
 
 const toneIcons = { busy: LoaderCircle, info: Info, ok: CircleCheck, warn: CircleAlert, error: CircleX };
 
-/** The search status of a saved trip (C3.1): the state row with its action and Details, and the Check more combinations line. */
+/** The search status of a saved trip (C3.1): the state row with its action and Details, and the line that checks more combinations. */
 export function StatusStrip({ state, details, busyAction, settingsOpen, onStop, onSearch, onCheckMore, onStopChecking }: {
   state: SearchState; details: { lines: string[]; messages: string[] }; busyAction: string | null; settingsOpen: boolean;
   onStop: () => void; onSearch: (continuation: boolean) => void; onCheckMore: () => void;
@@ -42,7 +42,7 @@ export function StatusStrip({ state, details, busyAction, settingsOpen, onStop, 
       </div>}
       {state.secondary && <div className="p-strip-row">
         <p className="p-strip-text">{state.secondary.text}</p>
-        {button(state.secondary.action, "secondary")}<InfoTip topic="Check more combinations">{state.secondary.tip}</InfoTip>
+        {button(state.secondary.action, "secondary")}<InfoTip topic="checking more combinations">{state.secondary.tip}</InfoTip>
       </div>}
     </div>}
   </div>;

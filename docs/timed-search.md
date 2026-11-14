@@ -1,6 +1,6 @@
 # Timed rounds and optimizer checkpoints
 
-In **Trip settings → More settings → Search size**, select **Minutes** under
+In **Trip settings → Advanced → Search effort → Custom**, select **Minutes** under
 **Limit each round by**. Timed mode starts at ten minutes; choose one to 1,440
 whole minutes. The allowance covers provider waiting, local preparation and
 optimization, publication, and saving. A round finishes early if no work
@@ -25,7 +25,7 @@ provider task, preparation, a large state expansion, or final saving can extend
 the round past the selected duration. Active status shows the time remaining
 and then that the current operation is finishing. Details show elapsed time.
 
-**Continue for 10 minutes** starts a new allowance; the previous round's elapsed
+**Keep looking for 10 minutes** starts a new allowance; the previous round's elapsed
 time is not charged again. The selection is restored from the saved job when
 opening the trip. A paused trip does not automatically restart calculation on
 page load. Its last calculated options remain available while newer collected
@@ -33,7 +33,7 @@ schedules await calculation.
 
 ## Continuous checking
 
-**Check more combinations** starts a separate background calculation on saved
+**Keep looking**, with no searches left, starts a separate background calculation on saved
 schedules and becomes **Stop checking**. It checks up to 100,000
 additional states per batch, saves a checkpoint and publishes options, then
 starts the next batch automatically. It does not use the transport-search

@@ -174,10 +174,10 @@ test("native Planner reloads a paused queue and continues only its remaining req
     localStorage.setItem("wayfinder:last-trip", trip.id); return trip.id;
   });
   await page.goto("/");
-  await expect(page.getByRole("button", { name: "Search more", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Keep looking", exact: true })).toBeVisible();
   expect(requests).toBe(0);
   await page.reload();
-  await page.getByRole("button", { name: "Search more", exact: true }).click();
+  await page.getByRole("button", { name: "Keep looking", exact: true }).click();
   await expect.poll(() => page.evaluate(async tripId => {
     const { PlannerRepository } = await import("/src/native/repository.ts"), repository = new PlannerRepository();
     try { const trip = await repository.requireTrip(tripId), job = await repository.get("jobs", trip.latest_job_id!) as { status: string; cursor: number; requests: number }; return { status: job.status, cursor: job.cursor, requests: job.requests }; }

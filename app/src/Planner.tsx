@@ -367,7 +367,7 @@ export default function Planner({ storageActions, externalRevision = 0 }: { stor
     }, continuation ? "continue" : "search");
   }
   // One Find trips runs the whole search: a search started in this session continues its request batches on its own
-  // (up to autoBatches more), then checks the remaining combinations once. Later batches use Search more.
+  // (up to autoBatches more), then checks the remaining combinations once. Later batches use Keep looking.
   const autoJob = useRef<string | null>(null), autoRounds = useRef(0), autoChecked = useRef<string | null>(null);
   useEffect(() => {
     if (!job || job.id !== autoJob.current || busyAction !== null || dirty || applyState) return;
@@ -776,6 +776,7 @@ export default function Planner({ storageActions, externalRevision = 0 }: { stor
     else if (target === "add-connection") showMissing(["add-connection"]);
     else if (target === "transfer-times") showMissing(["airport-transfers-title"]);
     else if (target === "airport-fallback") { setSettingsOpen(true); setFocusTarget("setting-airport-fallback"); }
+    else if (target === "buffer-flight-before" || target === "buffer-flight-after") { setSettingsOpen(true); setFocusTarget(target === "buffer-flight-before" ? "setting-flight_before_minutes" : "setting-flight_after_minutes"); }
     else if (target === "edit-trip") { setSettingsOpen(true); setFocusTarget("settings-title"); }
     else if (target === "over-budget") setFocusTarget("over-budget-summary");
     else edit({ ...draft, exclude_unpriced_flights: false });

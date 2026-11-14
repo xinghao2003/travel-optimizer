@@ -37,7 +37,7 @@ All existing provider request/concurrency policies remain unchanged.
 If the original time allowance expires while waiting or applying, the edits
 are saved and the round remains paused. No extra calculation is launched
 outside that allowance. Applying to an already paused or completed timed job
-also waits for **Continue for … minutes** instead of silently granting another
+also waits for **Keep looking for … minutes** instead of silently granting another
 round. An explicit Stop is respected; Apply does not restart a cancelled job.
 If an edit is rejected, an otherwise active round resumes its original work.
 

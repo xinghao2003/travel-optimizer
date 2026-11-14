@@ -6,7 +6,7 @@ import { Button } from "./ui/button";
 import { InfoTip } from "./InfoTip";
 import { Field, NumberField, PlacePicker } from "./PlannerForms";
 import { StartCities } from "./PositioningSettings";
-import { anyDeparture, autoStayHours, availabilityText, departsAnyTime, groupState, isAutoStay, setGroup, stayText, transportGroups, withAutoStays } from "../lib/plan";
+import { anyDeparture, autoStayHours, availabilityText, departsAnyTime, groupState, isAutoStay, searchEffort, searchEfforts, setGroup, stayText, transportGroups, withAutoStays } from "../lib/plan";
 import { dateModeText, formatLocal, modeLabel, settingsSummaries, staySumWarning, transitSearchModes, type FooterState, type SettingsSummary } from "../lib/present";
 import { localInputToISO, type OneWay, type Place, type TripDraft, type TripSpec } from "../lib/planner";
 
@@ -96,6 +96,9 @@ export function TripSettings({ draft, edit: setDraft, places, errors, transitCon
   const availability = availabilityText(draft);
   const anyTime = departsAnyTime(draft);
   const rail = draft.rail_fallback;
+  // Custom: the batch size or the minutes as typed, also when they equal a preset.
+  const [customEffort, setCustomEffort] = useState(false);
+  const effort = customEffort ? null : searchEffort(batchSize, roundMinutes);
   const home = draft.home;
   const homeTip = `The trip ${draft.one_way === "from_home" ? "starts" : draft.one_way === "to_home" ? "ends" : "starts and ends"} here. Time at home does not count as time in cities.`;
   // Home and cities to visit are missing on every new trip: the footer says so, the fields stay unmarked.
@@ -260,7 +263,7 @@ export function TripSettings({ draft, edit: setDraft, places, errors, transitCon
         <SettingsGroup title="Time buffers" summary={summaries.buffers}>
           <p className="p-hint">These times are part of each journey and reduce time in cities.</p>
           <div className="p-group-fields">
-            {bufferFields.map(([key, label, max]) => <NumberField key={key} label={label} value={draft.timing[key]} integer max={max}
+            {bufferFields.map(([key, label, max]) => <NumberField key={key} id={`setting-${key}`} label={label} value={draft.timing[key]} integer max={max}
               onChange={n => { if (n !== null) edit({ ...draft, timing: { ...draft.timing, [key]: n } }); }} />)}
             <NumberField id="setting-airport-fallback" label="Default airport transfer time (min)" value={draft.timing.airport_transfer_fallback_minutes} optional integer max={600} placeholder="None"
               info={<InfoTip topic="default airport transfer time" align="end">Used when no road time is available. Blank: those flights can't be used until you enter a transfer time.</InfoTip>}
@@ -300,19 +303,27 @@ export function TripSettings({ draft, edit: setDraft, places, errors, transitCon
           </>}
         </SettingsGroup>
 
-        <SettingsGroup title="Search size" summary={summaries.searchSize}>
-          <div className="p-group-fields">
+        <SettingsGroup title="Search effort" summary={summaries.searchSize}>
+          <div className="p-effort">
+            <div className="p-view-toggle" role="group" aria-label="Search effort">
+              {searchEfforts.map(item => <button type="button" key={item.id} aria-pressed={effort?.id === item.id} onClick={() => { setCustomEffort(false); onRoundMinutes(null); onBatchSize(item.batch); }}>{item.label}</button>)}
+              <button type="button" aria-pressed={!effort} onClick={() => setCustomEffort(true)}>Custom</button>
+            </div>
+            <InfoTip topic="search effort">Find trips sends new requests to data providers in batches and runs up to 10 batches on its own. Quick: up to 300 requests. Standard: up to 1,000. Thorough: up to 3,000, which takes longer. Keep looking runs one more batch. Saved results are reused.</InfoTip>
+          </div>
+          {searchActive && <p className="p-hint">Changes apply to the next batch.</p>}
+          {!effort && <div className="p-group-fields">
             <Field label="Limit each round by" hint={searchActive ? "Changes apply to the next round." : undefined}><Select value={roundMinutes === null ? "requests" : "minutes"}
               onValueChange={value => onRoundMinutes(value === "minutes" ? 10 : null)}>
               <SelectItem value="requests">Requests</SelectItem><SelectItem value="minutes">Minutes</SelectItem>
             </Select></Field>
             {roundMinutes === null ? <NumberField label="Requests per search batch" value={batchSize} min={1} max={500} integer
-              info={<InfoTip topic="requests per search batch">A batch is this many new requests to data providers. Find trips runs up to 10 batches on its own; then Search more runs the next batch. Saved results are reused.</InfoTip>}
+              info={<InfoTip topic="requests per search batch">A batch is this many new requests to data providers. Find trips runs up to 10 batches on its own; then Keep looking runs the next batch. Saved results are reused.</InfoTip>}
               onChange={n => { if (n !== null) onBatchSize(n); }} /> :
               <NumberField label="Minutes per round" value={roundMinutes} min={1} max={1440} integer
                 hint="Includes provider waiting, optimization and saving. Pausing can take a little longer while the current operation finishes."
                 onChange={n => { if (n !== null) onRoundMinutes(n); }} />}
-          </div>
+          </div>}
         </SettingsGroup>
       </div>
     </details>

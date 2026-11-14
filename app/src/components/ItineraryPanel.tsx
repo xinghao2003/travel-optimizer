@@ -7,7 +7,7 @@ import { InfoTip } from "./InfoTip";
 import { ModeIcon } from "./ModeIcon";
 import { Field, FixedPriceFields, Staged } from "./PlannerForms";
 import { storedOfferId, type DraftPrice, type DraftTarget, type PriceValue } from "../lib/drafts";
-import { assumptionNotes, bundleStatusLabel, compareText, dateRange, dayByDay, formatDuration, formatLocal, hoursText, journeyChips, journeySource, journeyWhen, mainService, matchingQuoteLinks, moneyShort, nightsText, optionChips, optionNumber, perCityHourText, priceInputErrors, priceText, quoteLinkText, stayLength, stepLabel, ticketJourney, ticketRows, unpricedSummary, type OptionChip, type OptionsTarget, type TicketRow } from "../lib/present";
+import { assumptionNotes, bundleStatusLabel, compareText, dateRange, dayByDay, formatDuration, formatLocal, hoursText, journeyChips, journeySource, journeyWhen, mainService, matchingQuoteLinks, moneyShort, nightsText, optionChips, optionNumber, perCityHourText, priceInputErrors, priceText, quoteLinkText, stayLength, stepLabel, stepSetting, ticketJourney, ticketRows, unpricedSummary, type OptionChip, type OptionsTarget, type TicketRow } from "../lib/present";
 import type { Charge, Coverage, Movement, Offer, Place, Route } from "../lib/planner";
 
 type BundleLink = NonNullable<Coverage["bundle_links"]>[number];
@@ -24,8 +24,9 @@ function Chips({ chips }: { chips: OptionChip[] }) {
 }
 
 /** One journey of Day by day (E9.3): a summary line, then its steps, the timetable notice, the source and Search fare. */
-function Journey({ movement, route, open, zoneOf, placeName, rates }: {
+function Journey({ movement, route, open, zoneOf, placeName, rates, onAction }: {
   movement: Movement; route: Route; open: boolean; zoneOf: (id: string) => string; placeName: (id: string) => string; rates: Record<string, number>;
+  onAction: (target: OptionsTarget) => void;
 }) {
   const service = mainService(movement);
   return <details className="p-journey" open={open}>
@@ -43,9 +44,11 @@ function Journey({ movement, route, open, zoneOf, placeName, rates }: {
     <div className="p-journey-body">
       {movement.segments.length > 0 && <ol className="p-steps">{movement.segments.map((segment, index) => {
         const step = stepLabel(segment, movement);
+        // A step whose time is your setting has Change, which opens that setting.
+        const setting = stepSetting(segment);
         return <li key={index} data-warning={step.warning || undefined}>
           <span className="p-step-time">{segment.departure && formatLocal(segment.departure, segment.from_timezone ?? zoneOf(movement.from_id), "time")}</span>
-          <span>{step.warning && <CircleAlert size={13} className="p-step-icon" aria-hidden="true" />}{step.text}</span>
+          <span>{step.warning && <CircleAlert size={13} className="p-step-icon" aria-hidden="true" />}{step.text}{setting && <> · <button type="button" className="p-link-button" onClick={() => onAction(setting)}>Change<span className="sr-only">: {step.text}</span></button></>}</span>
         </li>;
       })}</ol>}
       {movement.schedule_estimated && <p className="p-notice">Estimated timetable · {movement.schedule_reference_date ? `copied from ${dateRange(movement.schedule_reference_date, movement.schedule_reference_date)}` : "from an extended provider calendar"}. Check the real timetable before you book.</p>}
@@ -101,7 +104,7 @@ function PriceEditor({ name, initial, adults, direction, date, defaultScope, own
   }}>
     {direction && <fieldset className="p-price-scope">
       <legend>Applies to</legend>
-      <label className="p-check"><input type="radio" name={scopeName} checked={scope === "all"} onChange={() => setScope("all")} />All {direction} transfers in this trip</label>
+      <label className="p-check"><input type="radio" name={scopeName} checked={scope === "all"} onChange={() => setScope("all")} />All {direction} transfers, in all your trips</label>
       <label className="p-check"><input type="radio" name={scopeName} checked={scope === "journey"} onChange={() => setScope("journey")} />Only this journey{date && ` (${date})`}</label>
       {scope === "all" && ownPrice && <small>Your price for this journey still applies to it. Remove my price to use the price for all transfers.</small>}
     </fieldset>}
@@ -338,7 +341,7 @@ export function ItineraryPanel({ isWide, searched, route, displayRoutes, numbers
     </div>
     <ol className="p-day-list">{dayByDay(route, minStays).map((entry, index) => {
       if (entry.kind === "journey") return <li key={`${route.id}:${index}`}>
-        <Journey movement={entry.movement} route={route} open={isWide && route.movements[0] === entry.movement} zoneOf={zoneOf} placeName={placeName} rates={rates} />
+        <Journey movement={entry.movement} route={route} open={isWide && route.movements[0] === entry.movement} zoneOf={zoneOf} placeName={placeName} rates={rates} onAction={onAction} />
       </li>;
       if (entry.kind === "gap") return <li key={`${route.id}:${index}`} className="p-day-gap">Time in {placeName(entry.placeId)} · {formatDuration(entry.minutes)} · not counted in time in cities</li>;
       const { stay, minimum } = entry, zone = zoneOf(stay.place_id);

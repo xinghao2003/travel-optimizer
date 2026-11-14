@@ -15,6 +15,13 @@ export function profileOf(spec: TripSpec): Profile {
   };
 }
 
+/**
+ * Search effort: the new requests to data providers that one batch sends. Find trips runs up to 10 batches on its own,
+ * so "Standard" sends up to 1,000. Other batch sizes and rounds limited by minutes are "custom".
+ */
+export const searchEfforts = [{ id: "quick", label: "Quick", batch: 30 }, { id: "standard", label: "Standard", batch: 100 }, { id: "thorough", label: "Thorough", batch: 300 }] as const;
+export const searchEffort = (batchSize: number, minutes: number | null) => minutes === null ? searchEfforts.find(effort => effort.batch === batchSize) ?? null : null;
+
 /** The three transport groups of the Plan step. The engine keeps its eight modes; a group turns its modes on or off together. */
 export const transportGroups = [
   { id: "flights", label: "Flights", modes: ["flight"] },

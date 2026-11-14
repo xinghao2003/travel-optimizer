@@ -1,5 +1,5 @@
 import { blankTrip, defaultBatchSize, localInputToISO, modes, type AirportConnectionRequirement, type AirportTransferMode, type AirportTransferRow, type ApiError, type Charge, type Coverage, type Job, type Mode, type Movement, type Offer, type PricingRule, type Result, type Route, type SavedTrip, type Segment, type TripDraft } from "./planner";
-import { departsAnyTime } from "./plan";
+import { departsAnyTime, searchEffort } from "./plan";
 import type { MissingFareGroup } from "./missingFares";
 import type { OptimizationJob } from "./planner";
 
@@ -351,7 +351,7 @@ export type SearchState = {
   secondary: { text: string; tip: string; action: StripAction } | null;
 };
 
-/** The status strip (C3.1): the first matching row of the state table, plus the "Check more combinations" line. */
+/** The status strip (C3.1): the first matching row of the state table, plus the line that checks more combinations (its action is also "Keep looking"). */
 export function searchState({ invalid, dirty, saved, result, job, minutes, applying = false, optimization }: {
   invalid: boolean; dirty: boolean;
   saved: Pick<SavedTrip, "snapshot"> | null;
@@ -368,18 +368,21 @@ export function searchState({ invalid, dirty, saved, result, job, minutes, apply
   const pending = job?.pending ?? 0, failed = job?.failed_queries ?? 0;
   const left = `${plural(pending, "search", "searches")} left`;
   const stop: StripAction = { label: "Stop search", run: "stop" };
-  const searchMore: StripAction = { label: "Search more", run: "continue" };
+  const searchMore: StripAction = { label: "Keep looking", run: "continue" };
   const retry: StripAction = { label: "Retry failed searches", run: "continue" };
   const roundMinutes = minutes === undefined ? (job?.time_budget_seconds != null ? job.time_budget_seconds / 60 : null) : minutes;
-  const timedContinue: StripAction = { label: roundMinutes == null ? "Search more" : `Continue for ${plural(roundMinutes, "minute")}`, run: "continue" };
+  const timedContinue: StripAction = { label: roundMinutes == null ? "Keep looking" : `Keep looking for ${plural(roundMinutes, "minute")}`, run: "continue" };
   // Always a recalculation with a higher limit (POST /optimize {expand: true}), never a search continuation: continuing a
   // finished search can still queue transit searches when transit search was set up after the search ran.
   const secondary = !active && result?.optimization_complete === false ? {
     text: "Not all combinations were checked. Better options may exist.",
     tip: "Shares work across saved routes, favoring usable prices. Checks continuously until complete or stopped, with no checkpoint-size limit. Changed inputs start a new calculation. No provider searches.",
-    action: { label: "Check more combinations", run: "optimize" } as StripAction,
+    action: { label: "Keep looking", run: "optimize" } as StripAction,
   } : null;
-  const state = (id: string, tone: SearchState["tone"], text: string, actions: StripAction[] = [], extra: Partial<SearchState> = {}): SearchState => ({ id, tone, text, actions, secondary, ...extra });
+  // One Keep looking at a time: a search that continues checks the remaining combinations when it is complete.
+  // Retry failed searches is another action, so the line stays beside it.
+  const state = (id: string, tone: SearchState["tone"], text: string, actions: StripAction[] = [], extra: Partial<SearchState> = {}): SearchState =>
+    ({ id, tone, text, actions, secondary: actions.some(action => action === searchMore || action === timedContinue) ? null : secondary, ...extra });
 
   if (optimization && ["queued", "running", "stopping"].includes(optimization.status)) {
     const stopping = optimization.status === "stopping";
@@ -423,7 +426,7 @@ export function searchState({ invalid, dirty, saved, result, job, minutes, apply
     });
   }
   if (status === "paused" && pending > 0) return state("paused", "info", `Search paused · ${left}.`, [searchMore], {
-    tip: `The search pauses after each batch of ${job!.batch_budget ? `${job!.batch_budget} ` : ""}new requests to data providers. Search more runs the next batch. Saved results are reused.`,
+    tip: `The search pauses after each batch of ${job!.batch_budget ? `${job!.batch_budget} ` : ""}new requests to data providers. Keep looking runs the next batch. Saved results are reused.`,
   });
   if (status === "cancelled" && pending > 0) return state("stopped", "info", `Search stopped · ${left}. Found options are kept.`, [searchMore]);
   if (status === "interrupted") return state("interrupted", "warn", `The search was interrupted${pending > 0 ? ` · ${left}` : ""}. Found options are kept.`, pending > 0 ? [searchMore] : failed > 0 ? [retry] : []);
@@ -553,6 +556,16 @@ export function stepLabel(segment: Segment, movement: Pick<Movement, "source">) 
   if (segment.mode === "walk" || segment.mode === "foot") return step(`Walk to ${segment.to_name}${duration}`);
   if (railModes.has(segment.mode) || transitModes.has(segment.mode)) return step([`${mode}${service}`, segment.operator, times].filter(Boolean).join(" · "));
   return step(`${mode}: ${times}`);
+}
+
+/**
+ * Where the time of a journey step is set: a time buffer of the trip (Advanced › Time buffers) or the airport transfer
+ * ways (Prices to add › Airport transfers). Null for a step that is not an assumption.
+ */
+export function stepSetting(segment: Pick<Segment, "source">): OptionsTarget | null {
+  const source = segment.source ?? "";
+  if (/^(User-estimated airport|Airport) (access|egress)$/.test(source)) return "transfer-times";
+  return source === "Flight readiness buffer" ? "buffer-flight-before" : source === "Arrival buffer" ? "buffer-flight-after" : null;
 }
 
 /** A "Check before booking" note. `action: "transfer-times"` offers Set transfer times (Missing info › Airport transfers). */
@@ -864,8 +877,9 @@ export function settingsSummaries(draft: TripDraft, batchSize: number, minutes: 
     ? { summary: `On · stations within ${rail.station_radius_km} km · up to ${rail.max_shift_days} days`, changes: ["Estimated train timetables"] }
     : { summary: "Off", changes: [] };
 
-  const searchSize = minutes === null ? group([[`${plural(batchSize, "request")} per batch`, batchSize !== defaultBatchSize]])
-    : group([[`${plural(minutes, "minute")} per round`, true]]);
+  const effort = searchEffort(batchSize, minutes);
+  const searchSize = effort ? group([[effort.label, batchSize !== defaultBatchSize]])
+    : minutes === null ? group([[`${plural(batchSize, "request")} per batch`, true]]) : group([[`${plural(minutes, "minute")} per round`, true]]);
   return { places, departures, buffers, appointments, cars, prices, timetables, searchSize };
 }
 
@@ -1271,7 +1285,7 @@ export function buildNextSteps(state: RefinementState & {
  * Where an Options or Itinerary action goes: a next step's target, the trip settings, the connection form, the Over budget
  * group or Missing info › Airport transfers (Check before booking › Set transfer times).
  */
-export type OptionsTarget = NextStepTarget | "edit-trip" | "add-connection" | "over-budget" | "transfer-times";
+export type OptionsTarget = NextStepTarget | "edit-trip" | "add-connection" | "over-budget" | "transfer-times" | "buffer-flight-before" | "buffer-flight-after";
 export type OptionsAction = { label: string; target: OptionsTarget };
 /** The Options panel when it has no best option (C12): a title (only for "no-itinerary") and lines, each with at most one action. */
 export type EmptyState = {

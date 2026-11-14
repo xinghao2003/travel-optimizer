@@ -4,7 +4,7 @@ import { loadTs } from "./loadTs.mjs";
 const {
   airportChangeRows, appError, assumedConnections, assumptionNotes, blankConnectionForm, blankRuleForm, buildNextSteps, bundleStatusLabel, cityGaps, connectionFromForm, connectionText, compareText, dateModeText, dateRange, dayByDay, formatDuration,
   componentWhen, formatLocal, hoursText, journeyGroupTitle, journeyGroupWhen, journeyChips, journeySource, journeyWhen, mainService, matchingQuoteLinks, modeLabel, moneyShort, needsInputCount, optionChips, optionsEmptyState, partySizeNotice, perCityHourText, priceEstimated, priceText, routeChain, routeSignature,
-  gainText, nightsText, priceInputErrors, purchaseAmount, quoteLinkText, routeShapes, shapeKey, tradeoffSteps, searchDetails, searchState, settingsFooter, settingsSummaries, sortRoutes, sourceLabel, splitGroups, stayLength, stepLabel, staySumWarning, ticketJourney, ticketRows,
+  gainText, nightsText, priceInputErrors, purchaseAmount, quoteLinkText, routeShapes, shapeKey, tradeoffSteps, searchDetails, searchState, settingsFooter, settingsSummaries, sortRoutes, stepSetting, sourceLabel, splitGroups, stayLength, stepLabel, staySumWarning, ticketJourney, ticketRows,
   ruleForm, ruleFromForm, ruleText, transferDirections, transferJourneyText, tripSummary, unpricedSummary, unresolvedAccessJourneys, validateDraft,
 } = await loadTs("../src/lib/present.ts");
 const { blankTrip } = await loadTs("../src/lib/planner.ts");
@@ -24,7 +24,7 @@ test("continuous checking swaps its action for Stop and lets old size pauses res
   assert.match(stopping.text, /saving/);
   const paused = searchState({ ...props, optimization: { ...optimization, status: 'paused', pause_reason: 'checkpoint' } });
   assert.match(paused.text, /previous checkpoint-size limit.*Continue to resume without that limit/);
-  assert.equal(paused.secondary.action.label, 'Check more combinations');
+  assert.equal(paused.secondary.action.label, 'Keep looking');
   assert.equal(searchState({ ...props, optimization: { ...optimization, status: 'cancelled' } }).secondary.action.run, 'optimize');
 });
 
@@ -72,12 +72,12 @@ test("timed rounds show time, pending optimizer continuation and the selected ne
   const result = { discovery_required: false, optimization_complete: false, coverage: {} };
   const options = { invalid: false, dirty: false, saved, result, job };
   const paused = searchState(options);
-  assert.equal(paused.actions[0].label, "Continue for 10 minutes");
+  assert.equal(paused.actions[0].label, "Keep looking for 10 minutes");
   assert.equal(paused.actions[0].run, "continue");
   assert.equal(paused.secondary, null);
   assert.match(paused.text, /last calculated options/);
-  assert.equal(searchState({ ...options, minutes: 5 }).actions[0].label, "Continue for 5 minutes");
-  assert.equal(searchState({ ...options, minutes: null }).actions[0].label, "Search more");
+  assert.equal(searchState({ ...options, minutes: 5 }).actions[0].label, "Keep looking for 5 minutes");
+  assert.equal(searchState({ ...options, minutes: null }).actions[0].label, "Keep looking");
   const running = searchState({ ...options, job: { ...job, status: "running", round_elapsed_seconds: 120 } });
   assert.match(running.text, /Optimizing collected schedules · 8 minutes remaining/);
   const finishing = searchState({ ...options, job: { ...job, status: "running" } });
@@ -88,6 +88,8 @@ test("timed rounds show time, pending optimizer continuation and the selected ne
   assert.ok(details.lines.includes("This round: 10 min 12 s elapsed · 10 min allowance"));
   assert.ok(!details.lines.some(line => line.startsWith("This batch:")));
   assert.equal(settingsSummaries(blankTrip(), 1, 10).searchSize.summary, "10 minutes per round");
+  // Search effort: a preset by its name, another batch size as typed.
+  assert.deepEqual([30, 100, 300, 250].map(batch => settingsSummaries(blankTrip(), batch).searchSize).map(group => [group.summary, group.changes.length]), [["Quick", 1], ["Standard", 0], ["Thorough", 1], ["250 requests per batch", 1]]);
 });
 
 test("Apply status distinguishes saved edits, updating old options and an expired round", () => {
@@ -104,7 +106,7 @@ test("Apply status distinguishes saved edits, updating old options and an expire
   assert.equal(updating.actions[0].run, "stop");
   const expired = searchState({ ...props, job: { ...job, status: "paused", pending: 0 } });
   assert.match(expired.text, /Changes saved/);
-  assert.equal(expired.actions[0].label, "Continue for 10 minutes");
+  assert.equal(expired.actions[0].label, "Keep looking for 10 minutes");
   assert.equal(expired.secondary, null);
 });
 
@@ -409,23 +411,25 @@ test("the status strip shows the first matching state and routes Check more comb
   // The server marks the result of a trip that was never searched as discovery_required.
   assert.deepEqual(row(strip({ saved: { snapshot: null }, result: { discovery_required: true, optimization_complete: true, coverage: {} } })), ["not-searched", "Not searched yet.", "Find trips:search"]);
   const paused = strip({ job: job("paused", { pending: 41, batch_budget: 100 }) });
-  assert.deepEqual(row(paused), ["paused", "Search paused · 41 searches left.", "Search more:continue"]);
-  assert.equal(paused.tip, "The search pauses after each batch of 100 new requests to data providers. Search more runs the next batch. Saved results are reused.");
-  assert.deepEqual(row(strip({ job: job("cancelled", { pending: 1 }) })), ["stopped", "Search stopped · 1 search left. Found options are kept.", "Search more:continue"]);
-  assert.deepEqual(row(strip({ job: job("interrupted", { pending: 3 }) })), ["interrupted", "The search was interrupted · 3 searches left. Found options are kept.", "Search more:continue"]);
+  assert.deepEqual(row(paused), ["paused", "Search paused · 41 searches left.", "Keep looking:continue"]);
+  assert.equal(paused.tip, "The search pauses after each batch of 100 new requests to data providers. Keep looking runs the next batch. Saved results are reused.");
+  assert.deepEqual(row(strip({ job: job("cancelled", { pending: 1 }) })), ["stopped", "Search stopped · 1 search left. Found options are kept.", "Keep looking:continue"]);
+  assert.deepEqual(row(strip({ job: job("interrupted", { pending: 3 }) })), ["interrupted", "The search was interrupted · 3 searches left. Found options are kept.", "Keep looking:continue"]);
   assert.deepEqual(row(strip({ job: job("interrupted", { failed_queries: 2 }) })), ["interrupted", "The search was interrupted. Found options are kept.", "Retry failed searches:continue"]);
   const messages = ["flight: no rows", "Planner: RuntimeError: provider closed."];
   assert.deepEqual(row(strip({ job: job("failed", { messages }) })), ["failed", "The search failed: RuntimeError: provider closed. Found options are kept.", "Search again:search"]);
-  assert.equal(row(strip({ job: job("failed", { messages, pending: 5 }) }))[2], "Search more:continue");
+  assert.equal(row(strip({ job: job("failed", { messages, pending: 5 }) }))[2], "Keep looking:continue");
   assert.deepEqual(row(strip({ job: job("complete", { failed_queries: 2 }) })), ["failed-searches", "Search finished · 2 searches failed.", "Retry failed searches:continue"]);
   const gaps = { ...done, coverage: { discovery_complete: false, source_gaps: ["Transitous disabled"] } };
   assert.deepEqual(row(strip({ result: gaps, job: job("complete", { manual_quote_queries: 2 }) })), ["gaps", "Search finished with gaps: 2 combined tickets to check, trains and buses not searched.", ""]);
   assert.deepEqual(row(strip({ job: job("complete") })), ["complete", "Search complete.", ""]);
   assert.deepEqual(row(strip()), ["idle", "", ""]);
-  // Check more combinations never spends provider requests: it always recalculates, also after a finished search.
+  // Checking more combinations never spends provider requests: it always recalculates, also after a finished search.
   const incomplete = { ...done, optimization_complete: false };
   const checkMore = extra => strip({ result: incomplete, ...extra }).secondary?.action.run;
-  assert.equal(checkMore({ job: job("paused", { pending: 41 }) }), "optimize");
+  // One Keep looking at a time: a search with searches left continues, and checks the combinations when it is complete.
+  assert.equal(checkMore({ job: job("paused", { pending: 41 }) }), undefined);
+  assert.equal(strip({ result: incomplete, job: job("complete") }).secondary.action.label, "Keep looking");
   assert.equal(checkMore({ job: job("complete") }), "optimize");
   assert.equal(checkMore({ job: job("complete", { failed_queries: 2 }) }), "optimize");
   assert.equal(checkMore({ job: job("superseded") }), "optimize");
@@ -503,6 +507,9 @@ test("journey steps read as plain sentences", () => {
   assert.equal(text({ mode: "rail", source: "User-supplied positioning", service: "ETS 9", from_name: "Kuala Lumpur", to_name: "Singapore", departure: "2026-12-03T23:00:00Z", arrival: "2026-12-04T04:30:00Z", from_timezone: "Asia/Kuala_Lumpur", to_timezone: "Asia/Singapore" }, "User-supplied positioning"), "Train ETS 9 · Kuala Lumpur 07:00 → Singapore 12:30 (your journey)");
   assert.equal(text({ mode: "flight", source: "User-supplied positioning", service: "MH603", from_name: "Kuala Lumpur", to_name: "Singapore", departure: "2026-12-03T23:00:00Z", arrival: "2026-12-04T00:05:00Z", from_timezone: "Asia/Kuala_Lumpur", to_timezone: "Asia/Singapore" }, "User-supplied positioning"), "Flight MH603 · Kuala Lumpur 07:00 → Singapore 08:05 (your journey)");
   assert.equal(text({ mode: "car", from_name: "Kuala Lumpur", to_name: "Singapore" }, "OSRM"), "Car: Kuala Lumpur → Singapore");
+  // A step whose time is a setting names where to change it.
+  assert.deepEqual(["Airport access", "User-estimated airport egress", "Flight readiness buffer", "Arrival buffer", "Scheduled connection", null].map(source => stepSetting({ source })),
+    ["transfer-times", "transfer-times", "buffer-flight-before", "buffer-flight-after", null, null]);
 });
 
 test("assumption notes are plain sentences, each listed once", () => {
@@ -591,7 +598,7 @@ test("settings summaries show each group and what differs from the defaults", ()
     places: "Home only",
     departures: "Any days · depart any time · any number of changes · overnight allowed",
     buffers: "Flights 90 + 30 min · trains and buses 15 + 10 min · changes 30 min · airport transfer 45 min",
-    appointments: "None", cars: "Not used", prices: "MYR only", timetables: "Off", searchSize: "100 requests per batch",
+    appointments: "None", cars: "Not used", prices: "MYR only", timetables: "Off", searchSize: "Standard",
   });
   assert.deepEqual(Object.values(defaults).flatMap(group => group.changes), []);
   const base = blankTrip();

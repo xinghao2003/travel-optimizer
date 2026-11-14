@@ -93,11 +93,14 @@ export function dateRange(start: string, end: string) {
   return a.day === b.day ? `${b.day} ${b.month} ${b.year}` : `${a.day}–${b.day} ${b.month} ${b.year}`;
 }
 
-/** The total price of an option: "RM 5,395" (exact), "RM 6,187 – 6,227" (range) or "RM 2,480 + unknown" (some items not priced). */
-export function priceText(route: Pick<Route, "total_cost_myr" | "cost_low_myr" | "cost_high_myr">) {
-  if (route.total_cost_myr !== null) return moneyShort(route.total_cost_myr);
+/**
+ * The total price of an option: "RM 5,395" (exact), "RM 6,187 – 6,227" (range) or "RM 2,480 + unknown" (some items
+ * not priced). "RM 5,395 + common costs": the only items without a price are the ones every best option has.
+ */
+export function priceText(route: Pick<Route, "total_cost_myr" | "cost_low_myr" | "cost_high_myr" | "common_offer_ids">) {
   if (route.cost_high_myr === null) return `${moneyShort(route.cost_low_myr)} + unknown`;
-  return `${moneyShort(route.cost_low_myr)} – ${amount(route.cost_high_myr)}`;
+  const price = route.total_cost_myr !== null ? moneyShort(route.total_cost_myr) : `${moneyShort(route.cost_low_myr)} – ${amount(route.cost_high_myr)}`;
+  return route.common_offer_ids?.length ? `${price} + common costs` : price;
 }
 
 const isEstimate = (offer: Pick<Offer, "estimated" | "source" | "currency">) => offer.estimated || offer.source === "rule" || offer.currency !== "MYR";
@@ -131,22 +134,25 @@ function itemList(kinds: ItemKind[]) {
  * Items without a complete price in an option. A purchase with no price, or in a currency without
  * an exchange rate, is not priced; a price without an upper limit is open-ended. `chip` is the short
  * form for option rows ("10 not priced"); `text` adds the items ("10 not priced: 2 flights, 8 airport transfers").
+ * Common costs (the items every best option has) are not in these: `commonText` names them ("1 flight, 2 airport transfers").
  */
-export function unpricedSummary(route: Pick<Route, "purchases" | "movements">, rates: Record<string, number>) {
+export function unpricedSummary(route: Pick<Route, "purchases" | "movements" | "common_offer_ids">, rates: Record<string, number>) {
   const kinds = itemKinds(route);
   const kindOf = (offer: Offer) => kinds.get(offer.movement_ids[0]) ?? "other";
-  const notPriced = route.purchases.filter(offer => !isPriced(offer, rates)).map(kindOf);
-  const openEnded = route.purchases.filter(offer => isPriced(offer, rates) && offer.high === null).map(kindOf);
+  const common = new Set(route.common_offer_ids ?? []);
+  const own = route.purchases.filter(offer => !common.has(offer.id));
+  const notPriced = own.filter(offer => !isPriced(offer, rates)).map(kindOf);
+  const openEnded = own.filter(offer => isPriced(offer, rates) && offer.high === null).map(kindOf);
   const openText = plural(openEnded.length, "open-ended price");
   const chip = notPriced.length ? `${notPriced.length} not priced` : openEnded.length === 1 ? "open-ended price" : openEnded.length ? openText : "";
   const text = notPriced.length ? `${notPriced.length} not priced: ${itemList(notPriced)}${openEnded.length ? ` · ${openText}` : ""}`
     : openEnded.length ? `${openText}: ${itemList(openEnded)}` : "";
-  return { count: notPriced.length, openEnded: openEnded.length, chip, text };
+  return { count: notPriced.length, openEnded: openEnded.length, chip, text, commonText: itemList(route.purchases.filter(offer => common.has(offer.id)).map(kindOf)) };
 }
 
 /** "RM 24.72 per hour in cities" (exact) or "RM 28.0 – 28.2 per hour in cities" (range). Null when some items are not priced. */
-export function perCityHourText(route: Pick<Route, "total_cost_myr" | "cost_low_myr" | "cost_high_myr" | "cost_per_stay_hour_myr" | "stay_hours">) {
-  if (route.cost_high_myr === null || route.stay_hours <= 0) return null;
+export function perCityHourText(route: Pick<Route, "total_cost_myr" | "cost_low_myr" | "cost_high_myr" | "cost_per_stay_hour_myr" | "stay_hours" | "common_offer_ids">) {
+  if (route.cost_high_myr === null || route.stay_hours <= 0 || route.common_offer_ids?.length) return null;
   if (route.total_cost_myr !== null) return route.cost_per_stay_hour_myr === null ? null : `${moneyShort(route.cost_per_stay_hour_myr)} per hour in cities`;
   return `${formatNumber(route.cost_low_myr / route.stay_hours, 1, "MYR")} – ${formatNumber(route.cost_high_myr / route.stay_hours, 1)} per hour in cities`;
 }
@@ -163,10 +169,13 @@ function offerAmount(offer: Pick<Offer, "low" | "high" | "currency">) {
 /** An option's route for its list row: the start place, then each journey's mode, destination and the stay that starts there. */
 export function routeChain(route: Pick<Route, "movements" | "stays">) {
   // Stays and movements write the same instant in different formats ("+00:00" and "Z").
-  const stays = new Map(route.stays.map(stay => [`${stay.place_id}@${Date.parse(stay.arrival)}`, stay.hours]));
+  const stays = new Map(route.stays.map(stay => [`${stay.place_id}@${Date.parse(stay.arrival)}`, stay]));
   return {
     from: route.movements[0]?.from_id ?? "",
-    steps: route.movements.map(movement => ({ mode: movement.mode, to: movement.to_id, hours: movement.arrival ? stays.get(`${movement.to_id}@${Date.parse(movement.arrival)}`) ?? null : null })),
+    steps: route.movements.map(movement => {
+      const stay = movement.arrival ? stays.get(`${movement.to_id}@${Date.parse(movement.arrival)}`) ?? null : null;
+      return { mode: movement.mode, to: movement.to_id, hours: stay?.hours ?? null, stay };
+    }),
   };
 }
 
@@ -220,6 +229,20 @@ export const optionNumber = (position: number) => String(position).padStart(2, "
 /** Hours with one decimal ("218.3"), as the option rows show them. */
 export const hoursText = (hours: number) => formatNumber(hours, 1);
 
+/** A length of time in cities: "6.5 h" under a day, else whole hours as "1 day 21 h" or "3 days". */
+export function stayLength(hours: number) {
+  if (hours < 24) return `${hoursText(hours)} h`;
+  const total = Math.round(hours), rest = total % 24;
+  return `${plural(Math.floor(total / 24), "day")}${rest ? ` ${rest} h` : ""}`;
+}
+
+/** The nights of a stay in the city's own time ("2 nights"). A stay within one day shows its length ("6.5 h"). */
+export function nightsText(stay: Pick<Route["stays"][number], "arrival" | "departure" | "hours">, zone: string) {
+  const day = (value: string) => Date.parse(`${dateFormat(zone, "iso").format(new Date(value))}T00:00:00Z`);
+  const nights = Math.round((day(stay.departure) - day(stay.arrival)) / 86_400_000);
+  return nights > 0 ? plural(nights, "night") : stayLength(stay.hours);
+}
+
 /** A chip on an option row (C6): exceptions only. "warn" chips use the warning colours. */
 export type OptionChip = { text: string; tone: "warn" | "plain" };
 /**
@@ -227,12 +250,15 @@ export type OptionChip = { text: string; tone: "warn" | "plain" };
  * estimated prices, so the rows leave out that chip. "May exceed budget" is for bounded prices only; an
  * unbounded option says it once in Next steps (E6).
  */
-export function optionChips(route: Route, { budget, rates, estimatedOnce, weaker, overBudget, compared }: {
+export function optionChips(route: Route, { budget, rates, estimatedOnce, weaker, overBudget, compared, beaten = false }: {
   budget: number | null; rates: Record<string, number>; estimatedOnce: boolean; weaker: boolean; overBudget: boolean; compared: boolean;
+  /** Another option costs less with at least as much time in cities, whatever this option's missing prices are. */
+  beaten?: boolean;
 }): OptionChip[] {
   const chips: OptionChip[] = [];
   const unpriced = unpricedSummary(route, rates).chip;
   if (unpriced) chips.push({ text: unpriced, tone: "warn" });
+  if (beaten) chips.push({ text: "Not better at any price", tone: "plain" });
   if (!estimatedOnce && route.total_cost_myr !== null && priceEstimated(route)) chips.push({ text: "Includes estimates", tone: "plain" });
   const high = highest(route);
   if (!overBudget && budget !== null && high !== null && high > budget) chips.push({ text: "May exceed budget", tone: "warn" });
@@ -250,7 +276,7 @@ export function optionChips(route: Route, { budget, rates, estimatedOnce, weaker
 export function compareText(selected: Route, other: Route, otherNumber: number) {
   const name = `Option ${optionNumber(otherNumber)}`;
   const hours = Math.round((selected.stay_hours - other.stay_hours) * 10) / 10;
-  const time = hours === 0 ? "the same time in cities" : `${Math.abs(hours).toFixed(1)} h ${hours > 0 ? "more" : "less"} time in cities`;
+  const time = hours === 0 ? "the same time in cities" : `${stayLength(Math.abs(hours))} ${hours > 0 ? "more" : "less"} time in cities`;
   const selectedHigh = highest(selected), otherHigh = highest(other);
   if (selectedHigh === null || otherHigh === null) {
     const who = selectedHigh === null && otherHigh === null ? "both options have" : selectedHigh === null ? "this option has" : `${name} has`;
@@ -1127,13 +1153,27 @@ export const transitSearchModes: string[] = ["rail", "bus", "coach", "subway", "
 
 /** Where a next step's button goes. */
 export type NextStepTarget = "airport-changes" | "airport-fallback" | "prices" | "exchange-rate" | "show-unpriced-flights";
-export type NextStep = { id: string; tone: "warn" | "info"; text: string; action: { label: string; target: NextStepTarget } | null };
-/** The Next steps rows (F1), in priority order. Rows about search scope wait for the first search. */
+/**
+ * A yes or no question about one journey price (lib/commonCosts priceDecisions): under `under`, option number
+ * `option` costs less than option number `rival`. `componentId` is the id that a price saves on, `fareLabel` its label.
+ */
+export type PriceAsk = { key: string; componentId: string; fareLabel: string; label: string; under: number; option: number; rival: number };
+export type NextStep = { id: string; tone: "warn" | "info" | "ask"; text: string; action: { label: string; target: NextStepTarget } | null; ask?: PriceAsk };
+/**
+ * The Next steps rows (F1), in priority order. Rows about search scope wait for the first search.
+ * `routes` are the best options after commonCosts().adjust, so an option with only common costs has a price.
+ * `directions` and `groups` hold only the prices that are not common costs.
+ */
 export function buildNextSteps(state: RefinementState & {
   searched: boolean; budget: number | null; rates: Record<string, number>;
   excludeUnpricedFlights: boolean;
   /** Transit search is turned off in this build and a transit mode is on. */
   transitOff: boolean;
+  adults?: number;
+  /** The questions that decide between options, and the options that need no row: one a question covers, or one that is not better at any price. */
+  asks?: PriceAsk[]; settled?: Set<string>;
+  /** The common costs by name ("Taxi Seoul → ICN airport"). */
+  common?: string[];
 }): NextStep[] {
   const steps: NextStep[] = [];
   const blocked = state.airportChanges.filter(row => row.unresolved_journey_count > 0);
@@ -1147,7 +1187,9 @@ export function buildNextSteps(state: RefinementState & {
     const count = state.unresolvedAccess.length;
     steps.push({ id: "access-time", tone: "warn", text: `${plural(count, "journey")} can't be used: the airport transfer time is unknown in ${unresolvedAccessCities(state.unresolvedAccess).join(", ")}.`, action: { label: "Set default time", target: "airport-fallback" } });
   }
-  const unbounded = state.routes.filter(route => route.cost_high_myr === null);
+  for (const ask of state.asks ?? []) steps.push({ id: `ask:${ask.key}`, tone: "ask", ask, action: null,
+    text: `${ask.label}: is the price under ${moneyShort(ask.under)} for ${plural(state.adults ?? 1, "adult")}? If yes, Option ${optionNumber(ask.option)} costs less than Option ${optionNumber(ask.rival)}.` });
+  const unbounded = state.routes.filter(route => route.cost_high_myr === null && !state.settled?.has(route.id));
   if (unbounded.length) {
     const total = state.routes.length;
     const lead = unbounded.length === total ? "No option has a complete price yet" : `${unbounded.length} of ${total} options ${unbounded.length === 1 ? "is" : "are"} not fully priced`;
@@ -1164,7 +1206,7 @@ export function buildNextSteps(state: RefinementState & {
     // Options that only airport transfer prices keep from a complete price.
     const transfersOnly = unbounded.filter(route => {
       const kinds = itemKinds(route);
-      const open = route.purchases.filter(offer => !isPriced(offer, state.rates) || offer.high === null);
+      const open = route.purchases.filter(offer => (!isPriced(offer, state.rates) || offer.high === null) && !route.common_offer_ids?.includes(offer.id));
       return open.length > 0 && open.every(offer => kinds.get(offer.movement_ids[0]) === "transfer");
     }).length;
     const text = [
@@ -1173,6 +1215,13 @@ export function buildNextSteps(state: RefinementState & {
       ...(state.budget !== null ? [`Until then, options may exceed your ${moneyShort(state.budget)} budget.`] : []),
     ].join(" ");
     steps.push({ id: "prices", tone: "warn", text, action: { label: "Add prices", target: "prices" } });
+  }
+  if (state.common?.length) {
+    const one = state.common.length === 1, names = state.common.length > 3 ? [...state.common.slice(0, 3), `${state.common.length - 3} more`] : state.common;
+    steps.push({ id: "common", tone: "info", action: { label: "Add prices", target: "prices" }, text: [
+      `Common costs: ${joinAnd(names)} ${one ? "has" : "have"} no price yet. Every option has ${one ? "it" : "them"}, so ${one ? "it does" : "they do"} not change the order of the options.`,
+      ...(state.budget !== null ? [`${one ? "It still counts" : "They still count"} toward your ${moneyShort(state.budget)} budget.`] : []),
+    ].join(" ") });
   }
   const currencies = [...new Set([...state.groups.transfers, ...state.groups.journeys].filter(group => group.reason === "exchange_rate").map(group => group.currency))];
   if (currencies.length) steps.push({ id: "exchange-rates", tone: "warn", text: `Prices in ${joinAnd(currencies)} need ${currencies.length === 1 ? "an exchange rate" : "exchange rates"}.`, action: { label: "Add rate", target: "exchange-rate" } });

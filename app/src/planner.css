@@ -247,6 +247,9 @@ fieldset.p-plan-row > legend { float: left; }
 [data-tone=warn] > .p-next-icon { color: var(--warning); }
 .optimizer .p-next-list p { flex: 1 1 240px; margin: 0; color: var(--foreground); line-height: 1.5; }
 .p-next-list > li > button { margin-left: auto; }
+/* A question (tone "ask"): its answers, or the staged answer, on their own line under the text. */
+.p-next-answers { display: flex; flex: 1 1 100%; flex-wrap: wrap; gap: 8px; padding-left: 26px; }
+.optimizer .p-next-list .p-next-note { flex: 1 1 100%; padding-left: 26px; color: var(--muted-foreground); }
 .optimizer .p-next .p-more-button { margin-top: 6px; }
 
 /* Chart and legend (E2): heading row with Reset zoom and Chart options, the canvas, the legend. --chart-h: 320 / 300 / 260 px (B2). */
@@ -285,6 +288,7 @@ fieldset.p-plan-row > legend { float: left; }
 .p-pick-label { color: var(--muted-foreground); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
 .p-pick-price { font-size: 17px; font-weight: 650; letter-spacing: -.02em; }
 .p-pick-line { color: var(--muted-foreground); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+.p-pick-gain { margin-top: 2px; font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
 .p-view-toggle { display: inline-flex; padding: 2px; border: 1px solid var(--border); border-radius: 7px; background: var(--muted-surface); }
 .p-view-toggle button { padding: 4px 12px; border: 0; border-radius: 5px; background: none; color: var(--muted-foreground); font-weight: 500; }
 .p-view-toggle button[aria-pressed=true] { background: var(--card); color: var(--foreground); box-shadow: 0 1px 2px var(--shadow-color); }
@@ -343,6 +347,7 @@ fieldset.p-plan-row > legend { float: left; }
 .p-itin-total { color: var(--foreground); font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; }
 .optimizer .p-itin-warning { display: flex; align-items: flex-start; gap: 6px; margin: 6px 0 0; color: var(--warning); line-height: 1.5; }
 .p-itin-warning > svg { flex-shrink: 0; margin-top: 3px; }
+.optimizer .p-itin-common { margin: 6px 0 0; color: var(--muted-foreground); line-height: 1.5; }
 .p-link-button { padding: 0; border: 0; background: none; color: inherit; font-weight: 500; text-decoration: underline; text-underline-offset: 3px; }
 .p-itin-metrics { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 2px; margin-top: 6px; color: var(--foreground); font-variant-numeric: tabular-nums; }
 .optimizer .p-itin-compare-text { margin: 8px 0 0; padding: 8px 12px; border-radius: 8px; background: var(--muted-surface); color: var(--foreground); line-height: 1.5; }

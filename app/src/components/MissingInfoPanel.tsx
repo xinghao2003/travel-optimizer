@@ -216,11 +216,13 @@ function CombinedTickets({ links, placeName }: { links: BundleLink[]; placeName:
  * airport transfers and prices are drafts in this browser until Apply (F4); connections and price rules save at once (F6).
  * Before a search, only Airport transfers and Price rules show (C12).
  */
-export function MissingInfoPanel({ searched, allClear, needs, needsText, airportChanges, connections, directions, estimates, accessNote, journeyGroups, appliedGroups,
+export function MissingInfoPanel({ searched, allClear, needs, needsText, optional, airportChanges, connections, directions, estimates, accessNote, journeyGroups, appliedGroups,
   adults, rates, draftRates, drafts, fares, canonical, offerFor, places, placeName, zoneOf, stagePrice, stageComponent, removePrice, addRate,
   gaps, assumed, addConnection, removeConnection, bundleLinks, rules, saveRule, deleteRule, busy, onAction, onApply, grouping, onGrouping, removeJourneyRule, reuseJourneyEstimate, csvActions }: {
   csvActions?: ReactNode;
   searched: boolean; allClear: boolean; needs: number; needsText: string;
+  /** Missing prices that do not change the order of the best options: common costs, and prices of options that are not better at any price. */
+  optional: number;
   airportChanges: AirportChangeRow[]; connections: AirportConnection[];
   directions: TransferDirection[]; estimates: AirportTransferEstimate[]; accessNote: string | null;
   /** splitGroups().journeys, and the group prices saved on this trip. */
@@ -249,10 +251,13 @@ export function MissingInfoPanel({ searched, allClear, needs, needsText, airport
   return <>
     <div className="p-panel-heading">
       <div><h2 id="missing-title" tabIndex={-1}>Prices to add</h2><InfoTip topic="Prices to add">Prices and details the search could not find. What you enter saves on its own when you leave the field, and your options update. Ctrl+Enter saves at once.</InfoTip></div>
-      <span className="p-missing-status">{allClear && <CircleCheck size={15} aria-hidden="true" />}{searched && needs ? needsText : allClear ? "Nothing missing" : "Nothing to check yet"}</span>
+      <span className="p-missing-status">{allClear && <CircleCheck size={15} aria-hidden="true" />}{[
+        ...(searched && needs ? [needsText] : []), ...(searched && optional ? [`${optional} optional`] : []),
+      ].join(" · ") || (allClear ? "Nothing missing" : "Nothing to check yet")}</span>
     </div>
     {csvActions}
     {!searched && <p className="p-mi-intro">Unknown prices and gaps appear here after a search. You can enter airport transfers now.</p>}
+    {searched && optional > 0 && <p className="p-mi-intro">{optional === 1 ? "1 missing price is optional: it does" : `${optional} missing prices are optional: they do`} not change the order of the best options. Add {optional === 1 ? "it" : "them"} to see complete totals.</p>}
     {allClear && <p className="p-mi-intro">Every option has a complete price and every journey can be used.</p>}
     <AirportChanges rows={airportChanges} connections={connections} adults={adults} drafts={drafts} />
     <AirportTransfers directions={directions} estimates={estimates} adults={adults} searched={searched} drafts={drafts} fares={fares} accessNote={accessNote}

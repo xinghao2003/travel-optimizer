@@ -7,7 +7,7 @@ import { InfoTip } from "./InfoTip";
 import { ModeIcon } from "./ModeIcon";
 import { Field, FixedPriceFields, Staged } from "./PlannerForms";
 import { storedOfferId, type DraftPrice, type DraftTarget, type PriceValue } from "../lib/drafts";
-import { assumptionNotes, bundleStatusLabel, compareText, dateRange, dayByDay, formatDuration, formatLocal, hoursText, journeyChips, journeySource, journeyWhen, mainService, matchingQuoteLinks, moneyShort, optionChips, optionNumber, perCityHourText, priceInputErrors, priceText, quoteLinkText, stepLabel, ticketJourney, ticketRows, unpricedSummary, type OptionChip, type OptionsTarget, type TicketRow } from "../lib/present";
+import { assumptionNotes, bundleStatusLabel, compareText, dateRange, dayByDay, formatDuration, formatLocal, hoursText, journeyChips, journeySource, journeyWhen, mainService, matchingQuoteLinks, moneyShort, nightsText, optionChips, optionNumber, perCityHourText, priceInputErrors, priceText, quoteLinkText, stayLength, stepLabel, ticketJourney, ticketRows, unpricedSummary, type OptionChip, type OptionsTarget, type TicketRow } from "../lib/present";
 import type { Charge, Coverage, Movement, Offer, Place, Route } from "../lib/planner";
 
 type BundleLink = NonNullable<Coverage["bundle_links"]>[number];
@@ -312,8 +312,12 @@ export function ItineraryPanel({ isWide, searched, route, displayRoutes, numbers
       {unpriced.text}{budget !== null && !overBudget && route.cost_high_myr === null && " · may exceed your budget"}{" "}
       <button type="button" className="p-link-button" onClick={seePrices}>See prices</button>
     </span></p>}
+    {unpriced.commonText && <p className="p-itin-common"><span>
+      Not in this price: {unpriced.commonText}. Every option has {route.common_offer_ids?.length === 1 ? "it" : "them"}.{" "}
+      <button type="button" className="p-link-button" onClick={seePrices}>See prices</button>
+    </span></p>}
     <div className="p-itin-metrics">
-      <span>{hoursText(route.stay_hours)} h in cities · {hoursText(route.travel_hours)} h travel{perHour && ` · ${perHour}`}</span>
+      <span>{stayLength(route.stay_hours)} in cities · {hoursText(route.travel_hours)} h travel{perHour && ` · ${perHour}`}</span>
       <InfoTip topic="time in cities" align="end">Hours in your cities from arrival to departure, nights included. Travel, airport and station time do not count. Time at home and in start or end cities does not count.</InfoTip>
     </div>
     {overBudget && budget !== null && <p className="p-itin-warning"><CircleAlert size={14} aria-hidden="true" /><span>Over budget: costs more than your {moneyShort(budget)} budget even at its lowest price. A lower combined ticket price can bring it within budget.</span></p>}
@@ -338,8 +342,9 @@ export function ItineraryPanel({ isWide, searched, route, displayRoutes, numbers
       </li>;
       if (entry.kind === "gap") return <li key={`${route.id}:${index}`} className="p-day-gap">Time in {placeName(entry.placeId)} · {formatDuration(entry.minutes)} · not counted in time in cities</li>;
       const { stay, minimum } = entry, zone = zoneOf(stay.place_id);
+      const nights = nightsText(stay, zone), length = stayLength(stay.hours);
       return <li key={`${route.id}:${index}`} className="p-day-stay">
-        <span><strong>{placeName(stay.place_id)}</strong> · {hoursText(stay.hours)} h{minimum !== null && ` (at least ${minimum} h)`}</span>
+        <span><strong>{placeName(stay.place_id)}</strong> · {nights}{nights !== length && ` · ${length}`}{minimum !== null && ` (at least ${stayLength(minimum)})`}</span>
         <span className="p-day-times">{formatLocal(stay.arrival, zone)} → {formatLocal(stay.departure, zone)}</span>
         <progress max={route.stay_hours || 1} value={stay.hours} aria-label={`${placeName(stay.place_id)}: share of time in cities`} />
       </li>;

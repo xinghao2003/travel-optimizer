@@ -91,9 +91,10 @@ export function RateField({ currency, id, added, addRate }: { currency: string; 
 
 /**
  * One Journey prices row (F2 row 3): title, options, journeys, Search fare, the group price (a draft on every journey of
- * the row) and Show journeys with a price for each journey. `first` gives the price input the id that Add prices focuses.
+ * the row) and Show journeys with a price for each journey. The price input of row `index` has the id that Add prices
+ * ("missing-fare-first") or a Next steps question ("missing-fare-{index}") focuses.
  */
-function JourneyGroup({ group, first, rateId, ...props }: JourneyProps & { group: MissingFareGroup; first: boolean; rateId?: string }) {
+function JourneyGroup({ group, index, rateId, ...props }: JourneyProps & { group: MissingFareGroup; index: number; rateId?: string }) {
   const { fares, adults, canonical, offerFor, placeName, zoneOf, unstage, busy, onApply } = props;
   const [showJourneys, setShowJourneys] = useState(false);
   const title = journeyGroupTitle(group, placeName);
@@ -113,7 +114,7 @@ function JourneyGroup({ group, first, rateId, ...props }: JourneyProps & { group
     <p className="p-mi-meta">{journeyGroupWhen(group, zone)}{url && <> · <a href={url} target="_blank" rel="noreferrer">Search fare{newTab}</a></>}</p>
     {group.scope && <p className="p-mi-meta">{journeyScopeLabel(group.scope, group.components[0]?.journey)} · Reusable estimate</p>}
     {group.reason === "exchange_rate" && <RateField currency={group.currency} id={rateId} added={props.draftRates[group.currency] !== undefined} addRate={props.addRate} />}
-    <PriceFields id={first ? "missing-fare-first" : undefined} name={title} adults={adults} value={draft ?? null} currency={currency} staged={!!draft}
+    <PriceFields id={index ? `missing-fare-${index}` : "missing-fare-first"} name={title} adults={adults} value={draft ?? null} currency={currency} staged={!!draft}
       onCommit={value => props.stagePrice(group.key, { component_ids: group.components.map(component => component.component_id), ...value,
         label: `Shared estimate: ${name} · ${group.scope ? journeyScopeLabel(group.scope, group.components[0]?.journey) : group.label}`.slice(0, 200), ...(group.scope ? { scope: group.scope } : {}) })}
       onUndo={() => unstage(group.key)} onApply={onApply} />
@@ -167,7 +168,7 @@ export function JourneyPrices({ groups, others, grouping, onGrouping, ...props }
         <Button type="button" size="sm" variant="secondary" onClick={() => onGrouping([...defaultJourneyGrouping])}>Reset grouping</Button>
       </Popover.Content></Popover.Portal></Popover.Root>}
     tip="A group price is an estimate per whole journey for this party. Its selected matching fields apply to existing and later journeys in this trip. Individual prices and provider fares take precedence. Missing identifiers stay journey-specific.">
-    {groups.length > 0 && <ul className="p-mi-list">{groups.slice(0, shown).map((group, index) => <JourneyGroup key={group.key} group={group} first={index === 0}
+    {groups.length > 0 && <ul className="p-mi-list">{groups.slice(0, shown).map((group, index) => <JourneyGroup key={group.key} group={group} index={index}
       rateId={rateRows.get(group.currency) === group.key ? `rate-input-${group.currency}` : undefined} {...props} />)}</ul>}
     {left > 0 && <button type="button" className="p-show-more" onClick={() => setShown(shown + pageSize)}>{left > pageSize ? `Show ${pageSize} more (${left} left)` : `Show ${left} more`}</button>}
     {others.length > 0 && <details className="p-mi-more"><summary>Other drafts ({others.length})</summary>

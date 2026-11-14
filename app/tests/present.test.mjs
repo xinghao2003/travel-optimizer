@@ -4,7 +4,7 @@ import { loadTs } from "./loadTs.mjs";
 const {
   airportChangeRows, appError, assumedConnections, assumptionNotes, blankConnectionForm, blankRuleForm, buildNextSteps, bundleStatusLabel, cityGaps, connectionFromForm, connectionText, compareText, dateModeText, dateRange, dayByDay, formatDuration,
   componentWhen, formatLocal, hoursText, journeyGroupTitle, journeyGroupWhen, journeyChips, journeySource, journeyWhen, mainService, matchingQuoteLinks, modeLabel, moneyShort, needsInputCount, optionChips, optionsEmptyState, partySizeNotice, perCityHourText, priceEstimated, priceText, routeChain, routeSignature,
-  priceInputErrors, purchaseAmount, quoteLinkText, searchDetails, searchState, settingsFooter, settingsSummaries, sortRoutes, sourceLabel, splitGroups, stepLabel, staySumWarning, ticketJourney, ticketRows,
+  nightsText, priceInputErrors, purchaseAmount, quoteLinkText, searchDetails, searchState, settingsFooter, settingsSummaries, sortRoutes, sourceLabel, splitGroups, stayLength, stepLabel, staySumWarning, ticketJourney, ticketRows,
   ruleForm, ruleFromForm, ruleText, transferDirections, transferJourneyText, tripSummary, unpricedSummary, unresolvedAccessJourneys, validateDraft,
 } = await loadTs("../src/lib/present.ts");
 const { blankTrip } = await loadTs("../src/lib/planner.ts");
@@ -252,11 +252,32 @@ test("unpriced summary counts items without a price, without an exchange rate, o
     ],
     purchases: [noFare("f1"), noFare("f1:access", "Airport access"), noFare("f1:egress", "Airport egress"), fare("c1", 9000, 9000, { currency: "JPY" }), fare("f2", 900, null, { source: "user" }), noFare("f2:airport-transfer:1", "Airport transfer GMP → ICN")],
   });
-  assert.deepEqual(unpricedSummary(route, { MYR: 1 }), { count: 5, openEnded: 1, chip: "5 not priced", text: "5 not priced: 1 flight, 1 bus, 2 airport transfers, 1 airport change · 1 open-ended price" });
+  assert.deepEqual(unpricedSummary(route, { MYR: 1 }), { count: 5, openEnded: 1, chip: "5 not priced", text: "5 not priced: 1 flight, 1 bus, 2 airport transfers, 1 airport change · 1 open-ended price", commonText: "" });
   // With a JPY rate the coach price counts.
   assert.equal(unpricedSummary(route, { MYR: 1, JPY: 0.03 }).text, "4 not priced: 1 flight, 2 airport transfers, 1 airport change · 1 open-ended price");
-  assert.deepEqual(unpricedSummary({ ...route, purchases: [fare("f2", 900, null, { source: "user" })] }, { MYR: 1 }), { count: 0, openEnded: 1, chip: "open-ended price", text: "1 open-ended price: 1 flight" });
-  assert.deepEqual(unpricedSummary({ ...route, purchases: [fare("f1", 900)] }, { MYR: 1 }), { count: 0, openEnded: 0, chip: "", text: "" });
+  assert.deepEqual(unpricedSummary({ ...route, purchases: [fare("f2", 900, null, { source: "user" })] }, { MYR: 1 }), { count: 0, openEnded: 1, chip: "open-ended price", text: "1 open-ended price: 1 flight", commonText: "" });
+  assert.deepEqual(unpricedSummary({ ...route, purchases: [fare("f1", 900)] }, { MYR: 1 }), { count: 0, openEnded: 0, chip: "", text: "", commonText: "" });
+  // Common costs (the items every best option has) are named apart and are not in the counts.
+  const common = { ...route, common_offer_ids: ["unknown:f1:access", "unknown:f1:egress"] };
+  assert.deepEqual(unpricedSummary(common, { MYR: 1, JPY: 0.03 }), { count: 2, openEnded: 1, chip: "2 not priced", text: "2 not priced: 1 flight, 1 airport change · 1 open-ended price", commonText: "2 airport transfers" });
+});
+
+test("an option with only common costs shows the price of its priced part", () => {
+  assert.equal(plain(priceText({ ...exact("a", 3180, 120), common_offer_ids: ["unknown:x"] })), "RM 3,180 + common costs");
+  assert.equal(plain(priceText({ ...range("b", 3180, 3300, 120), common_offer_ids: ["unknown:x"] })), "RM 3,180 – 3,300 + common costs");
+  // Another open price keeps the total unknown.
+  assert.equal(plain(priceText({ ...partial("c", 3180, 120), common_offer_ids: ["unknown:x"] })), "RM 3,180 + unknown");
+  assert.equal(perCityHourText({ ...range("b", 3180, 3300, 120), common_offer_ids: ["unknown:x"] }), null);
+  assert.deepEqual(optionChips(partial("c", 3180, 120), { budget: null, rates: {}, estimatedOnce: true, weaker: false, overBudget: false, compared: false, beaten: true }), [{ text: "Not better at any price", tone: "plain" }]);
+});
+
+test("time in cities reads in days and nights", () => {
+  assert.deepEqual([6.5, 23.96, 24, 44.6, 47.7, 72, 218.3].map(stayLength), ["6.5 h", "24.0 h", "1 day", "1 day 21 h", "2 days", "3 days", "9 days 2 h"]);
+  const stay = (arrival, departure) => ({ arrival, departure, hours: (Date.parse(departure) - Date.parse(arrival)) / 3_600_000 });
+  // Nights are local midnights: 02:10 UTC is 11:10 in Seoul.
+  assert.equal(nightsText(stay("2027-02-10T02:10:00Z", "2027-02-11T22:45:00Z"), "Asia/Seoul"), "2 nights");
+  assert.equal(nightsText(stay("2027-02-10T02:10:00Z", "2027-02-11T22:45:00Z"), "UTC"), "1 night");
+  assert.equal(nightsText(stay("2027-02-10T02:10:00Z", "2027-02-10T08:40:00Z"), "Asia/Seoul"), "6.5 h");
 });
 
 test("options sort by highest possible price, by time in cities or by balance, with unbounded options last", () => {
@@ -744,6 +765,20 @@ test("next steps and the needs-input count follow the counting rules", () => {
   assert.equal(needsInputCount(state), 8);
   assert.equal(needsInputCount({ ...state, routes: [] }), 9);
 
+  // A question covers r1, r2 is not better at any price, and every option has two common costs.
+  const ask = { key: "journey:f1", componentId: "f1", fareLabel: "Standalone flight fare", label: "Flight Kuala Lumpur → Busan · 4 Dec", under: 419.6, option: 2, rival: 1 };
+  const decided = buildNextSteps({ ...state, ...context, airportChanges: [], directions: [], groups: { transfers: [], journeys: [] }, adults: 2, asks: [ask], settled: new Set(["r1", "r2"]),
+    common: ["Taxi Seoul → ICN airport", "Taxi KUL airport → Kuala Lumpur"] });
+  assert.deepEqual(decided.map(step => [step.id, step.tone, plain(step.text), step.action?.label ?? null]), [
+    ["ask:journey:f1", "ask", "Flight Kuala Lumpur → Busan · 4 Dec: is the price under RM 419.60 for 2 adults? If yes, Option 02 costs less than Option 01.", null],
+    ["common", "info", "Common costs: Taxi Seoul → ICN airport and Taxi KUL airport → Kuala Lumpur have no price yet. Every option has them, so they do not change the order of the options. They still count toward your RM 12,000 budget.", "Add prices"],
+  ]);
+  assert.equal(decided[0].ask, ask);
+  assert.equal(buildNextSteps({ ...state, ...context, budget: null, airportChanges: [], directions: [], groups: { transfers: [], journeys: [] }, settled: new Set(["r1", "r2"]), common: ["a", "b", "c", "d", "e"] }).at(-1).text,
+    "Common costs: a, b, c and 2 more have no price yet. Every option has them, so they do not change the order of the options.");
+  assert.equal(buildNextSteps({ ...state, ...context, budget: null, airportChanges: [], directions: [], groups: { transfers: [], journeys: [] }, settled: new Set(["r1", "r2"]), common: ["Taxi Seoul → ICN airport"] }).at(-1).text,
+    "Common costs: Taxi Seoul → ICN airport has no price yet. Every option has it, so it does not change the order of the options.");
+
   const unresolved = city => `${city}: airport access time is unresolved; this movement is not usable until routing or a transfer assumption is provided`;
   const blocked = {
     ...state, routes: routes.slice(0, 1), airportChanges: [change("GMP", "ICN", 2), change("HND", "NRT", 1)],
@@ -780,7 +815,7 @@ test("route chains show each stay where it starts", () => {
     // Stays write their instants with "+00:00", movements with "Z".
     stays: [{ place_id: "PUS", arrival: "2026-12-04T09:54:00+00:00", departure: "2026-12-08T02:15:00+00:00", hours: 88.35 }],
   });
-  assert.deepEqual(routeChain(route), { from: "KUL", steps: [{ mode: "flight", to: "PUS", hours: 88.35 }, { mode: "flight", to: "SIN", hours: null }, { mode: "rail", to: "KUL", hours: null }] });
+  assert.deepEqual(routeChain(route), { from: "KUL", steps: [{ mode: "flight", to: "PUS", hours: 88.35, stay: route.stays[0] }, { mode: "flight", to: "SIN", hours: null, stay: null }, { mode: "rail", to: "KUL", hours: null, stay: null }] });
 });
 
 test("price sources and combined-ticket statuses in plain words", () => {

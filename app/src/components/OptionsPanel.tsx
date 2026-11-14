@@ -1,10 +1,10 @@
 import { Select, SelectItem } from "./ui/select";
 import { lazy, Suspense, useEffect, useId, useRef, useState, type ComponentProps } from "react";
-import { CircleAlert, Info } from "lucide-react";
+import { CircleAlert, CircleHelp, Info } from "lucide-react";
 import { Button } from "./ui/button";
 import { InfoTip } from "./InfoTip";
 import { ModeIcon } from "./ModeIcon";
-import { hoursText, moneyShort, optionChips, optionNumber, perCityHourText, priceEstimated, priceText, routeChain, sortRoutes, type EmptyState, type NextStep, type OptionChip, type OptionsTarget } from "../lib/present";
+import { hoursText, moneyShort, nightsText, optionChips, optionNumber, perCityHourText, priceEstimated, priceText, routeChain, sortRoutes, stayLength, type EmptyState, type NextStep, type OptionChip, type OptionsTarget, type PriceAsk } from "../lib/present";
 import type { Result, Route } from "../lib/planner";
 import { compareRoute, marginalComparisons, type RouteComparison } from "../lib/routeComparison";
 
@@ -20,8 +20,8 @@ const visibleSteps = 3;
  * One option in the list (C6): number, price and time in cities; the route; the price per city hour and the chips.
  * `name` is read before the number ("Over-budget option 1"), as in the itinerary heading.
  */
-function OptionRow({ route, number, name = "Option", selected, chips, placeName, onSelect, comparison }: {
-  route: Route; number: number; name?: string; selected: boolean; chips: OptionChip[]; placeName: (id: string) => string; onSelect: () => void;
+function OptionRow({ route, number, name = "Option", selected, chips, placeName, zoneOf, onSelect, comparison }: {
+  route: Route; number: number; name?: string; selected: boolean; chips: OptionChip[]; placeName: (id: string) => string; zoneOf: (id: string) => string; onSelect: () => void;
   comparison?: { baseline: string; value: RouteComparison; marginal?: { label: string; value: RouteComparison } };
 }) {
   const chain = routeChain(route);
@@ -31,11 +31,11 @@ function OptionRow({ route, number, name = "Option", selected, chips, placeName,
       <span className="p-option-line">
         <span className="p-option-number"><span className="sr-only">{name} </span>{optionNumber(number)}</span>
         <span className="p-option-price">{priceText(route)}</span>
-        <span className="p-option-aside">{hoursText(route.stay_hours)} h in cities</span>
+        <span className="p-option-aside">{stayLength(route.stay_hours)} in cities</span>
       </span>
       <span className="p-option-line">
         <span className="p-option-chain">{placeName(chain.from)}{chain.steps.map((step, index) => <span className="p-chain-step" key={index}>
-          <ModeIcon mode={step.mode} />{placeName(step.to)}{step.hours !== null && <span className="p-chain-hours">{hoursText(step.hours)} h</span>}
+          <ModeIcon mode={step.mode} />{placeName(step.to)}{step.stay && <span className="p-chain-hours">{nightsText(step.stay, zoneOf(step.to))}</span>}
         </span>)}</span>
         <span className="p-option-aside">{hoursText(route.travel_hours)} h travel</span>
       </span>
@@ -64,6 +64,7 @@ const pickLabels = { cheapest: "Cheapest", stay: "Most time in cities", balanced
  * The recommended picks above the list: the first best option for each ranking. Cheapest and Best balance use only
  * options with a known highest price, so a missing price never makes an option look cheap. One option that wins
  * several rankings shows once with all its labels. None with fewer than 2 best options or no priced option.
+ * A pick with more time in cities than Cheapest says what the extra money gives.
  */
 function Picks({ routes, priceWeight, numbers, selectedId, placeName, onSelect }: {
   routes: Route[]; priceWeight: number; numbers: Map<string, number>; selectedId: string | null;
@@ -77,14 +78,19 @@ function Picks({ routes, priceWeight, numbers, selectedId, placeName, onSelect }
     const pick = picks.get(route.id) ?? { route, labels: [] };
     pick.labels.push(pickLabels[key]); picks.set(route.id, pick);
   }
+  const high = (route: Route) => route.total_cost_myr ?? route.cost_high_myr;
+  const cheapest = [...picks.values()].find(pick => pick.labels.includes(pickLabels.cheapest))?.route;
   return <ul className="p-picks" aria-label="Recommended options">{[...picks.values()].map(({ route, labels }) => {
     const chain = routeChain(route);
+    const more = cheapest && high(route) !== null ? Math.round((high(route)! - high(cheapest)!) * 100) / 100 : 0;
+    const longer = cheapest ? route.stay_hours - cheapest.stay_hours : 0;
     return <li key={route.id}>
       <button type="button" className="p-pick" aria-pressed={route.id === selectedId} onClick={() => onSelect(route.id)}>
         <span className="p-pick-label">{labels.join(" · ")}</span>
         <span className="p-pick-price">{priceText(route)}</span>
-        <span className="p-pick-line">{hoursText(route.stay_hours)} h in cities · {hoursText(route.travel_hours)} h travel</span>
+        <span className="p-pick-line">{stayLength(route.stay_hours)} in cities · {hoursText(route.travel_hours)} h travel</span>
         <span className="p-pick-line">{[chain.from, ...chain.steps.map(step => step.to)].map(placeName).join(" → ")}</span>
+        {more > 0 && longer >= .1 && <span className="p-pick-gain">{moneyShort(more)} more than Cheapest gives {stayLength(longer)} more in cities</span>}
         <span className="sr-only">Option {optionNumber(numbers.get(route.id) ?? 0)}</span>
       </button>
     </li>;
@@ -95,9 +101,16 @@ function Picks({ routes, priceWeight, numbers, selectedId, placeName, onSelect }
  * The Options column (C6): Next steps, the chart, the list toolbar, the option rows with Show more, the Over budget
  * group and the empty states (C12). Planner owns the order (`displayRoutes`, `numbers`), the selection and the actions.
  */
-export function OptionsPanel({ result, displayRoutes, numbers, refinement, selectedId, comparedId, ranking, onRanking, timePreference, onTimePreference, showDominated, onToggleDominated,
-  loadingWeaker, busy, visibleCount, onShowMore, onSelect, nextSteps, emptyState, onAction, budget, adults, rates, placeName }: {
+export function OptionsPanel({ result, bestRoutes, beaten, displayRoutes, numbers, refinement, selectedId, comparedId, ranking, onRanking, timePreference, onTimePreference, showDominated, onToggleDominated,
+  loadingWeaker, busy, visibleCount, onShowMore, onSelect, nextSteps, emptyState, onAction, onAnswer, askNote, budget, adults, rates, placeName, zoneOf }: {
   result: Result | null; displayRoutes: Route[]; numbers: Map<string, number>; refinement: Route[];
+  /** The best options with their common costs marked (lib/commonCosts): the picks and the comparisons use their prices. */
+  bestRoutes: Route[];
+  /** Options that are not better at any price. */
+  beaten: Set<string>;
+  /** A question's answer: yes and no stage a price, "enter" goes to the price field. `askNote`: the staged answer in words, else null. */
+  onAnswer: (ask: PriceAsk, answer: "yes" | "no" | "enter") => void; askNote: (ask: PriceAsk) => string | null;
+  zoneOf: (id: string) => string;
   selectedId: string | null; comparedId: string | null;
   ranking: string; onRanking: (ranking: string) => void;
   timePreference: number; onTimePreference: (value: number) => void;
@@ -123,13 +136,13 @@ export function OptionsPanel({ result, displayRoutes, numbers, refinement, selec
   const weaker = new Set((showDominated ? result?.dominated_routes ?? [] : []).map(route => route.id));
   // Said once above the list instead of a chip on every row (C6).
   const estimatedOnce = displayRoutes.length > 0 && displayRoutes.every(priceEstimated);
-  const chips = (route: Route, overBudget: boolean) => optionChips(route, { budget, rates, estimatedOnce: estimatedOnce && !overBudget, weaker: weaker.has(route.id), overBudget, compared: route.id === comparedId && comparedId !== selectedId });
+  const chips = (route: Route, overBudget: boolean) => optionChips(route, { budget, rates, estimatedOnce: estimatedOnce && !overBudget, weaker: weaker.has(route.id), overBudget, compared: route.id === comparedId && comparedId !== selectedId, beaten: beaten.has(route.id) });
   const best = result?.routes.length ?? 0;
   const left = displayRoutes.length - visibleCount;
   const hiddenSteps = allSteps ? 0 : Math.max(0, nextSteps.length - visibleSteps);
   const baseline = [...displayRoutes, ...refinement].find(route => route.id === selectedId);
   const label = (id: string) => numbers.has(id) ? `Option ${optionNumber(numbers.get(id)!)}` : `Over-budget option ${optionNumber(refinement.findIndex(route => route.id === id) + 1)}`;
-  const marginal = marginalComparisons(result?.routes ?? []);
+  const marginal = marginalComparisons(bestRoutes);
   const comparison = (route: Route) => {
     if (!baseline || route.id === baseline.id) return undefined;
     const step = marginal.get(route.id);
@@ -146,11 +159,20 @@ export function OptionsPanel({ result, displayRoutes, numbers, refinement, selec
     {nextSteps.length > 0 && <section className="p-next" aria-labelledby="next-steps-title">
       <h2 id="next-steps-title">Next steps</h2>
       <ul ref={stepList} className="p-next-list">
-        {nextSteps.slice(0, nextSteps.length - hiddenSteps).map(step => <li key={step.id} data-tone={step.tone} tabIndex={-1}>
-          {step.tone === "warn" ? <CircleAlert size={16} className="p-next-icon" aria-hidden="true" /> : <Info size={16} className="p-next-icon" aria-hidden="true" />}
-          <p>{step.text}</p>
-          {step.action && actionButton(step.action)}
-        </li>)}
+        {nextSteps.slice(0, nextSteps.length - hiddenSteps).map(step => {
+          const Icon = step.tone === "warn" ? CircleAlert : step.tone === "ask" ? CircleHelp : Info;
+          const note = step.ask ? askNote(step.ask) : null;
+          return <li key={step.id} data-tone={step.tone} tabIndex={-1}>
+            <Icon size={16} className="p-next-icon" aria-hidden="true" />
+            <p>{step.text}</p>
+            {step.action && actionButton(step.action)}
+            {step.ask && (note ? <p className="p-next-note" role="status">{note}</p> : <div className="p-next-answers">
+              <Button type="button" size="sm" variant="secondary" onClick={() => onAnswer(step.ask!, "yes")}>Yes, under {moneyShort(step.ask.under)}</Button>
+              <Button type="button" size="sm" variant="secondary" onClick={() => onAnswer(step.ask!, "no")}>No</Button>
+              <Button type="button" size="sm" variant="secondary" onClick={() => onAnswer(step.ask!, "enter")}>Enter the price</Button>
+            </div>)}
+          </li>;
+        })}
       </ul>
       {hiddenSteps > 0 && <button type="button" className="p-text-button p-more-button" onClick={() => {
         setAllSteps(true);
@@ -165,7 +187,7 @@ export function OptionsPanel({ result, displayRoutes, numbers, refinement, selec
     </div>
 
     {displayRoutes.length > 0 && <>
-      <Picks routes={result?.routes ?? []} priceWeight={1 - timePreference / 100} numbers={numbers} selectedId={selectedId} placeName={placeName} onSelect={id => onSelect(id, "row")} />
+      <Picks routes={bestRoutes} priceWeight={1 - timePreference / 100} numbers={numbers} selectedId={selectedId} placeName={placeName} onSelect={id => onSelect(id, "row")} />
 
       <div className="p-options-toolbar">
         <p className="p-options-count">{best} best option{best === 1 ? "" : "s"}{weaker.size > 0 && ` · ${weaker.size} more`}</p>
@@ -200,7 +222,7 @@ export function OptionsPanel({ result, displayRoutes, numbers, refinement, selec
       {view === "list" && <>
       <ol ref={optionList} className="p-options">
         {displayRoutes.slice(0, visibleCount).map(route => <OptionRow key={route.id} route={route} number={numbers.get(route.id) ?? 0} selected={route.id === selectedId}
-          chips={chips(route, false)} comparison={comparison(route)} placeName={placeName} onSelect={() => onSelect(route.id, "row")} />)}
+          chips={chips(route, false)} comparison={comparison(route)} placeName={placeName} zoneOf={zoneOf} onSelect={() => onSelect(route.id, "row")} />)}
       </ol>
       {left > 0 && <button type="button" className="p-show-more" onClick={() => { firstNewRow.current = visibleCount; onShowMore(); }}>
         {left > 40 ? `Show 40 more (${left} left)` : `Show ${left} more`}
@@ -220,7 +242,7 @@ export function OptionsPanel({ result, displayRoutes, numbers, refinement, selec
         <summary id="over-budget-summary">Over budget ({refinement.length}) · from {moneyShort(Math.min(...refinement.map(route => route.cost_low_myr)))}</summary>
         <ol className="p-options">
           {refinement.map((route, index) => <OptionRow key={route.id} route={route} number={index + 1} name="Over-budget option" selected={route.id === selectedId}
-            chips={chips(route, true)} comparison={comparison(route)} placeName={placeName} onSelect={() => onSelect(route.id, "row")} />)}
+            chips={chips(route, true)} comparison={comparison(route)} placeName={placeName} zoneOf={zoneOf} onSelect={() => onSelect(route.id, "row")} />)}
         </ol>
       </details>
       <InfoTip topic="over-budget options" align="end">These cost more than your budget even at their lowest price. Up to 10 are shown. A combined ticket price can make one cheaper.</InfoTip>

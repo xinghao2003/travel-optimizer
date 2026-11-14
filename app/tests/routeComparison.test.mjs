@@ -82,3 +82,22 @@ test("showing weaker options does not change best-option balance scores or order
   assert.deepEqual(after, before);
   assert.ok(sortRoutes([route("a", 0, 10), route("b", 0, 10)], "balanced").every(route => route.total_cost_myr === 0));
 });
+
+test("a missing price on one side still gives the certain side of the difference", () => {
+  const priced = route("priced", 3180, 120);
+  const partial = route("partial", null, 114, { cost_low_myr: 3212 });
+  // The option costs at least RM 32 more, with less time in cities.
+  const more = compareRoute(partial, priced);
+  assert.equal(compact(more.summary), "+RM32ormore·−6.0hincities");
+  assert.ok(more.details.includes("Costs more and gives less city time."));
+  assert.equal(more.rate, null);
+  const less = compareRoute(priced, partial);
+  assert.equal(compact(less.summary), "−RM32ormore·+6.0hincities");
+  assert.ok(less.details.includes("Cheaper and more city time."));
+  // The known part does not decide: the difference stays unknown.
+  assert.equal(compact(compareRoute(route("low", null, 114, { cost_low_myr: 3000 }), priced).summary), "Pricedifferenceunknown·−6.0hincities");
+  // Prices with and without the common costs left out do not compare.
+  assert.equal(compact(compareRoute(route("other", 3500, 120), { ...priced, common_offer_ids: ["unknown:x"] }).summary), "Pricedifferenceunknown·sametimeincities");
+  // From a day up, time in cities reads in days.
+  assert.equal(compact(compareRoute(route("long", 3500, 147), priced).summary), "+RM320·+1day3hincities");
+});

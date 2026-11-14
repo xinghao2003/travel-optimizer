@@ -15,11 +15,12 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CircleCheck, LoaderCircle } from "lucide-react";
 import type { AppliedSharedFareGroup } from "./components/MissingFaresTable";
 import { groupMissingFares } from "./lib/missingFares";
+import { commonCosts, openItems, priceDecisions } from "./lib/commonCosts";
 import { defaultJourneyGrouping, journeyGroupFields, journeyPriceScope, sameJourneyScope } from "./lib/journeyPricing";
 import type { JourneyGroupField } from "./lib/planner";
 import { activeFares, airportChangeFieldId, buildAirportConnections, buildTransferEstimates, canonicalFares, canonicalIds, countDrafts, invalidDraftFields, knownComponentIds, savedTransferRows, sameTransferRows, transferFieldId, transferKey, transferRateId, type DraftPrice, type DraftState, type DraftTarget, type PriceValue, type SharedFare } from "./lib/drafts";
 import { forgetDrafts, useTripDrafts } from "./lib/useTripDrafts";
-import { airportChangeRows, appError, assumedConnections, buildNextSteps, cityGaps, needsInputCount, optionNumber, optionsEmptyState, partySizeNotice, purchaseAmount, routeSignature, searchDetails, searchState, settingsFooter, sortRoutes, splitGroups, staySumWarning, transferDirections, transitSearchModes, unresolvedAccessJourneys, validateDraft, type AppError, type OptionsTarget } from "./lib/present";
+import { airportChangeRows, appError, assumedConnections, buildNextSteps, cityGaps, needsInputCount, optionNumber, optionsEmptyState, partySizeNotice, purchaseAmount, routeSignature, searchDetails, searchState, settingsFooter, sortRoutes, splitGroups, staySumWarning, ticketRows, transferDirections, transitSearchModes, unresolvedAccessJourneys, validateDraft, type AppError, type OptionsTarget, type PriceAsk } from "./lib/present";
 import { api, blankTrip, defaultBatchSize, modes, plannerConfig, type AirportTransferMode, type Charge, type Job, type Movement, type Offer, type OptimizationJob, type PricingRule, type Result, type Route, type SavedSummary, type SavedTrip, type TripDraft } from "./lib/planner";
 import { useMediaQuery } from "./lib/useMediaQuery";
 import { exportFilename, exportTrip, tripReportHtml, type ExportOption, type ExportScope, type ExportTrip } from "./lib/tripExport";
@@ -493,11 +494,17 @@ export default function Planner({ storageActions, externalRevision = 0 }: { stor
     }, "rule");
   }
 
+  // Common costs (lib/commonCosts): prices that every best option is missing do not change the order of the options.
+  // The options shown carry them as marks; an option with no other open price compares by its priced part.
+  const resultRates = saved?.spec.exchange_rates;
+  const common = useMemo(() => commonCosts(result?.routes ?? [], resultRates ?? {}), [result, resultRates]);
+  const bestRoutes = useMemo(() => (result?.routes ?? []).map(common.adjust), [result, common]);
+  const decisions = useMemo(() => priceDecisions(bestRoutes, resultRates ?? {}), [bestRoutes, resultRates]);
   // The option list in the current order (E3), with weaker options when shown. Numbers are positions in this order.
-  const displayRoutes = useMemo(() => sortRoutes([...(result?.routes ?? []), ...(showDominated ? result?.dominated_routes ?? [] : [])], ranking,
-    { priceWeight: 1 - timePreference / 100, referenceRoutes: result?.routes ?? [] }), [result, ranking, showDominated, timePreference]);
+  const displayRoutes = useMemo(() => sortRoutes([...bestRoutes, ...(showDominated ? (result?.dominated_routes ?? []).map(common.adjust) : [])], ranking,
+    { priceWeight: 1 - timePreference / 100, referenceRoutes: bestRoutes }), [result, bestRoutes, common, ranking, showDominated, timePreference]);
   const numbers = useMemo(() => new Map(displayRoutes.map((route, index) => [route.id, index + 1])), [displayRoutes]);
-  const refinement = useMemo(() => sortRoutes(result?.refinement_routes ?? [], ranking, { priceWeight: 1 - timePreference / 100 }), [result, ranking, timePreference]);
+  const refinement = useMemo(() => sortRoutes((result?.refinement_routes ?? []).map(common.adjust), ranking, { priceWeight: 1 - timePreference / 100 }), [result, common, ranking, timePreference]);
   useEffect(() => {
     if (!busy && result?.dominated_routes === undefined) setShowDominated(false);
   }, [result, busy]);
@@ -625,16 +632,44 @@ export default function Planner({ storageActions, externalRevision = 0 }: { stor
     [...(result?.routes ?? []), ...(result?.dominated_routes ?? []), ...(result?.refinement_routes ?? [])], saved.spec.adults, saved.spec.exchange_rates) : [], [saved, result]);
   // Missing info (C8, F2): items that need input, for the tab badge and the panel status.
   const groups = useMemo(() => splitGroups(missingFareGroups, saved?.airport_transfer_rows ?? []), [missingFareGroups, saved?.airport_transfer_rows]);
-  const needs = needsInputCount({ routes: result?.routes ?? [], airportChanges, unresolvedAccess, directions, groups, gaps });
+  // The prices that need input: the open prices, other than common costs, of the best options that a price can still
+  // make better. Other missing prices are optional: they do not change the order of the best options.
+  const needed = useMemo(() => {
+    const transfers = new Set<string>(), components = new Set<string>();
+    for (const route of bestRoutes) {
+      if ((route.total_cost_myr ?? route.cost_high_myr) !== null || decisions.beaten.has(route.id)) continue;
+      const marked = new Set(route.common_offer_ids ?? []);
+      for (const { offer, charge, movement, key } of openItems(route, resultRates ?? {})) {
+        if (marked.has(offer.id)) continue;
+        if (charge && key.startsWith("transfer:")) transfers.add(`${charge.from_id}>${charge.to_id}`);
+        else components.add(charge?.id ?? movement?.template_id ?? movement?.id ?? offer.movement_ids[0]);
+      }
+    }
+    return { transfers, components };
+  }, [bestRoutes, decisions, resultRates]);
+  // Without a best option, every missing price can matter.
+  const decidingDirections = bestRoutes.length ? directions.filter(direction => direction.state !== "missing" || needed.transfers.has(`${direction.from_id}>${direction.to_id}`)) : directions;
+  const decidingGroups = bestRoutes.length ? { ...groups, journeys: groups.journeys.filter(group => group.components.some(component => needed.components.has(templateOf.get(component.component_id) ?? component.component_id))) } : groups;
+  const optional = directions.length - decidingDirections.length + groups.journeys.length - decidingGroups.journeys.length;
+  const needs = needsInputCount({ routes: bestRoutes, airportChanges, unresolvedAccess, directions: decidingDirections, groups: decidingGroups, gaps });
   const needsText = `${needs} ${needs === 1 ? "item needs" : "items need"} input`;
   const searched = !!saved?.snapshot || !!job;
   // "Nothing missing" needs search data: until the first search stores some, there is nothing to check yet.
-  const allClear = !!saved?.snapshot && !needs;
+  const allClear = !!saved?.snapshot && !needs && !optional;
   // The options were calculated with the saved trip's budget and exchange rates.
   const budget = saved?.spec.budget_myr ?? null;
   const rates = saved?.spec.exchange_rates ?? {};
   // Next steps (F1). "Show them" and the transit row follow the trip settings as typed.
-  const nextSteps = buildNextSteps({ routes: result?.routes ?? [], airportChanges, unresolvedAccess, directions, groups, gaps, searched, budget, rates,
+  // The names of an option's purchases, as Tickets and prices shows them.
+  const ticketLabels = (route: Route | undefined) => new Map(route ? ticketRows(route, rates, placeName, zoneOf).map(row => [row.offer.id, row.label]) : []);
+  const commonLabels = ticketLabels(bestRoutes[0]);
+  const asks: PriceAsk[] = decisions.questions.flatMap(({ item, routeId, rivalId, under }) => {
+    const label = ticketLabels(bestRoutes.find(route => route.id === routeId)).get(item.offer.id);
+    const option = numbers.get(routeId), rival = numbers.get(rivalId);
+    return item.movement && label && option && rival ? [{ key: item.key, componentId: item.movement.template_id ?? item.movement.id, fareLabel: `Standalone ${item.movement.mode} fare`, label, under, option, rival }] : [];
+  });
+  const nextSteps = buildNextSteps({ routes: bestRoutes, airportChanges, unresolvedAccess, directions: decidingDirections, groups: decidingGroups, gaps, searched, budget, rates,
+    adults: saved?.spec.adults, asks, settled: new Set([...decisions.beaten.keys(), ...decisions.asked]), common: common.items.flatMap(item => commonLabels.get(item.offer.id) ?? []),
     excludeUnpricedFlights: !!draft.exclude_unpriced_flights, transitOff: !transitConfigured && draft.modes.some(mode => transitSearchModes.includes(mode)) });
   const emptyState = optionsEmptyState({ searched, active, pending: job?.pending ?? 0, hasResult: !!result, best: result?.routes.length ?? 0, refinement, budget,
     staySum: staySumWarning(draft), gaps, excludeUnpricedFlights: !!draft.exclude_unpriced_flights, steps: nextSteps, placeName,
@@ -766,7 +801,9 @@ export default function Planner({ storageActions, externalRevision = 0 }: { stor
         if (!saved) throw new Error("Choose a saved trip before exporting.");
         const overBudgetNumbers = new Map(refinement.map((route, index) => [route.id, index + 1]));
         const weakerNumbers = new Map((result?.dominated_routes ?? []).map((route, index) => [route.id, index + 1]));
-        const describe = (route: Route): ExportOption => ({ route,
+        // Reports show the totals as calculated, without the common-cost marks of the options on screen.
+        const calculated = new Map(resultRoutes(result).map(route => [route.id, route]));
+        const describe = (route: Route): ExportOption => ({ route: calculated.get(route.id) ?? route,
           label: numbers.has(route.id) ? `Option ${optionNumber(numbers.get(route.id)!)}` : overBudgetNumbers.has(route.id) ? `Over-budget option ${optionNumber(overBudgetNumbers.get(route.id)!)}` : `More option ${optionNumber(weakerNumbers.get(route.id)!)}`,
           category: overBudgetNumbers.has(route.id) ? "Over budget" : weakerNumbers.has(route.id) ? "More" : "Best",
         });
@@ -858,6 +895,21 @@ export default function Planner({ storageActions, externalRevision = 0 }: { stor
     return { scope: "direction", value, amount: value ? purchaseAmount(value, rates) : low === null ? "Not priced" : `${way.low} (not valid)`,
       undo: () => tripDrafts.stageTransfer(direction.key, savedWay ? rows.map(row => row.mode === way.mode ? savedWay : row) : rows.filter(row => row !== way), direction.saved) };
   }
+  /**
+   * The answer to a Next steps question. Yes saves the journey's price as a range up to the question's amount and
+   * No as that amount or more, so the options compare without the exact price. "enter" goes to the journey's price field.
+   */
+  function answerAsk(ask: PriceAsk, answer: "yes" | "no" | "enter") {
+    if (answer === "enter") {
+      const index = groups.journeys.findIndex(group => group.components.some(component => (templateOf.get(component.component_id) ?? component.component_id) === ask.componentId));
+      chooseTab("missing");
+      setFocusTarget([...(index >= 0 ? [index ? `missing-fare-${index}` : "missing-fare-first"] : []), "journey-prices-title", "missing-title"]);
+    } else stageComponent(ask.componentId, answer === "yes" ? { low: 0, high: ask.under, currency: "MYR" } : { low: ask.under, high: null, currency: "MYR" }, ask.fareLabel);
+  }
+  const askNote = (ask: PriceAsk) => {
+    const answer = fareDrafts[`component:${ask.componentId}`];
+    return answer ? `Your answer: ${purchaseAmount(answer, rates)}. The options update when it saves.` : null;
+  };
   // The label of the charge's airport transfer row, for Set price › All {label} transfers; null without one.
   const directionLabel = (charge: Charge) => transferDirection(charge)?.row.label ?? null;
   // The heading of the panel in view: the side panel's on a wide screen.
@@ -1045,7 +1097,8 @@ export default function Planner({ storageActions, externalRevision = 0 }: { stor
     {saved && <div id="workspace" className="p-workspace" aria-busy={strip.id === "updating" || undefined}>
       {!isWide && <Tabs id="workspace-tabs" className="p-tabs p-tabs-bar" label="Workspace" tabs={[optionsTab, itineraryTab, missingTab]} selected={tab} onSelect={chooseTab} />}
       <section id="panel-options" className="p-panel p-options-pane" role={isWide ? undefined : "tabpanel"} aria-labelledby={isWide ? "options-title" : "tab-options"} tabIndex={isWide ? undefined : 0} hidden={!shown.includes("options")}>
-        {visited.includes("options") && <OptionsPanel result={result} displayRoutes={displayRoutes} numbers={numbers} refinement={refinement}
+        {visited.includes("options") && <OptionsPanel result={result} bestRoutes={bestRoutes} beaten={new Set(decisions.beaten.keys())} displayRoutes={displayRoutes} numbers={numbers} refinement={refinement}
+          onAnswer={answerAsk} askNote={askNote} zoneOf={zoneOf}
           selectedId={selected?.id ?? null} comparedId={compare?.id ?? null}
           ranking={ranking} onRanking={value => { setRanking(value); setVisibleCount(pageSize); }}
           timePreference={timePreference} onTimePreference={setTimePreference}
@@ -1066,7 +1119,7 @@ export default function Planner({ storageActions, externalRevision = 0 }: { stor
             onRemovePrice={id => void act(() => removePrice(id), "price")} busy={busy} bundleLinks={bundleLinks}
             onAction={runAction} onEditAirportChange={key => { chooseTab("missing"); setFocusTarget([airportChangeFieldId(key, "mode"), "missing-title"]); }} onBack={backToOptions} />}</div>
         <div id="panel-missing" className="p-side-panel" role="tabpanel" aria-labelledby="tab-missing" tabIndex={0} hidden={tab !== "missing"} inert={!!applyState}>{visited.includes("missing") &&
-          <MissingInfoPanel searched={searched} allClear={allClear} needs={needs} needsText={needsText} airportChanges={airportChanges} connections={saved.airport_connections ?? []}
+          <MissingInfoPanel searched={searched} allClear={allClear} needs={needs} needsText={needsText} optional={optional} airportChanges={airportChanges} connections={saved.airport_connections ?? []}
             csvActions={<MissingInfoCsv key={saved.id} context={{ trip: saved, groups: groups.journeys, appliedGroups: appliedSharedGroups, airportChanges,
               drafts: tripDrafts.drafts, canonical: id => templateOf.get(id) ?? id, offerFor, placeName }} busy={busy || dirty}
               onStage={changes => tripDrafts.stageImported(stageMissingInfoCsv(changes, tripDrafts.read(), saved))} onUndoRate={currency => tripDrafts.unstage("exchangeRates", currency)} onUndoDeletion={key => tripDrafts.unstage("deletions", key)} />}

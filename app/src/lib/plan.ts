@@ -78,13 +78,19 @@ export function autoStayHours(draft: Pick<TripDraft, "start_date" | "end_date" |
 
 /**
  * Applies `next` after `previous`, keeping automatic minimum stays automatic: a city whose stay was the automatic
- * value (or unset) before the change gets the new automatic value. A stay the user typed stays as typed.
+ * value (or unset) before the change gets the new automatic value. A stay the user typed stays as typed: that is
+ * a stay that was not automatic before, or one that this change sets to another value.
  */
 export function withAutoStays(previous: TripDraft, next: TripDraft): TripDraft {
   const before = autoStayHours(previous), after = autoStayHours(next);
   if (after === null) return next;
   const old = new Map(previous.visits.map(visit => [visit.place.id, visit.min_stay_hours]));
-  const isAuto = (id: string, hours: number) => !old.has(id) ? hours <= 0 : old.get(id)! <= 0 || old.get(id) === before;
+  const isAuto = (id: string, hours: number) => {
+    const was = old.get(id);
+    if (was === undefined) return hours <= 0;
+    // Typing in an automatic stay changes its value; clearing it (0) keeps it automatic.
+    return (was <= 0 || was === before) && (hours === was || hours <= 0);
+  };
   const visits = next.visits.map(visit => isAuto(visit.place.id, visit.min_stay_hours) && visit.min_stay_hours !== after ? { ...visit, min_stay_hours: after } : visit);
   return visits.some((visit, i) => visit !== next.visits[i]) ? { ...next, visits } : next;
 }

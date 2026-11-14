@@ -687,3 +687,4 @@ fieldset.p-plan-row > legend { float: left; }
 /* Outranks MapLibre's compact attribution (#fff background, black text and links). */
 .dark .planner-map .maplibregl-ctrl.maplibregl-ctrl-attrib { background: var(--card); color: var(--foreground); }
 .dark .planner-map .maplibregl-ctrl-attrib a { color: var(--muted-foreground); }
+.optimizer .p-plan-prefilled { margin: 0 0 12px; }

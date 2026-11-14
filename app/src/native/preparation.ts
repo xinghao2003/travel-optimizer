@@ -13,7 +13,24 @@ import type { SolverInput, SolverResult } from "./types";
 export type Snapshot = { revision: number; movements: Movement[]; offers: Offer[]; coverage: Coverage; roads?: Roads; label_limit?: number | null; discovery_key?: string };
 export type PlannerTrip = Omit<SavedTrip, "snapshot"> & { snapshot: Snapshot | null; native_solver_revision?: number };
 export type AirportCatalog = { metros: MetroAirports; airports: Record<string, { name: string; lat: number; lon: number; tz: string }> };
-export type PreparationOptions = { snapshot?: Snapshot; expand?: boolean; include_dominated?: boolean; unlimited?: boolean; now?: number; label_batch?: number; expansion_budget?: number | null };
+/** `shared_transfers`: the airport transfer ways shared by all trips (repository.sharedTransfers). */
+export type PreparationOptions = { snapshot?: Snapshot; expand?: boolean; include_dominated?: boolean; unlimited?: boolean; now?: number; label_batch?: number; expansion_budget?: number | null; shared_transfers?: AirportTransferEstimate[] };
+
+/** One direction and party size of airport transfer ways. */
+export const transferKey = (item: Pick<AirportTransferEstimate, "from_id" | "to_id" | "adults">) => JSON.stringify([item.from_id, item.to_id, item.adults]);
+/**
+ * The airport transfer ways in effect for a trip: its own ways for a direction and party size, otherwise the
+ * ways shared by all trips. A trip has own ways only from before the ways were shared.
+ */
+export function effectiveTransfers(own: AirportTransferEstimate[], shared: AirportTransferEstimate[]): AirportTransferEstimate[] {
+  const mine = new Set(own.map(transferKey));
+  return [...own, ...shared.filter(item => !mine.has(transferKey(item)))];
+}
+/** True when shared ways for one of `items` are in effect for the trip: its party size, one of its places, and no own ways. */
+export function usesSharedTransfers(trip: PlannerTrip, items: Pick<AirportTransferEstimate, "from_id" | "to_id" | "adults">[]) {
+  const places = placesOf(trip.spec), mine = new Set((trip.airport_transfer_estimates ?? []).map(transferKey));
+  return items.some(item => item.adults === trip.spec.adults && (places.has(item.from_id) || places.has(item.to_id)) && !mine.has(transferKey(item)));
+}
 
 export function airportPlaces(spec: TripSpec, catalog: AirportCatalog): Map<string, Place> {
   const result = new Map<string, Place>();
@@ -166,7 +183,9 @@ export function prepareSolverInput(trip: PlannerTrip, globalRules: PricingRule[]
   const now = options.now ?? Date.now() * 1000;
   const offers = [...new Map([...snapshot.offers, ...trip.offers].map(parseOffer).map(o => [o.id, o])).values()].map(o =>
     o.source === "provider" && o.expires_at && micros(o.expires_at) < now ? { ...o, estimated: true, label: "Stale quote: " + o.label } : o);
-  const estimates = (trip.airport_transfer_estimates ?? []).map(parseTransfer);
+  // Shared ways of other cities are left out: they change nothing here.
+  const estimates = effectiveTransfers((trip.airport_transfer_estimates ?? []).map(parseTransfer),
+    (options.shared_transfers ?? []).map(parseTransfer).filter(item => places.has(item.from_id) || places.has(item.to_id)));
   const input: SolverInput = { schema_version: 1, spec, movements: airportTransferVariants(snapshot.movements, estimates, spec, snapshot.roads ?? {}, connections), offers,
     rules: [...globalRules.map(parseRule), ...airportTransferRules(estimates, spec), ...(trip.journey_pricing_rules ?? []).map(parseRule)],
     snapshot_revision: snapshot.revision, trip_revision: trip.revision, finish_at_home: true, include_dominated: options.include_dominated ?? false,

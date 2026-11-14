@@ -38,6 +38,8 @@ const { micros } = await loadTs("../src/native/time.ts");
 const raw = JSON.parse(readFileSync(positionals[0], "utf8")), backup = parseBackup(raw), debug = raw.debug;
 const payloads = collection => backup.records.filter(r => r.collection === collection).map(r => r.payload);
 const trips = payloads("trips"), rules = payloads("rules");
+// The airport transfer ways shared by all trips (meta record "airport-transfers").
+const sharedTransfers = backup.records.find(r => r.collection === "meta" && r.id === "airport-transfers")?.payload ?? [];
 const money = value => value == null ? "?" : "RM " + Math.round(value).toLocaleString("en");
 const price = route => route.cost_low_myr === route.cost_high_myr ? money(route.cost_low_myr) : `${money(route.cost_low_myr)}–${money(route.cost_high_myr)}`;
 const local = iso => iso ? iso.slice(5, 16).replace("T", " ") : "—";
@@ -99,7 +101,7 @@ const lastCalculation = events.filter(e => e.type === "calculation" && e.trip_re
 const now = opts.now ? Number(micros(opts.now)) : lastCalculation?.now ?? Number(micros(backup.exported_at));
 const limitArg = opts["label-limit"] ?? (saved && !saved.optimization_complete ? String(saved.expanded_labels) : "none");
 const includeDominated = opts.dominated ?? !!saved?.dominated_routes;
-const { input, snapshot } = prepareSolverInput(trip, rules, { now, include_dominated: includeDominated });
+const { input, snapshot } = prepareSolverInput(trip, rules, { now, include_dominated: includeDominated, shared_transfers: sharedTransfers });
 input.label_limit = limitArg === "none" ? null : Number(limitArg);
 input.expansion_budget = null;
 console.log(`Input: ${input.movements.length} journeys, ${input.offers.length} fares, ${input.rules.length} rules; label limit ${input.label_limit ?? "none"}; clock ${new Date(now / 1000).toISOString()}`);

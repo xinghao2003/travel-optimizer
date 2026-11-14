@@ -8,7 +8,20 @@ between them.
 
 `PlannerRepository` stores multiple trips, global rules, shared graphs, search
 and calculation records, selected-trip metadata, native checkpoints, and provider
-responses. A trip update and checkpoint invalidation commit in one transaction.
+responses. Two `meta` records hold data that is not part of one trip:
+
+- `profile`: what a new trip starts with (home, other start and end cities with
+  their travel settings, own car, time buffers, exchange rates, adults). It is
+  written when a round trip is created, or saved with one of these values
+  changed.
+- `airport-transfers`: the airport transfer ways shared by all trips. A trip's
+  own `airport_transfer_estimates` for a direction and party size replace them.
+  Apply saves a changed direction here, removes the trip's own ways for it, and
+  gives a new revision to the other trips that use it, in one transaction.
+
+When `airport-transfers` is missing, the first open (or a restored backup)
+builds both records from the saved trips: the newest trip gives the profile and,
+for each direction and party size, the shared ways. Trips keep their own ways. A trip update and checkpoint invalidation commit in one transaction.
 Failed validation and revision conflicts leave both unchanged. Calculation
 results commit only if the trip and source graph revisions still match.
 

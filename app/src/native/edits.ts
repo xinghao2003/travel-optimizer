@@ -4,7 +4,7 @@ import { journeyGroupFields, journeyPriceScope, sameJourneyScope } from "../lib/
 import { parseConnection, parseFiniteNumber, parseInteger, parseMovement, parseOffer, parseRule, parseScope, parseSpec, parseTransfer } from "./contracts";
 import { discoveryKey } from "./discovery-key";
 import { placesOf } from "./discovery";
-import { airportTransferRows } from "./preparation";
+import { airportTransferRows, effectiveTransfers, transferKey } from "./preparation";
 import type { AirportCatalog, PlannerTrip, Snapshot } from "./preparation";
 import { stableId } from "./time";
 
@@ -134,6 +134,29 @@ export function applyMissingInfo(trip: PlannerTrip, request: ApplyChanges, catal
   if (removed.airport_transfer.size) updated.airport_transfer_estimates = (updated.airport_transfer_estimates ?? []).filter(e => !removed.airport_transfer.has(JSON.stringify([e.from_id, e.to_id, e.adults, e.mode])));
   updated.revision++; delete updated.result;
   return updated;
+}
+/**
+ * applyMissingInfo for a trip that reads the airport transfer ways shared by all trips. The request holds the ways in
+ * effect for the trip's directions, as the planner shows them. A direction whose ways change is saved for all trips
+ * (`shared`, with the directions in `changed`) and the trip's own ways for it go away. A direction that does not
+ * change keeps its source: the trip's own ways or the shared ones. `shared` is null when no shared way changes.
+ */
+export function applyWithSharedTransfers(trip: PlannerTrip, request: ApplyChanges, catalog: AirportCatalog, shared: AirportTransferEstimate[]): { trip: PlannerTrip; shared: AirportTransferEstimate[] | null; changed: AirportTransferEstimate[] } {
+  if (request.transfers === null && !request.deletions.some(deletion => deletion.kind === "airport_transfer")) return { trip: applyMissingInfo(trip, request, catalog), shared: null, changed: [] };
+  const direction = (item: Pick<AirportTransferEstimate, "from_id" | "to_id">) => JSON.stringify([item.from_id, item.to_id]);
+  const allowed = new Set(airportTransferRows(parseSpec(trip.spec), trip.snapshot?.movements ?? [], catalog).map(direction));
+  const own = (trip.airport_transfer_estimates ?? []).map(parseTransfer), known = shared.map(parseTransfer);
+  const before = effectiveTransfers(own, known.filter(item => allowed.has(direction(item))));
+  const next = applyMissingInfo({ ...trip, airport_transfer_estimates: before }, request, catalog), after = next.airport_transfer_estimates ?? [];
+  // A fixed price reads the same with or without its highest price.
+  const ways = (items: AirportTransferEstimate[], key: string) => JSON.stringify(items.filter(item => transferKey(item) === key)
+    .map(item => [item.mode, item.duration_minutes, item.low, item.high ?? item.low, item.currency]).sort());
+  const changed = [...new Map([...before, ...after].filter(item => allowed.has(direction(item))).map(item => [transferKey(item), item])).entries()]
+    .filter(([key]) => ways(before, key) !== ways(after, key));
+  const keys = new Set(changed.map(([key]) => key));
+  next.airport_transfer_estimates = own.filter(item => !keys.has(transferKey(item)));
+  return { trip: next, changed: changed.map(([, item]) => item),
+    shared: keys.size ? [...known.filter(item => !keys.has(transferKey(item))), ...after.filter(item => keys.has(transferKey(item)))] : null };
 }
 export function saveSharedEstimates(trip: PlannerTrip, estimates: SharedFare[], revision: number): PlannerTrip {
   requireRevision(trip, revision);

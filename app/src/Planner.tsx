@@ -16,6 +16,7 @@ import { CircleCheck, LoaderCircle } from "lucide-react";
 import type { AppliedSharedFareGroup } from "./components/MissingFaresTable";
 import { groupMissingFares } from "./lib/missingFares";
 import { commonCosts, openItems, priceDecisions } from "./lib/commonCosts";
+import type { Profile } from "./lib/plan";
 import { defaultJourneyGrouping, journeyGroupFields, journeyPriceScope, sameJourneyScope } from "./lib/journeyPricing";
 import type { JourneyGroupField } from "./lib/planner";
 import { activeFares, airportChangeFieldId, buildAirportConnections, buildTransferEstimates, canonicalFares, canonicalIds, countDrafts, invalidDraftFields, knownComponentIds, savedTransferRows, sameTransferRows, transferFieldId, transferKey, transferRateId, type DraftPrice, type DraftState, type DraftTarget, type PriceValue, type SharedFare } from "./lib/drafts";
@@ -100,6 +101,8 @@ export default function Planner({ storageActions, externalRevision = 0 }: { stor
   const isWide = useMediaQuery("(min-width: 1100px)");
   // The id of the element to focus after the next render; with a list, the first element that exists.
   const [focusTarget, setFocusTarget] = useState<string | string[] | null>(null);
+  // The new trip on screen started with the profile.
+  const [prefilled, setPrefilled] = useState(false);
   // A chart click scrolls the selected row into view after the render (E8).
   const [revealRow, setRevealRow] = useState(0);
   // Typed prices, airport transfers and airport changes of the open trip, kept in this browser until Apply (F4).
@@ -211,11 +214,19 @@ export default function Planner({ storageActions, externalRevision = 0 }: { stor
       setInitialLoad(false);
       const id = localStorage.getItem("wayfinder:last-trip");
       if (id && trips.trips.some(t => t.id === id)) await openTrip(id);
+      else if (!savedRef.current && !dirtyRef.current) { const next = await blankWithProfile(); if (active && !savedRef.current && !dirtyRef.current) { draftRef.current = next; setDraft(next); } }
     }).catch(err => { if (active) setError(appError(err)); }).finally(() => { if (active) setInitialLoad(false); });
     return () => { active = false; };
     // Initial restore only; subsequent navigation is explicit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [externalRevision]);
+
+  // A new trip starts with the profile: the home, start cities, car, time buffers, exchange rates and adults of the last trip.
+  async function blankWithProfile(): Promise<TripDraft> {
+    const { profile } = await api<{ profile: Profile | null }>("/profile");
+    setPrefilled(!!profile);
+    return profile ? { ...blankTrip(), ...profile } : blankTrip();
+  }
 
   async function saveSpec(): Promise<SavedTrip> {
     if (pendingSave.current) await pendingSave.current;
@@ -378,13 +389,13 @@ export default function Planner({ storageActions, externalRevision = 0 }: { stor
   async function newTrip() {
     if (pendingSave.current) await pendingSave.current;
     if (dirtyRef.current && draftRef.current.home && draftRef.current.visits.length) await saveSpec();
+    const next = await blankWithProfile();
     session.current++;
-    const next = blankTrip();
     draftRef.current = next; savedRef.current = null;
     setDraft(next); setSaved(null); setResult(null); setJob(null); setOptimization(null); setSelectedId(null); setComparisonId(null); setPanel("options"); setDirty(false); dirtyRef.current = false;
     setSaveStatus("Not saved yet");
     localStorage.removeItem("wayfinder:last-trip");
-    setSettingsOpen(true); setFocusTarget("home-city");
+    setSettingsOpen(true); setFocusTarget(next.home ? "visit-city" : "home-city");
   }
   // ⋯ › Delete trip: after the delete, a new blank trip is open.
   async function deleteTrip() {
@@ -1091,7 +1102,7 @@ export default function Planner({ storageActions, externalRevision = 0 }: { stor
       {saved && <StatusStrip state={strip} details={details} busyAction={busyAction} settingsOpen={settingsShown} onStop={stopSearch} onSearch={continuation => { autoRounds.current = 0; void search(continuation); }} onCheckMore={checkMore} onStopChecking={stopChecking} />}
     </TripBar>
     {settingsShown && <TripSettings draft={draft} edit={edit} places={places} errors={errors} transitConfigured={transitConfigured} searchActive={active}
-      partyNotice={partySizeNotice(saved, draft.adults)} isNew={!saved} footer={footer} busyAction={busyAction}
+      partyNotice={partySizeNotice(saved, draft.adults)} isNew={!saved} prefilled={!saved && prefilled} footer={footer} busyAction={busyAction}
       batchSize={batchSize} onBatchSize={setBatchSize} roundMinutes={roundMinutes} onRoundMinutes={setRoundMinutes} onSearch={() => void search()} onSaveOnly={saveOnly} />}
 
     {saved && <div id="workspace" className="p-workspace" aria-busy={strip.id === "updating" || undefined}>

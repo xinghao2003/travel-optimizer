@@ -3,12 +3,13 @@ import type { Job, JourneyGroupField, OptimizationJob, PlannerConfig, PricingRul
 import { BrowserCalculator } from "./calculation";
 import type { CalculationOptions } from "./calculation";
 import { parseInteger, parseFiniteNumber, parseConnection, parseTransfer } from "./contracts";
-import { addAssumedMovement, applyMissingInfo, connectionPayload, editFare, expectedRevision, parseApplyChanges, parseSharedFare,
+import { addAssumedMovement, applyWithSharedTransfers, connectionPayload, editFare, expectedRevision, parseApplyChanges, parseSharedFare,
   PlannerError, removeAssumedMovement, removeJourneyRule, requireMinimumStays, requireRevision, reuseJourneyEstimate, saveSharedEstimates, transferPayload } from "./edits";
+import type { ApplyChanges } from "./edits";
 import { loadAirportCatalog } from "./catalog";
 import { loadPlaces } from "./places";
 import type { AirportCatalog, PlannerTrip } from "./preparation";
-import { refreshQuoteFreshness, tripMetadata } from "./preparation";
+import { effectiveTransfers, refreshQuoteFreshness, tripMetadata } from "./preparation";
 import { PlannerRepository } from "./repository";
 import { BrowserDiscovery } from "./search";
 import { BrowserProviders } from "./providers";
@@ -49,6 +50,7 @@ export class BrowserPlannerApi {
         }).catch(reject);
       });
       await this.repository.ready();
+      await this.repository.migrateSharedData();
       // Persisted jobs cannot retain workers or requests across a page reload.
       for (const collection of ["jobs", "optimizations"] as const) for (const job of await this.repository.list<Job | OptimizationJob>(collection)) {
         if (["queued", "running", "stopping"].includes(job.status)) await this.repository.put(collection, job.id,
@@ -66,7 +68,11 @@ export class BrowserPlannerApi {
       trip.result = refreshQuoteFreshness(trip.result, Date.now() * 1000);
       if (trip.native_solver_revision !== NATIVE_SOLVER_REVISION) trip.result.trip_revision = -1;
     }
-    return { ...trip, ...tripMetadata(trip, await this.airports()) };
+    const metadata = tripMetadata(trip, await this.airports());
+    // The planner shows and edits the ways in effect: the trip's own ways, else the shared ways of its directions.
+    const directions = new Set(metadata.airport_transfer_rows.map(row => JSON.stringify([row.from_id, row.to_id])));
+    const shared = (await this.repository.sharedTransfers()).filter(item => directions.has(JSON.stringify([item.from_id, item.to_id])));
+    return { ...trip, ...metadata, airport_transfer_estimates: effectiveTransfers(trip.airport_transfer_estimates ?? [], shared) };
   }
   private async stopForEdit(id: string) {
     for (const active of this.continuous.values()) if (active.job.trip_id === id) { await this.stopContinuous(active.job.id, "changes"); await active.promise; }
@@ -83,6 +89,16 @@ export class BrowserPlannerApi {
   private async applied(id: string, transform: (trip: PlannerTrip) => PlannerTrip) {
     await this.stopForEdit(id);
     const job = await this.discovery.applyChanges(id, transform);
+    return { trip: await this.readTrip(id), job, updating: !!job?.updating_options };
+  }
+  /** Apply for changes that can hold airport transfer ways: a direction that changes is saved for all trips. */
+  private async appliedWithTransfers(id: string, changes: ApplyChanges) {
+    const catalog = await this.airports();
+    // Other trips can use the shared ways: their work stops as for a price rule.
+    const shares = changes.transfers !== null || changes.deletions.some(deletion => deletion.kind === "airport_transfer");
+    for (const trip of shares ? await this.repository.list<PlannerTrip>("trips") : []) if (trip.id !== id) await this.stopForEdit(trip.id);
+    await this.stopForEdit(id);
+    const job = await this.discovery.change(id, () => this.repository.updateTripAndTransfers(id, (trip, shared) => applyWithSharedTransfers(trip, changes, catalog, shared)));
     return { trip: await this.readTrip(id), job, updating: !!job?.updating_options };
   }
   async startContinuous(id: string): Promise<OptimizationJob> {
@@ -147,6 +163,7 @@ export class BrowserPlannerApi {
       return { places: id === "nearest" ? places.nearest(Number(url.searchParams.get("latitude")), Number(url.searchParams.get("longitude")), url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : 5)
         : places.search(url.searchParams.get("search") ?? "", url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : 16) };
     }
+    if (collection === "profile" && !id && method === "GET") return { profile: await this.repository.profile() ?? null };
     if (collection === "pricing-rules") {
       if (!id && method === "GET") return { rules: await this.repository.list<PricingRule>("rules") };
       if (id && ["PUT", "DELETE"].includes(method)) {
@@ -188,7 +205,7 @@ export class BrowserPlannerApi {
         return this.calculate(id, options);
       }
       if (method === "POST" && action === "optimizations") return this.startContinuous(id);
-      if (method === "POST" && action === "apply") { const changes = parseApplyChanges(body), catalog = await this.airports(); return this.applied(id, trip => applyMissingInfo(trip, changes, catalog)); }
+      if (method === "POST" && action === "apply") return this.appliedWithTransfers(id, parseApplyChanges(body));
       if (action === "journey-pricing-rules") {
         if (method === "DELETE" && key) return this.applied(id, trip => removeJourneyRule(trip, key, expectedRevision(url.searchParams.get("expected_revision"))));
         if (method === "POST" && key === "reuse") {

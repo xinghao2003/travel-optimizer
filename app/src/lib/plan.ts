@@ -1,4 +1,19 @@
-import type { Mode, TripDraft } from "./planner";
+import type { Mode, TripDraft, TripSpec } from "./planner";
+
+/**
+ * What a new trip starts with: the values about the traveller, not about one trip. The planner saves them when a
+ * round trip is created, or saved with one of them changed. Rental cars are not in it: their pickup and drop-off
+ * places belong to one trip. Journeys with exact times ("I have tickets") are not in it either.
+ */
+export type Profile = Pick<TripSpec, "home" | "departures" | "arrivals" | "adults" | "timing" | "cars" | "exchange_rates" | "positioning_policies" | "positioning_patterns">;
+export function profileOf(spec: TripSpec): Profile {
+  return {
+    home: spec.home, departures: spec.departures, arrivals: spec.arrivals, adults: spec.adults, timing: spec.timing, exchange_rates: spec.exchange_rates,
+    cars: { ...spec.cars, rental_enabled: false, rental_pickups: [], rental_dropoffs: [] },
+    ...(spec.positioning_policies?.length ? { positioning_policies: spec.positioning_policies } : {}),
+    ...(spec.positioning_patterns?.length ? { positioning_patterns: spec.positioning_patterns } : {}),
+  };
+}
 
 /** The three transport groups of the Plan step. The engine keeps its eight modes; a group turns its modes on or off together. */
 export const transportGroups = [

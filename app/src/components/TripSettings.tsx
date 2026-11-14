@@ -16,9 +16,11 @@ const count = (n: number, word: string) => `${n} ${n === 1 ? word : `${word}s`}`
  * Trip settings (C4): the core fields, More settings (G) and the sticky footer with the search actions.
  * `errors` is validateDraft(draft). The forms in More settings show their own errors inline (C2).
  */
-export function TripSettings({ draft, edit: setDraft, places, errors, transitConfigured, searchActive, partyNotice, isNew, footer, busyAction, onSearch, onSaveOnly, batchSize, onBatchSize, roundMinutes, onRoundMinutes }: {
+export function TripSettings({ draft, edit: setDraft, places, errors, transitConfigured, searchActive, partyNotice, isNew, prefilled, footer, busyAction, onSearch, onSaveOnly, batchSize, onBatchSize, roundMinutes, onRoundMinutes }: {
   draft: TripDraft; edit: (value: TripDraft) => void; places: Place[]; errors: Record<string, string>;
   transitConfigured: boolean; searchActive: boolean; partyNotice: string | null; isNew: boolean;
+  /** A new trip that started with the profile (lib/plan Profile). */
+  prefilled: boolean;
   footer: FooterState; busyAction: string | null; onSearch: () => void; onSaveOnly: () => void;
   /** Requests per search batch: kept in memory, not in the trip. */
   batchSize: number; onBatchSize: (value: number) => void;
@@ -101,6 +103,7 @@ export function TripSettings({ draft, edit: setDraft, places, errors, transitCon
 
   return <section id="trip-settings" className="p-panel p-settings p-plan" aria-labelledby="settings-title">
     <h2 id="settings-title" tabIndex={-1}>{isNew ? "Plan a trip" : "Trip settings"}</h2>
+    {prefilled && <p className="p-hint p-plan-prefilled">Home, other start cities, your car, time buffers, exchange rates and adults are from your last trip. Change them here when this trip is different.</p>}
     {searchActive && <p className="p-notice">A search is running. Changing places, the visit order, round trip or one way, dates, adults, transport, departure times, start and end cities or estimated train timetables stops it.</p>}
 
     <div className="p-plan-rows">
@@ -132,7 +135,7 @@ export function TripSettings({ draft, edit: setDraft, places, errors, transitCon
       <div className="p-plan-row">
         <h3 className="p-plan-question">Where to?</h3>
         <div className="p-plan-body">
-          <PlacePicker label={ordered ? "Cities to visit (in this order)" : "Cities to visit (any order)"} placeholder="Add a city: name or airport code" limitText={`${visits.length} of 4`} disabled={full}
+          <PlacePicker inputId="visit-city" label={ordered ? "Cities to visit (in this order)" : "Cities to visit (any order)"} placeholder="Add a city: name or airport code" limitText={`${visits.length} of 4`} disabled={full}
             hint={full ? "Up to 4 cities. Remove one to add another." : undefined} disabledIds={[home?.id ?? "", ...visits.map(visit => visit.place.id)]}
             error={placeErrors ? errors.visits : undefined}
             info={<InfoTip topic="cities to visit" align="end">The search picks the best order, unless you choose Visit in this order. Each city gets at least its minimum stay. The automatic minimum divides your free time evenly after 1 day for each journey.</InfoTip>}

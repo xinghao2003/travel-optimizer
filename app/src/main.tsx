@@ -26,6 +26,8 @@ function BackupDialog({ onClose, onImported }: { onClose(): void; onImported(): 
     try {
       await service.ready();
       await service.repository.importBackup(JSON.parse(await file.text()), replace);
+      // A backup from before the shared airport transfer ways gives its trips' ways to all trips.
+      await service.repository.migrateSharedData();
       const trips = await service.repository.summaries(), selected = await service.repository.get<string>("meta", "selected-trip");
       const id = trips.some(t => t.id === selected) ? selected : trips[0]?.id;
       if (id) localStorage.setItem("wayfinder:last-trip", id); else localStorage.removeItem("wayfinder:last-trip");

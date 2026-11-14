@@ -1,8 +1,11 @@
 /** Persistent browser records, with synchronous transforms inside IDB requests. */
-import type { PricingRule, Result, SavedSummary, TripSpec } from "../lib/planner";
+import type { AirportTransferEstimate, PricingRule, Result, SavedSummary, TripSpec } from "../lib/planner";
+import { profileOf } from "../lib/plan";
+import type { Profile } from "../lib/plan";
 import { parseRule, parseSpec } from "./contracts";
 import { discoveryKey } from "./discovery-key";
 import { PlannerError, requireMinimumStays, requireRevision } from "./edits";
+import { transferKey, usesSharedTransfers } from "./preparation";
 import type { PlannerTrip, Snapshot } from "./preparation";
 import type { SearchState } from "./types";
 import { NATIVE_SOLVER_REVISION } from "./types";
@@ -12,6 +15,8 @@ import type { SearchRecord } from "./search-state";
 import { shareableSnapshot } from "./preparation";
 
 export const DATABASE_VERSION = 1;
+/** Records of the "meta" collection: what a new trip starts with, and the airport transfer ways shared by all trips. */
+const PROFILE = "profile", SHARED_TRANSFERS = "airport-transfers";
 export const CHECKPOINT_VERSION = 4;
 export type Collection = "trips" | "rules" | "graphs" | "jobs" | "optimizations" | "meta" | "events";
 /** A search or calculation log entry. Only debug bundles export them. */
@@ -100,7 +105,71 @@ export class PlannerRepository {
   createTrip(raw: unknown): Promise<PlannerTrip> {
     const spec = parseSpec(raw); requireMinimumStays(spec);
     const id = crypto.randomUUID().replaceAll("-", "");
-    return this.put("trips", id, { id, revision: 1, spec, snapshot: null, latest_job_id: null, offers: [], airport_connections: [] });
+    const trip: PlannerTrip = { id, revision: 1, spec, snapshot: null, latest_job_id: null, offers: [], airport_connections: [] };
+    return this.transaction(["records"], "readwrite", c => {
+      const records = c.tx.objectStore("records");
+      records.put(row("trips", id, trip));
+      // A one-way trip has no start or end cities on one side: it is not what the next trip starts with.
+      if (!spec.one_way) records.put(row("meta", PROFILE, profileOf(spec)));
+      c.result(trip);
+    });
+  }
+  /** What a new trip starts with (lib/plan Profile); undefined before the first trip. */
+  profile(): Promise<Profile | undefined> { return this.get<Profile>("meta", PROFILE); }
+  /** The airport transfer ways shared by all trips. A trip's own ways for a direction and party size replace them (effectiveTransfers). */
+  async sharedTransfers(): Promise<AirportTransferEstimate[]> { return await this.get<AirportTransferEstimate[]>("meta", SHARED_TRANSFERS) ?? []; }
+  /**
+   * A trip update that can also change the shared airport transfer ways, in one transaction. `changed` names the
+   * directions with new shared ways: the other trips that use them get a new revision, so their options are calculated again.
+   */
+  updateTripAndTransfers(id: string, transform: (trip: PlannerTrip, shared: AirportTransferEstimate[]) => { trip: PlannerTrip; shared: AirportTransferEstimate[] | null; changed: AirportTransferEstimate[] }): Promise<PlannerTrip> {
+    return this.transaction(["records", "checkpoints"], "readwrite", c => {
+      const records = c.tx.objectStore("records"), checkpoints = c.tx.objectStore("checkpoints");
+      c.read(records.get(["trips", id]), raw => c.read(records.get(["meta", SHARED_TRANSFERS]), stored => {
+        const current = payload<PlannerTrip>(raw);
+        if (!current) throw new PlannerError("Trip not found.", 404);
+        const next = transform(current, payload<AirportTransferEstimate[]>(stored) ?? []);
+        if (next.trip.id !== id) throw new Error("A trip update cannot change its ID.");
+        records.put(row("trips", id, next.trip)); checkpoints.delete(id); c.result(next.trip);
+        if (!next.shared) return;
+        records.put(row("meta", SHARED_TRANSFERS, next.shared));
+        c.read(records.getAll(range("trips")), values => {
+          for (const value of values as StoredRecord<PlannerTrip>[]) {
+            const trip = payload(value)!;
+            if (trip.id === id || !usesSharedTransfers(trip, next.changed)) continue;
+            trip.revision++; records.put(row("trips", trip.id, trip)); checkpoints.delete(trip.id);
+          }
+        });
+      }));
+    });
+  }
+  /**
+   * Data from before the profile and the shared airport transfer ways existed: the newest trip gives the profile, and
+   * the trips' own ways become the shared ways (the newest trip first for each direction and party size). Trips keep
+   * their own ways. A trip that now gets a shared way gets a new revision, so its options are calculated again.
+   */
+  migrateSharedData(): Promise<void> {
+    return this.transaction(["records", "checkpoints"], "readwrite", c => {
+      const records = c.tx.objectStore("records");
+      c.read(records.get(["meta", PROFILE]), profile => c.read(records.get(["meta", SHARED_TRANSFERS]), stored => c.read(records.getAll(range("trips")), values => {
+        const trips = (values as StoredRecord<PlannerTrip>[]).sort((a, b) => b.updated - a.updated).map(value => payload(value)!);
+        const newest = trips.find(trip => !trip.spec.one_way);
+        if (!profile && newest) records.put(row("meta", PROFILE, profileOf(parseSpec(newest.spec))));
+        // Without trips there is nothing to share yet: a restored backup from before can still give its ways.
+        if (stored || !trips.length) return;
+        const shared = new Map<string, AirportTransferEstimate[]>();
+        for (const trip of trips) {
+          const own = new Map<string, AirportTransferEstimate[]>();
+          for (const item of trip.airport_transfer_estimates ?? []) own.set(transferKey(item), [...own.get(transferKey(item)) ?? [], item]);
+          for (const [key, ways] of own) if (!shared.has(key)) shared.set(key, ways);
+        }
+        const all = [...shared.values()].flat();
+        records.put(row("meta", SHARED_TRANSFERS, all));
+        for (const trip of trips) if (usesSharedTransfers(trip, all)) {
+          trip.revision++; records.put(row("trips", trip.id, trip)); c.tx.objectStore("checkpoints").delete(trip.id);
+        }
+      })));
+    });
   }
   async duplicateTrip(id: string): Promise<PlannerTrip> {
     const source = await this.requireTrip(id), spec = parseSpec(source.spec), suffix = " (copy)";
@@ -148,6 +217,9 @@ export class PlannerRepository {
             trip.snapshot = payload<Snapshot>(cached) ?? trip.snapshot;
             if (trip.snapshot) { trip.snapshot.coverage ??= {}; trip.snapshot.coverage.discovery_complete = false; }
           }
+          // A change to what a new trip starts with (home, start cities, car, time buffers, exchange rates, adults) is the new profile.
+          const profile = profileOf(spec);
+          if (!spec.one_way && JSON.stringify(profile) !== JSON.stringify(profileOf(parseSpec(trip.spec)))) records.put(row("meta", PROFILE, profile));
           trip.spec = spec; trip.revision++; delete trip.result;
           records.put(row("trips", id, trip)); c.tx.objectStore("checkpoints").delete(id); c.result(trip);
         });

@@ -64,10 +64,10 @@ export class BrowserCalculator {
   private async run(id: string, options: CalculationOptions, stopped: () => boolean): Promise<CalculationResult> {
     if (options.minutes != null && (!Number.isFinite(options.minutes) || options.minutes <= 0 || options.minutes > 1440)) throw new PlannerError("Choose a calculation round longer than 0 and no more than 1440 minutes.");
     const deadline = options.deadline ?? (options.minutes == null ? Infinity : performance.now() + options.minutes * 60_000);
-    const [trip, rules, checkpoint] = await Promise.all([this.repository.requireTrip(id), this.repository.list<PricingRule>("rules"), this.repository.checkpoint(id)]);
+    const [trip, rules, checkpoint, shared_transfers] = await Promise.all([this.repository.requireTrip(id), this.repository.list<PricingRule>("rules"), this.repository.checkpoint(id), this.repository.sharedTransfers()]);
     // A fixed clock lets scripts/replay.mjs reproduce the quote freshness of this calculation.
     const now = options.now ?? Date.now() * 1000, began = performance.now();
-    const prepared = prepareSolverInput(trip, rules, { ...options, now }), input = prepared.input;
+    const prepared = prepareSolverInput(trip, rules, { ...options, now, shared_transfers }), input = prepared.input;
     let sourceRevision = trip.snapshot?.revision ?? 0, first = true, roundStart = 0, expanded = 0;
     const budget = input.expansion_budget ?? Infinity;
     const solver = new WorkerSolver();

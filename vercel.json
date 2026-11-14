@@ -5,6 +5,7 @@
   "buildCommand": "npm --prefix app run build",
   "devCommand": "npm --prefix app run catalogs && npm --prefix app run dev",
   "outputDirectory": "app/dist",
+  "regions": ["sin1"],
   "functions": {
     "api/flights.py": {
       "maxDuration": 60,

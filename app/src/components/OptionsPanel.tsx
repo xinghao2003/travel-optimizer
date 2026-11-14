@@ -4,7 +4,7 @@ import { CircleAlert, CircleHelp, Info } from "lucide-react";
 import { Button } from "./ui/button";
 import { InfoTip } from "./InfoTip";
 import { ModeIcon } from "./ModeIcon";
-import { hoursText, moneyShort, nightsText, optionChips, optionNumber, perCityHourText, priceEstimated, priceText, routeChain, sortRoutes, stayLength, type EmptyState, type NextStep, type OptionChip, type OptionsTarget, type PriceAsk } from "../lib/present";
+import { gainText, hoursText, moneyShort, nightsText, optionChips, optionNumber, perCityHourText, priceEstimated, priceText, routeChain, routeShapes, shapeKey, sortRoutes, stayLength, tradeoffSteps, type EmptyState, type NextStep, type OptionChip, type OptionsTarget, type PriceAsk } from "../lib/present";
 import type { Result, Route } from "../lib/planner";
 import { compareRoute, marginalComparisons, type RouteComparison } from "../lib/routeComparison";
 
@@ -15,6 +15,8 @@ function ParetoExplorer(props: ComponentProps<typeof LazyPareto>) {
 
 /** Next steps rows visible before "Show {k} more" (F1). */
 const visibleSteps = 3;
+/** Route shapes visible before "Show all {n} ways". */
+const visibleShapes = 3;
 
 /**
  * One option in the list (C6): number, price and time in cities; the route; the price per city hour and the chips.
@@ -78,23 +80,41 @@ function Picks({ routes, priceWeight, numbers, selectedId, placeName, onSelect }
     const pick = picks.get(route.id) ?? { route, labels: [] };
     pick.labels.push(pickLabels[key]); picks.set(route.id, pick);
   }
-  const high = (route: Route) => route.total_cost_myr ?? route.cost_high_myr;
   const cheapest = [...picks.values()].find(pick => pick.labels.includes(pickLabels.cheapest))?.route;
   return <ul className="p-picks" aria-label="Recommended options">{[...picks.values()].map(({ route, labels }) => {
     const chain = routeChain(route);
-    const more = cheapest && high(route) !== null ? Math.round((high(route)! - high(cheapest)!) * 100) / 100 : 0;
-    const longer = cheapest ? route.stay_hours - cheapest.stay_hours : 0;
+    const gain = cheapest ? gainText(route, cheapest) : null;
     return <li key={route.id}>
       <button type="button" className="p-pick" aria-pressed={route.id === selectedId} onClick={() => onSelect(route.id)}>
         <span className="p-pick-label">{labels.join(" · ")}</span>
         <span className="p-pick-price">{priceText(route)}</span>
         <span className="p-pick-line">{stayLength(route.stay_hours)} in cities · {hoursText(route.travel_hours)} h travel</span>
         <span className="p-pick-line">{[chain.from, ...chain.steps.map(step => step.to)].map(placeName).join(" → ")}</span>
-        {more > 0 && longer >= .1 && <span className="p-pick-gain">{moneyShort(more)} more than Cheapest gives {stayLength(longer)} more in cities</span>}
+        {gain && <span className="p-pick-gain">{gain}</span>}
         <span className="sr-only">Option {optionNumber(numbers.get(route.id) ?? 0)}</span>
       </button>
     </li>;
   })}</ul>;
+}
+
+/**
+ * The trade-off slider: one position for each priced option from the cheapest up, each with more time in cities than
+ * the one before (tradeoffSteps). Moving it selects that option. Not shown with fewer than 3 positions: the picks cover those.
+ */
+function Tradeoff({ steps, numbers, selectedId, onSelect }: { steps: Route[]; numbers: Map<string, number>; selectedId: string | null; onSelect: (id: string) => void }) {
+  const id = useId();
+  if (steps.length < 3) return null;
+  const index = steps.findIndex(route => route.id === selectedId);
+  const selected = steps[index];
+  const text = selected ? [`Option ${optionNumber(numbers.get(selected.id) ?? 0)}`, priceText(selected), `${stayLength(selected.stay_hours)} in cities`,
+    index ? gainText(selected, steps[0]) ?? "" : "the cheapest"].filter(Boolean).join(" · ")
+    : `${steps.length} priced options, from ${priceText(steps[0])} to ${priceText(steps.at(-1)!)}. Move the slider to choose one.`;
+  return <div className="p-tradeoff">
+    <label htmlFor={id}>Spend less or stay longer</label>
+    <div><span>Lower price</span><input id={id} type="range" min={0} max={steps.length - 1} step={1} value={Math.max(index, 0)} aria-valuetext={text}
+      onChange={event => onSelect(steps[Number(event.target.value)].id)} /><span>More time in cities</span></div>
+    <p className="p-tradeoff-text">{text}</p>
+  </div>;
 }
 
 /**
@@ -116,13 +136,21 @@ export function OptionsPanel({ result, bestRoutes, beaten, displayRoutes, number
   timePreference: number; onTimePreference: (value: number) => void;
   showDominated: boolean; onToggleDominated: (show: boolean) => void; loadingWeaker: boolean; busy: boolean;
   visibleCount: number; onShowMore: () => void;
-  onSelect: (id: string, source: "row" | "chart") => void;
+  /** "slider": the trade-off slider, which only selects the option. */
+  onSelect: (id: string, source: "row" | "chart" | "slider") => void;
   nextSteps: NextStep[]; emptyState: EmptyState | null; onAction: (target: OptionsTarget) => void;
   budget: number | null; adults: number; rates: Record<string, number>; placeName: (id: string) => string;
 }) {
   const sortId = useId(), balanceId = useId();
   const [allSteps, setAllSteps] = useState(false);
   const [view, setView] = useState<"list" | "chart">("list");
+  // Ways to do this trip: the route shapes of the best options. One shape chosen: the picks, the slider and the list show only its options.
+  const shapes = routeShapes(bestRoutes);
+  const [chosenShape, setChosenShape] = useState<string | null>(null);
+  const [allShapes, setAllShapes] = useState(false);
+  const shape = shapes.length > 1 && shapes.some(item => item.key === chosenShape) ? chosenShape : null;
+  const inShape = (route: Route) => !shape || shapeKey(route) === shape;
+  const shapeRoutes = bestRoutes.filter(inShape), rows = displayRoutes.filter(inShape);
   const stepList = useRef<HTMLUListElement>(null);
   const optionList = useRef<HTMLOListElement>(null);
   // After "Show more", focus goes to the first row it added: the button itself can go away.
@@ -138,7 +166,7 @@ export function OptionsPanel({ result, bestRoutes, beaten, displayRoutes, number
   const estimatedOnce = displayRoutes.length > 0 && displayRoutes.every(priceEstimated);
   const chips = (route: Route, overBudget: boolean) => optionChips(route, { budget, rates, estimatedOnce: estimatedOnce && !overBudget, weaker: weaker.has(route.id), overBudget, compared: route.id === comparedId && comparedId !== selectedId, beaten: beaten.has(route.id) });
   const best = result?.routes.length ?? 0;
-  const left = displayRoutes.length - visibleCount;
+  const left = rows.length - visibleCount;
   const hiddenSteps = allSteps ? 0 : Math.max(0, nextSteps.length - visibleSteps);
   const baseline = [...displayRoutes, ...refinement].find(route => route.id === selectedId);
   const label = (id: string) => numbers.has(id) ? `Option ${optionNumber(numbers.get(id)!)}` : `Over-budget option ${optionNumber(refinement.findIndex(route => route.id === id) + 1)}`;
@@ -187,10 +215,22 @@ export function OptionsPanel({ result, bestRoutes, beaten, displayRoutes, number
     </div>
 
     {displayRoutes.length > 0 && <>
-      <Picks routes={bestRoutes} priceWeight={1 - timePreference / 100} numbers={numbers} selectedId={selectedId} placeName={placeName} onSelect={id => onSelect(id, "row")} />
+      <Picks routes={shapeRoutes} priceWeight={1 - timePreference / 100} numbers={numbers} selectedId={selectedId} placeName={placeName} onSelect={id => onSelect(id, "row")} />
+      <Tradeoff steps={tradeoffSteps(shapeRoutes)} numbers={numbers} selectedId={selectedId} onSelect={id => onSelect(id, "slider")} />
+      {shapes.length > 1 && <div className="p-shapes" role="group" aria-labelledby="shapes-title">
+        <h3 id="shapes-title">Ways to do this trip</h3>
+        {/* The chosen shape stays in view when the list is short. */}
+        <ul>{shapes.filter((item, index) => allShapes || index < visibleShapes || item.key === shape).map(item => <li key={item.key}>
+          <button type="button" className="p-shape" aria-pressed={shape === item.key} onClick={() => setChosenShape(shape === item.key ? null : item.key)}>
+            <span className="p-option-chain">{placeName(item.from)}{item.steps.map((step, index) => <span className="p-chain-step" key={index}><ModeIcon mode={step.mode} />{placeName(step.to)}</span>)}</span>
+            <span className="p-shape-aside">{item.count} option{item.count === 1 ? "" : "s"} · {item.price === null ? "needs prices" : `from ${moneyShort(item.price)}`}</span>
+          </button>
+        </li>)}</ul>
+        {shapes.length > visibleShapes && <button type="button" className="p-text-button p-more-button" aria-expanded={allShapes} onClick={() => setAllShapes(!allShapes)}>{allShapes ? "Show fewer ways" : `Show all ${shapes.length} ways`}</button>}
+      </div>}
 
       <div className="p-options-toolbar">
-        <p className="p-options-count">{best} best option{best === 1 ? "" : "s"}{weaker.size > 0 && ` · ${weaker.size} more`}</p>
+        <p className="p-options-count">{shape ? `${shapeRoutes.length} of ` : ""}{best} best option{best === 1 ? "" : "s"}{weaker.size > 0 && ` · ${weaker.size} more`}</p>
         <div className="p-view-toggle" role="group" aria-label="View">
           {(["list", "chart"] as const).map(item => <button type="button" key={item} aria-pressed={view === item} onClick={() => setView(item)}>{item === "list" ? "List" : "Chart"}</button>)}
         </div>
@@ -221,7 +261,7 @@ export function OptionsPanel({ result, bestRoutes, beaten, displayRoutes, number
 
       {view === "list" && <>
       <ol ref={optionList} className="p-options">
-        {displayRoutes.slice(0, visibleCount).map(route => <OptionRow key={route.id} route={route} number={numbers.get(route.id) ?? 0} selected={route.id === selectedId}
+        {rows.slice(0, visibleCount).map(route => <OptionRow key={route.id} route={route} number={numbers.get(route.id) ?? 0} selected={route.id === selectedId}
           chips={chips(route, false)} comparison={comparison(route)} placeName={placeName} zoneOf={zoneOf} onSelect={() => onSelect(route.id, "row")} />)}
       </ol>
       {left > 0 && <button type="button" className="p-show-more" onClick={() => { firstNewRow.current = visibleCount; onShowMore(); }}>

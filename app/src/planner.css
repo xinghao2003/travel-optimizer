@@ -289,6 +289,22 @@ fieldset.p-plan-row > legend { float: left; }
 .p-pick-price { font-size: 17px; font-weight: 650; letter-spacing: -.02em; }
 .p-pick-line { color: var(--muted-foreground); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
 .p-pick-gain { margin-top: 2px; font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+/* Ways to do this trip: one button for each route shape; a pressed one limits the picks, the slider and the list to it. */
+.p-shapes { margin: 14px 0 0; }
+.optimizer .p-shapes .p-more-button { margin-top: 6px; }
+.optimizer .p-shapes h3 { margin: 0 0 6px; color: var(--muted-foreground); font-size: 12px; font-weight: 600; }
+.p-shapes ul { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.p-shape { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; width: 100%; padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); color: var(--foreground); text-align: left; }
+.p-shape:hover { border-color: var(--foreground); }
+.p-shape[aria-pressed=true] { border-color: var(--foreground); box-shadow: inset 0 0 0 1px var(--foreground); }
+.p-shape-aside { color: var(--muted-foreground); font-size: 12px; font-variant-numeric: tabular-nums; }
+/* The trade-off slider: one position for each priced option from the cheapest to the one with the most time in cities. */
+.p-tradeoff { display: grid; gap: 4px; margin: 12px 0 0; }
+.p-tradeoff > label { font-weight: 600; }
+.p-tradeoff > div { display: flex; align-items: center; gap: 10px; }
+.p-tradeoff > div > span { flex-shrink: 0; color: var(--muted-foreground); font-size: 12px; }
+.optimizer .p-tradeoff input[type=range] { flex: 1; min-width: 0; height: 28px; padding: 0; border: 0; background: transparent; box-shadow: none; accent-color: var(--primary); }
+.optimizer .p-tradeoff-text { margin: 0; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
 .p-view-toggle { display: inline-flex; padding: 2px; border: 1px solid var(--border); border-radius: 7px; background: var(--muted-surface); }
 .p-view-toggle button { padding: 4px 12px; border: 0; border-radius: 5px; background: none; color: var(--muted-foreground); font-weight: 500; }
 .p-view-toggle button[aria-pressed=true] { background: var(--card); color: var(--foreground); box-shadow: 0 1px 2px var(--shadow-color); }

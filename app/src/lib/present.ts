@@ -223,6 +223,43 @@ export function sortRoutes<T extends Route>(routes: T[], key: string, { priceWei
   });
 }
 
+/**
+ * The options that the trade-off slider walks: the priced options from the cheapest up, each with more time in
+ * cities than the one before. An option without a known highest price is not a step.
+ */
+export function tradeoffSteps<T extends Route>(routes: T[]): T[] {
+  const steps: T[] = [];
+  for (const route of routes.filter(route => highest(route) !== null).sort(lowestPrice)) if (!steps.length || route.stay_hours > steps.at(-1)!.stay_hours + 1e-6) steps.push(route);
+  return steps;
+}
+
+/** What the extra money of an option gives: "RM 210 more than Cheapest gives 1 day 3 h more in cities". Null when it gives no more time, or a price is unknown. */
+export function gainText(route: Pick<Route, "total_cost_myr" | "cost_high_myr" | "stay_hours">, cheapest: Pick<Route, "total_cost_myr" | "cost_high_myr" | "stay_hours">) {
+  const high = highest(route), low = highest(cheapest), longer = route.stay_hours - cheapest.stay_hours;
+  if (high === null || low === null || cents(high - low) <= 0 || longer < .1) return null;
+  return `${moneyShort(cents(high - low))} more than Cheapest gives ${stayLength(longer)} more in cities`;
+}
+
+/** An option's route shape: its places in order with the transport between them, without dates and times. */
+export function shapeKey(route: Pick<Route, "movements" | "stays">) {
+  const chain = routeChain(route);
+  return JSON.stringify([chain.from, ...chain.steps.map(step => [step.mode, step.to])]);
+}
+/** `price`: the lowest known highest price among the shape's options; null when none has one. */
+export type RouteShape = { key: string; from: string; steps: { mode: string; to: string }[]; count: number; price: number | null };
+/** The route shapes of the options, the cheapest first; shapes without a priced option last, then more options first. */
+export function routeShapes(routes: Route[]): RouteShape[] {
+  const shapes = new Map<string, RouteShape>();
+  for (const route of routes) {
+    const key = shapeKey(route), chain = routeChain(route), price = highest(route);
+    const shape = shapes.get(key) ?? { key, from: chain.from, steps: chain.steps.map(({ mode, to }) => ({ mode, to })), count: 0, price: null };
+    shape.count++;
+    if (price !== null && (shape.price === null || price < shape.price)) shape.price = price;
+    shapes.set(key, shape);
+  }
+  return [...shapes.values()].sort((a, b) => a.price === null || b.price === null ? Number(a.price === null) - Number(b.price === null) || b.count - a.count : a.price - b.price || b.count - a.count);
+}
+
 /** "01", "02", … */
 export const optionNumber = (position: number) => String(position).padStart(2, "0");
 

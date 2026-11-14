@@ -4,7 +4,7 @@ import { loadTs } from "./loadTs.mjs";
 const {
   airportChangeRows, appError, assumedConnections, assumptionNotes, blankConnectionForm, blankRuleForm, buildNextSteps, bundleStatusLabel, cityGaps, connectionFromForm, connectionText, compareText, dateModeText, dateRange, dayByDay, formatDuration,
   componentWhen, formatLocal, hoursText, journeyGroupTitle, journeyGroupWhen, journeyChips, journeySource, journeyWhen, mainService, matchingQuoteLinks, modeLabel, moneyShort, needsInputCount, optionChips, optionsEmptyState, partySizeNotice, perCityHourText, priceEstimated, priceText, routeChain, routeSignature,
-  nightsText, priceInputErrors, purchaseAmount, quoteLinkText, searchDetails, searchState, settingsFooter, settingsSummaries, sortRoutes, sourceLabel, splitGroups, stayLength, stepLabel, staySumWarning, ticketJourney, ticketRows,
+  gainText, nightsText, priceInputErrors, purchaseAmount, quoteLinkText, routeShapes, shapeKey, tradeoffSteps, searchDetails, searchState, settingsFooter, settingsSummaries, sortRoutes, sourceLabel, splitGroups, stayLength, stepLabel, staySumWarning, ticketJourney, ticketRows,
   ruleForm, ruleFromForm, ruleText, transferDirections, transferJourneyText, tripSummary, unpricedSummary, unresolvedAccessJourneys, validateDraft,
 } = await loadTs("../src/lib/present.ts");
 const { blankTrip } = await loadTs("../src/lib/planner.ts");
@@ -278,6 +278,34 @@ test("time in cities reads in days and nights", () => {
   assert.equal(nightsText(stay("2027-02-10T02:10:00Z", "2027-02-11T22:45:00Z"), "Asia/Seoul"), "2 nights");
   assert.equal(nightsText(stay("2027-02-10T02:10:00Z", "2027-02-11T22:45:00Z"), "UTC"), "1 night");
   assert.equal(nightsText(stay("2027-02-10T02:10:00Z", "2027-02-10T08:40:00Z"), "Asia/Seoul"), "6.5 h");
+});
+
+test("the trade-off slider walks the priced options from the cheapest to the most time in cities", () => {
+  const routes = [exact("a", 5000, 220), range("b", 4000, 6000, 230), exact("c", 3000, 200), partial("d", 100, 400), exact("e", 5000, 225), exact("f", 5500, 210), exact("g", 7000, 240)];
+  // c is the cheapest; e gives more time than a at the same price; f gives less time than the cheaper e. The range b counts with its highest price.
+  assert.deepEqual(tradeoffSteps(routes).map(route => route.id), ["c", "e", "b", "g"]);
+  assert.deepEqual(tradeoffSteps([partial("d", 100, 400)]), []);
+  assert.equal(plain(gainText(routes[6], routes[2])), "RM 4,000 more than Cheapest gives 1 day 16 h more in cities");
+  // No more time, the same price, or an unknown price: nothing to say.
+  assert.deepEqual([gainText(routes[5], routes[0]), gainText(routes[4], routes[0]), gainText(routes[3], routes[2]), gainText(routes[2], routes[2])], [null, null, null, null]);
+});
+
+test("route shapes group the options by their places and transport", () => {
+  const leg = (id, from, to, mode = "flight") => flightTo(id, from, to, { mode });
+  const routes = [
+    exact("a", 5000, 220, { movements: [leg("1", "KUL", "SEL"), leg("2", "SEL", "PUS", "rail"), leg("3", "PUS", "KUL")] }),
+    exact("b", 4800, 200, { movements: [leg("4", "KUL", "SEL"), leg("5", "SEL", "PUS", "rail"), leg("6", "PUS", "KUL")] }),
+    exact("c", 4500, 210, { movements: [leg("7", "KUL", "PUS"), leg("8", "PUS", "SEL", "rail"), leg("9", "SEL", "KUL")] }),
+    option("d", { cost_low_myr: 100, stay_hours: 230, movements: [leg("10", "KUL", "SEL"), leg("11", "SEL", "PUS", "bus"), leg("12", "PUS", "KUL")] }),
+  ];
+  assert.deepEqual(routeShapes(routes).map(shape => [shape.from, shape.steps.map(step => `${step.mode}:${step.to}`).join(" "), shape.count, shape.price]), [
+    ["KUL", "flight:PUS rail:SEL flight:KUL", 1, 4500],
+    ["KUL", "flight:SEL rail:PUS flight:KUL", 2, 4800],
+    // Not priced: last.
+    ["KUL", "flight:SEL bus:PUS flight:KUL", 1, null],
+  ]);
+  assert.equal(shapeKey(routes[0]), shapeKey(routes[1]));
+  assert.notEqual(shapeKey(routes[0]), shapeKey(routes[3]));
 });
 
 test("options sort by highest possible price, by time in cities or by balance, with unbounded options last", () => {

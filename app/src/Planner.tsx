@@ -721,7 +721,7 @@ export default function Planner({ storageActions, externalRevision = 0 }: { stor
     setPanel(next);
   }
   // Selecting an option shows its itinerary (C5, E8): beside the options on a wide screen; on a narrow screen a row opens the Itinerary tab.
-  function selectOption(id: string, source: "row" | "chart") {
+  function selectOption(id: string, source: "row" | "chart" | "slider") {
     setSelectedId(id);
     // An option is not compared with itself: the itinerary's Compare with shows None.
     if (id === comparisonId) setComparisonId(null);

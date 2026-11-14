@@ -7,7 +7,7 @@ import { InfoTip } from "./InfoTip";
 import { ModeIcon } from "./ModeIcon";
 import { Field, FixedPriceFields, Staged } from "./PlannerForms";
 import { storedOfferId, type DraftPrice, type DraftTarget, type PriceValue } from "../lib/drafts";
-import { assumptionNotes, bundleStatusLabel, compareText, dateRange, dayByDay, formatDuration, formatLocal, hoursText, journeyChips, journeySource, journeyWhen, mainService, matchingQuoteLinks, moneyShort, nightsText, optionChips, optionNumber, perCityHourText, priceInputErrors, priceText, quoteLinkText, stayLength, stepLabel, stepSetting, ticketJourney, ticketRows, unpricedSummary, type OptionChip, type OptionsTarget, type TicketRow } from "../lib/present";
+import { assumptionNotes, bundleStatusLabel, compareText, dateRange, dayByDay, formatDuration, formatLocal, hoursText, journeyChips, journeyRuleModes, journeySource, modeLabel, journeyWhen, mainService, matchingQuoteLinks, moneyShort, nightsText, optionChips, optionNumber, perCityHourText, priceInputErrors, priceText, quoteLinkText, stayLength, stepLabel, stepSetting, ticketJourney, ticketRows, unpricedSummary, type OptionChip, type OptionsTarget, type TicketRow } from "../lib/present";
 import type { Charge, Coverage, Movement, Offer, Place, Route } from "../lib/planner";
 
 type BundleLink = NonNullable<Coverage["bundle_links"]>[number];
@@ -58,8 +58,11 @@ function Journey({ movement, route, open, zoneOf, placeName, rates, onAction }: 
 }
 
 type PriceErrors = Partial<Record<"flights" | "low" | "high" | "currency" | "save", string>>;
-/** What Set price stages: a price for every transfer of the journey's airport transfer direction, or for this journey. */
-type Scope = "all" | "journey";
+/**
+ * What Set price sets: a price for every transfer of the journey's airport transfer direction ("all"), for this journey,
+ * or a price rule for the transport between the journey's two places, in all trips ("rule").
+ */
+type Scope = "all" | "journey" | "rule";
 
 /**
  * Set price for one journey or charge (E9.4, C11 PriceEditor). It stages a draft that the Apply bar sends; nothing is
@@ -68,8 +71,11 @@ type Scope = "all" | "journey";
  * for all transfers of that direction or only this journey (`date`). Enter sets the price, Ctrl/Cmd+Enter sets it and
  * applies, Esc cancels (without `onClose`, it restores the values). `name` is the row it prices, for screen readers.
  */
-function PriceEditor({ name, initial, adults, direction, date, defaultScope, ownPrice, applying, onSet, onApply, onClose, autoFocus = false }: {
-  name: string; initial: PriceValue | null; adults: number; direction: string | null; date: string | null; defaultScope: Scope; ownPrice: boolean;
+function PriceEditor({ name, initial, adults, direction, rule = null, date, defaultScope, ownPrice, applying, onSet, onApply, onClose, autoFocus = false }: {
+  name: string; initial: PriceValue | null; adults: number; direction: string | null;
+  /** The journeys that a price rule would price ("Bus Seoul → Busan"); null when the row can't have one. */
+  rule?: string | null;
+  date: string | null; defaultScope: Scope; ownPrice: boolean;
   applying: boolean; onSet: (value: PriceValue, scope: Scope) => void; onApply: () => void; onClose?: () => void; autoFocus?: boolean;
 }) {
   const start = () => {
@@ -77,7 +83,7 @@ function PriceEditor({ name, initial, adults, direction, date, defaultScope, own
     return { low: initial?.low.toString() ?? "", range, high: range ? initial?.high?.toString() ?? "" : "", currency: initial?.currency ?? "MYR" };
   };
   const [values, setValues] = useState(start);
-  const [scope, setScope] = useState<Scope>(direction ? defaultScope : "journey");
+  const [scope, setScope] = useState<Scope>(direction || rule ? defaultScope : "journey");
   const [errors, setErrors] = useState<PriceErrors>({});
   const scopeName = useId();
   const { low, range, high, currency } = values;
@@ -85,7 +91,7 @@ function PriceEditor({ name, initial, adults, direction, date, defaultScope, own
   function stage() {
     const found: PriceErrors = priceInputErrors(low, range ? high : "", currency);
     // A price for all transfers of a direction is fixed or a range: a blank highest price there means a fixed price.
-    if (!found.low && scope === "all" && range && high.trim() === "") found.high = "Enter the highest price, or choose Only this journey.";
+    if (!found.low && scope !== "journey" && range && high.trim() === "") found.high = "Enter the highest price, or choose Only this journey.";
     setErrors(found);
     if (Object.keys(found).length) return false;
     const value = Number(low);
@@ -108,6 +114,12 @@ function PriceEditor({ name, initial, adults, direction, date, defaultScope, own
       <label className="p-check"><input type="radio" name={scopeName} checked={scope === "journey"} onChange={() => setScope("journey")} />Only this journey{date && ` (${date})`}</label>
       {scope === "all" && ownPrice && <small>Your price for this journey still applies to it. Remove my price to use the price for all transfers.</small>}
     </fieldset>}
+    {rule && <fieldset className="p-price-scope">
+      <legend>Applies to</legend>
+      <label className="p-check"><input type="radio" name={scopeName} checked={scope === "journey"} onChange={() => setScope("journey")} />Only this journey{date && ` (${date})`}</label>
+      <label className="p-check"><input type="radio" name={scopeName} checked={scope === "rule"} onChange={() => setScope("rule")} />Every {rule} journey without a price, in all your trips</label>
+      {scope === "rule" && <small>Saved at once as a price rule. Change it under Prices to add › Price rules.</small>}
+    </fieldset>}
     <Field label={`Price for ${adultsText(adults)}`} error={errors.low}>
       <input type="text" inputMode="decimal" placeholder="Not priced" value={low} autoFocus={autoFocus} onChange={event => set({ low: event.target.value })} />
     </Field>
@@ -129,6 +141,8 @@ function PriceEditor({ name, initial, adults, direction, date, defaultScope, own
 type DraftProps = {
   draftFor: (target: DraftTarget) => DraftPrice | null; directionLabel: (charge: Charge) => string | null;
   stageComponent: (componentId: string, value: PriceValue, label: string) => void; stageDirection: (charge: Charge, value: PriceValue) => void;
+  /** Set price › all trips: saves a price rule for the transport between the journey's two places. */
+  saveJourneyRule: (movement: Movement, value: PriceValue) => void;
   applying: boolean; onApply: () => void;
 };
 const changePair = (charge: Charge | null) => charge ? /^Airport transfer (\S+) → (\S+)$/.exec(charge.kind) : null;
@@ -150,6 +164,9 @@ function TicketItem({ row, draft, adults, busy, placeName, zoneOf, offerFor, dra
   const ownPrice = row.offer.source === "user";
   const direction = row.kind === "transfer" && charge ? drafts.directionLabel(charge) : null;
   const pair = row.kind === "change" ? changePair(charge) : null;
+  // A journey without a price of its own can get a price for all trips. Flights and your journeys with exact times can't.
+  const rule = row.kind === "journey" && movement && journeyRuleModes.includes(movement.mode) && movement.source !== "User-supplied positioning" && (!row.priced || row.offer.source === "rule")
+    ? `${modeLabel(movement.mode)} ${placeName(movement.from_id)} → ${placeName(movement.to_id)}` : null;
   // The editor opens with the draft, else the price in use (a rule or provider price too).
   const inUse = row.offer.low !== null ? { low: row.offer.low, high: row.offer.high, currency: row.offer.currency } : null;
   function close() { setEditing(false); toggle.current?.focus(); }
@@ -171,9 +188,9 @@ function TicketItem({ row, draft, adults, busy, placeName, zoneOf, offerFor, dra
     </div>
     {editing && row.componentId && <PriceEditor name={row.label} adults={adults} autoFocus applying={drafts.applying} onApply={drafts.onApply} onClose={close}
       initial={draft?.value ?? inUse}
-      direction={direction} date={movement?.departure ? formatLocal(movement.departure, zoneOf(movement.from_id), "date") : null}
-      defaultScope={ownPrice || draft?.scope === "journey" ? "journey" : "all"} ownPrice={ownPrice}
-      onSet={(value, scope) => scope === "all" && charge ? drafts.stageDirection(charge, value)
+      direction={direction} rule={rule} date={movement?.departure ? formatLocal(movement.departure, zoneOf(movement.from_id), "date") : null}
+      defaultScope={rule || ownPrice || draft?.scope === "journey" ? "journey" : "all"} ownPrice={ownPrice}
+      onSet={(value, scope) => scope === "rule" && movement ? drafts.saveJourneyRule(movement, value) : scope === "all" && charge ? drafts.stageDirection(charge, value)
         : drafts.stageComponent(row.componentId!, value, charge ? charge.kind : `Standalone ${movement?.mode ?? "journey"} fare`)} />}
     {row.kind === "combined" && <details className="p-ticket-separate">
       <summary><ChevronDown size={16} className="p-chevron" aria-hidden="true" />Separate prices</summary>

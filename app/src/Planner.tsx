@@ -21,7 +21,7 @@ import { defaultJourneyGrouping, journeyGroupFields, journeyPriceScope, sameJour
 import type { JourneyGroupField } from "./lib/planner";
 import { activeFares, airportChangeFieldId, buildAirportConnections, buildTransferEstimates, canonicalFares, canonicalIds, countDrafts, invalidDraftFields, knownComponentIds, savedTransferRows, sameTransferRows, transferFieldId, transferKey, transferRateId, type DraftPrice, type DraftState, type DraftTarget, type PriceValue, type SharedFare } from "./lib/drafts";
 import { forgetDrafts, useTripDrafts } from "./lib/useTripDrafts";
-import { airportChangeRows, appError, assumedConnections, buildNextSteps, cityGaps, needsInputCount, optionNumber, optionsEmptyState, partySizeNotice, purchaseAmount, routeSignature, searchDetails, searchState, settingsFooter, sortRoutes, splitGroups, staySumWarning, ticketRows, transferDirections, transitSearchModes, unresolvedAccessJourneys, validateDraft, type AppError, type OptionsTarget, type PriceAsk } from "./lib/present";
+import { airportChangeRows, appError, assumedConnections, buildNextSteps, cityGaps, journeyRule, needsInputCount, optionNumber, optionsEmptyState, partySizeNotice, purchaseAmount, routeSignature, searchDetails, searchState, settingsFooter, sortRoutes, splitGroups, staySumWarning, ticketRows, transferDirections, transitSearchModes, unresolvedAccessJourneys, validateDraft, type AppError, type OptionsTarget, type PriceAsk } from "./lib/present";
 import { api, blankTrip, defaultBatchSize, modes, plannerConfig, type AirportTransferMode, type Charge, type Job, type Movement, type Offer, type OptimizationJob, type PricingRule, type Result, type Route, type SavedSummary, type SavedTrip, type TripDraft } from "./lib/planner";
 import { useMediaQuery } from "./lib/useMediaQuery";
 import { exportFilename, exportTrip, tripReportHtml, type ExportOption, type ExportScope, type ExportTrip } from "./lib/tripExport";
@@ -907,6 +907,10 @@ export default function Planner({ storageActions, externalRevision = 0 }: { stor
     return { scope: "direction", value, amount: value ? purchaseAmount(value, rates) : low === null ? "Not priced" : `${way.low} (not valid)`,
       undo: () => tripDrafts.stageTransfer(direction.key, savedWay ? rows.map(row => row.mode === way.mode ? savedWay : row) : rows.filter(row => row !== way), direction.saved) };
   }
+  /** Set price › all trips (E9.4): a price rule for the transport between the journey's two places. It saves at once, as in Price rules. */
+  function saveJourneyRule(movement: Movement, value: PriceValue) {
+    void saveRule(journeyRule(movement, value, adults, saved?.spec.cars.taxi_capacity ?? 4, placeName));
+  }
   /**
    * The answer to a Next steps question. Yes saves the journey's price as a range up to the question's amount and
    * No as that amount or more, so the options compare without the exact price. "enter" goes to the journey's price field.
@@ -1126,7 +1130,7 @@ export default function Planner({ storageActions, externalRevision = 0 }: { stor
             comparedId={compare?.id ?? null} onCompare={setComparisonId} places={places} zoneOf={zoneOf} placeName={placeName}
             minStays={Object.fromEntries(saved.spec.visits.map(visit => [visit.place.id, visit.min_stay_hours]))}
             budget={budget} adults={saved.spec.adults} rates={rates} offerFor={offerFor} onSaveBundle={updatePrice}
-            draftFor={draftFor} directionLabel={directionLabel} stageComponent={stageComponent} stageDirection={stageDirection}
+            draftFor={draftFor} directionLabel={directionLabel} stageComponent={stageComponent} stageDirection={stageDirection} saveJourneyRule={saveJourneyRule}
             applying={!!applyState} onApply={applyDrafts}
             onRemovePrice={id => void act(() => removePrice(id), "price")} busy={busy} bundleLinks={bundleLinks}
             onAction={runAction} onEditAirportChange={key => { chooseTab("missing"); setFocusTarget([airportChangeFieldId(key, "mode"), "missing-title"]); }} onBack={backToOptions} />}</div>

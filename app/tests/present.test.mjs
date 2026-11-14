@@ -4,7 +4,7 @@ import { loadTs } from "./loadTs.mjs";
 const {
   airportChangeRows, appError, assumedConnections, assumptionNotes, blankConnectionForm, blankRuleForm, buildNextSteps, bundleStatusLabel, cityGaps, connectionFromForm, connectionText, compareText, dateModeText, dateRange, dayByDay, formatDuration,
   componentWhen, formatLocal, hoursText, journeyGroupTitle, journeyGroupWhen, journeyChips, journeySource, journeyWhen, mainService, matchingQuoteLinks, modeLabel, moneyShort, needsInputCount, optionChips, optionsEmptyState, partySizeNotice, perCityHourText, priceEstimated, priceText, routeChain, routeSignature,
-  gainText, nightsText, priceInputErrors, purchaseAmount, quoteLinkText, routeShapes, shapeKey, tradeoffSteps, searchDetails, searchState, settingsFooter, settingsSummaries, sortRoutes, stepSetting, sourceLabel, splitGroups, stayLength, stepLabel, staySumWarning, ticketJourney, ticketRows,
+  gainText, journeyRule, journeyRuleModes, nightsText, priceInputErrors, purchaseAmount, quoteLinkText, routeShapes, shapeKey, tradeoffSteps, searchDetails, searchState, settingsFooter, settingsSummaries, sortRoutes, stepSetting, sourceLabel, splitGroups, stayLength, stepLabel, staySumWarning, ticketJourney, ticketRows,
   ruleForm, ruleFromForm, ruleText, transferDirections, transferJourneyText, tripSummary, unpricedSummary, unresolvedAccessJourneys, validateDraft,
 } = await loadTs("../src/lib/present.ts");
 const { blankTrip } = await loadTs("../src/lib/planner.ts");
@@ -842,6 +842,18 @@ test("an option keeps its signature when airport transfer prices change its ids"
   const later = option("c", { movements: [flightTo("flight:x", "KUL", "PUS", { segments: [{ mode: "flight", departure: "2026-12-04T12:15:00+08:00" }] })] });
   assert.notEqual(routeSignature(later), routeSignature(before));
   assert.notEqual(routeSignature({ ...before, arrival_gateway: "SIN" }), routeSignature(before));
+});
+
+test("a journey price for all trips is a price rule per person, or per taxi", () => {
+  const name = id => ({ SEL: "Seoul", PUS: "Busan" })[id];
+  // RM 380 for 2 adults on the train: RM 190 per person, so 3 adults pay RM 570.
+  assert.deepEqual(journeyRule({ mode: "rail", from_id: "SEL", to_id: "PUS" }, { low: 380, high: 400, currency: "MYR" }, 2, 4, name), {
+    id: "journey:rail:SEL>PUS", name: "Train Seoul → Busan", mode: "rail", from_id: "SEL", to_id: "PUS", service: null, country_code: null, kind: "fixed",
+    low: 190, high: 200, unit: "person", capacity: 4, currency: "MYR", priority: 0 });
+  // RM 150 for 5 adults in taxis with 4 seats is 2 taxis: RM 75 per taxi.
+  const taxi = journeyRule({ mode: "taxi", from_id: "PUS", to_id: "SEL" }, { low: 150, high: 150, currency: "KRW" }, 5, 4, name);
+  assert.deepEqual([taxi.id, taxi.name, taxi.low, taxi.high, taxi.unit, taxi.capacity, taxi.currency], ["journey:taxi:PUS>SEL", "Taxi Busan → Seoul", 75, 75, "vehicle", 4, "KRW"]);
+  assert.equal(journeyRuleModes.includes("flight"), false);
 });
 
 test("route chains show each stay where it starts", () => {

@@ -1405,6 +1405,20 @@ export function ruleText(rule: PricingRule, placeName: (id: string) => string) {
   ].filter(Boolean).join(" · ");
 }
 
+/** Transport whose price between two places is the same on other dates: Set price can save it for all trips. Not flights. */
+export const journeyRuleModes: string[] = ["rail", "bus", "coach", "subway", "tram", "taxi"];
+/**
+ * The price rule that Set price › all trips saves: the transport between the two places of the journey, for journeys
+ * without a price. `value` is the price for `adults`: a train or bus price is kept per person and a taxi price per
+ * vehicle, so the rule fits other party sizes. One rule for each transport and direction: a new price replaces it.
+ */
+export function journeyRule(movement: Pick<Movement, "mode" | "from_id" | "to_id">, value: { low: number; high: number | null; currency: string }, adults: number, taxiSeats: number, placeName: (id: string) => string): PricingRule {
+  const vehicle = movement.mode === "taxi", count = vehicle ? Math.ceil(adults / taxiSeats) : adults;
+  return { id: `journey:${movement.mode}:${movement.from_id}>${movement.to_id}`, name: `${modeLabel(movement.mode)} ${placeName(movement.from_id)} → ${placeName(movement.to_id)}`.slice(0, 120),
+    mode: movement.mode, from_id: movement.from_id, to_id: movement.to_id, service: null, country_code: null, kind: "fixed",
+    low: value.low / count, high: value.high === null ? null : value.high / count, unit: vehicle ? "vehicle" : "person", capacity: vehicle ? taxiSeats : 4, currency: value.currency, priority: 0 };
+}
+
 /** The price rule form (F2 row 7) as typed. */
 export type RuleForm = Omit<PricingRule, "from_id" | "to_id" | "service" | "country_code" | "low" | "high" | "capacity" | "priority">
   & Record<"from_id" | "to_id" | "service" | "country_code" | "low" | "high" | "capacity" | "priority", string>;

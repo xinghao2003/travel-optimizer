@@ -203,6 +203,8 @@ fieldset.p-plan-row > legend { float: left; }
 .p-add-form > summary { padding: 6px 0; cursor: pointer; color: var(--foreground); font-weight: 500; }
 .p-add-form[open] > summary { margin-bottom: 10px; }
 .p-add-form .p-form-actions { margin-top: 14px; }
+/* Advanced › What you changed: the groups that differ from the defaults, each with Reset. */
+.p-changed { display: grid; gap: 6px; margin-bottom: 4px; }
 .p-item-rows { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
 .p-item-rows li { display: flex; align-items: center; justify-content: space-between; gap: 4px 12px; padding: 6px 8px 6px 12px; border-radius: 6px; background: var(--muted-surface); color: var(--foreground); }
 .p-item-rows li > span { min-width: 0; overflow-wrap: anywhere; }

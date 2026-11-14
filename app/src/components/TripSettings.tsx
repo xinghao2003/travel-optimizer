@@ -8,7 +8,7 @@ import { Field, NumberField, PlacePicker } from "./PlannerForms";
 import { StartCities } from "./PositioningSettings";
 import { anyDeparture, autoStayHours, availabilityText, departsAnyTime, groupState, isAutoStay, searchEffort, searchEfforts, setGroup, stayText, transportGroups, withAutoStays } from "../lib/plan";
 import { dateModeText, formatLocal, modeLabel, settingsSummaries, staySumWarning, transitSearchModes, type FooterState, type SettingsSummary } from "../lib/present";
-import { localInputToISO, type OneWay, type Place, type TripDraft, type TripSpec } from "../lib/planner";
+import { blankTrip, defaultBatchSize, localInputToISO, type OneWay, type Place, type TripDraft, type TripSpec } from "../lib/planner";
 
 const count = (n: number, word: string) => `${n} ${n === 1 ? word : `${word}s`}`;
 
@@ -92,6 +92,19 @@ export function TripSettings({ draft, edit: setDraft, places, errors, transitCon
   const transitSummary: SettingsSummary = { summary: transitTypes.length ? transitTypes.map(modeLabel).join(", ") : "Off",
     changes: groupState(draft.modes, transportGroups[1]) === "some" ? ["Some trains & buses"] : [] };
   const changed = [...Object.entries(summaries).filter(([key]) => key !== "places").flatMap(([, group]) => group.changes), ...transitSummary.changes];
+  // What you changed: the Advanced groups that differ from a new trip without a profile, each with Reset.
+  const base = blankTrip();
+  const changedGroups: { title: string; summary: string; reset: () => void }[] = [
+    { title: "Dates and departures", group: summaries.departures, reset: () => edit({ ...draft, date_mode: base.date_mode, departure_start: base.departure_start, departure_end: base.departure_end, max_transfers: base.max_transfers, allow_overnight: base.allow_overnight }) },
+    { title: "Trains & buses", group: transitSummary, reset: () => edit({ ...draft, modes: setGroup(draft.modes, transportGroups[1], true) }) },
+    { title: "Time buffers", group: summaries.buffers, reset: () => edit({ ...draft, timing: base.timing }) },
+    { title: "Fixed appointments", group: summaries.appointments, reset: () => edit({ ...draft, commitments: [] }) },
+    { title: "Cars", group: summaries.cars, reset: () => edit({ ...draft, cars: base.cars }) },
+    { title: "Prices and currencies", group: summaries.prices, reset: () => edit({ ...draft, exclude_unpriced_flights: false, exchange_rates: base.exchange_rates }) },
+    { title: "Estimated train timetables", group: summaries.timetables, reset: () => edit({ ...draft, rail_fallback: draft.rail_fallback && { ...draft.rail_fallback, enabled: false } }) },
+    { title: "Search effort", group: summaries.searchSize, reset: () => { setCustomEffort(false); onRoundMinutes(null); onBatchSize(defaultBatchSize); } },
+  ].filter(item => item.group.changes.length > 0).map(({ title, group, reset }) => ({ title, summary: group.summary, reset }));
+  const [resetStatus, setResetStatus] = useState("");
   const auto = autoStayHours(draft);
   const availability = availabilityText(draft);
   const anyTime = departsAnyTime(draft);
@@ -225,6 +238,14 @@ export function TripSettings({ draft, edit: setDraft, places, errors, transitCon
     <details className="p-more">
       <summary><span>Advanced</span><span className="p-more-summary">{changed.length ? changed.join(" · ") : "All default"}</span><ChevronDown size={16} className="p-chevron" aria-hidden="true" /></summary>
       <div className="p-more-body">
+        {changedGroups.length > 0 && <div className="p-changed">
+          <h3 className="p-group-heading">What you changed</h3>
+          <ul className="p-item-rows">{changedGroups.map(item => <li key={item.title}>
+            <span><strong>{item.title}</strong> · {item.summary}</span>
+            <button type="button" className="p-text-button" onClick={() => { item.reset(); setResetStatus(`${item.title} reset.`); }}>Reset<span className="sr-only">: {item.title}</span></button>
+          </li>)}</ul>
+        </div>}
+        <p className="p-field-status" aria-live="polite">{resetStatus}</p>
         <SettingsGroup title="Dates and departures" summary={summaries.departures}>
           <div className="p-check-row">
             <label className="p-check"><input type="checkbox" checked={draft.date_mode === "fixed"} onChange={e => edit({ ...draft, date_mode: e.target.checked ? "fixed" : "flexible" })} />Leave on the first day and return on the last day</label>
